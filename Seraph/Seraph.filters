@@ -47,6 +47,12 @@
     <ClInclude Include="Memory\MemoryManager.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="rbx\OffsetsFetcher.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="rbx\offsets.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="globals.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -133,6 +139,9 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <None Include="rbx\offsets_list.inc">
+      <Filter>Source Files</Filter>
+    </None>
     <MASM Include="Memory\Luck.asm">
       <Filter>Source Files</Filter>
     </MASM>

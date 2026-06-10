@@ -1,0 +1,10 @@
+c:\Users\ncomp\source\repos\external2\Seraph\Memory\MemoryManager.cpp;c:\Users\ncomp\source\repos\external2\Seraph\build\shit\MemoryManager.obj
+c:\Users\ncomp\source\repos\external2\Seraph\main.cpp;c:\Users\ncomp\source\repos\external2\Seraph\build\shit\main.obj
+c:\Users\ncomp\source\repos\external2\Seraph\overlay\imgui\imgui.cpp;c:\Users\ncomp\source\repos\external2\Seraph\build\shit\imgui.obj
+c:\Users\ncomp\source\repos\external2\Seraph\overlay\imgui\imgui_demo.cpp;c:\Users\ncomp\source\repos\external2\Seraph\build\shit\imgui_demo.obj
+c:\Users\ncomp\source\repos\external2\Seraph\overlay\imgui\imgui_draw.cpp;c:\Users\ncomp\source\repos\external2\Seraph\build\shit\imgui_draw.obj
+c:\Users\ncomp\source\repos\external2\Seraph\overlay\imgui\imgui_impl_dx11.cpp;c:\Users\ncomp\source\repos\external2\Seraph\build\shit\imgui_impl_dx11.obj
+c:\Users\ncomp\source\repos\external2\Seraph\overlay\imgui\imgui_impl_win32.cpp;c:\Users\ncomp\source\repos\external2\Seraph\build\shit\imgui_impl_win32.obj
+c:\Users\ncomp\source\repos\external2\Seraph\overlay\imgui\imgui_tables.cpp;c:\Users\ncomp\source\repos\external2\Seraph\build\shit\imgui_tables.obj
+c:\Users\ncomp\source\repos\external2\Seraph\overlay\imgui\imgui_widgets.cpp;c:\Users\ncomp\source\repos\external2\Seraph\build\shit\imgui_widgets.obj
+c:\Users\ncomp\source\repos\external2\Seraph\overlay\renderer.cpp;c:\Users\ncomp\source\repos\external2\Seraph\build\shit\renderer.obj

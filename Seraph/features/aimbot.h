@@ -386,6 +386,35 @@ inline void SpoofMousePosition(const Vectors::Vector2& screenPos)
         Memory->write<Vectors::Vector2>(inputObject + Offsets::MouseService::MousePosition, screenPos);
 }
 
+struct Vector2int16 {
+    int16_t x;
+    int16_t y;
+};
+
+inline void ViewportSilentAim(const Vectors::Vector2& target_screen_pos, const Vectors::Vector2& screen_size)
+{
+    if (!Globals::Roblox::Camera.address)
+        return;
+        
+    Vector2int16 result;
+    result.x = (int16_t)(2 * (screen_size.x - target_screen_pos.x));
+    result.y = (int16_t)(2 * (screen_size.y - target_screen_pos.y));
+    
+    Memory->write<Vector2int16>(Globals::Roblox::Camera.address + Offsets::Camera::Viewport, result);
+}
+
+inline void ResetViewport(const Vectors::Vector2& screen_size)
+{
+    if (!Globals::Roblox::Camera.address)
+        return;
+        
+    Vector2int16 result;
+    result.x = (int16_t)screen_size.x;
+    result.y = (int16_t)screen_size.y;
+    
+    Memory->write<Vector2int16>(Globals::Roblox::Camera.address + Offsets::Camera::Viewport, result);
+}
+
 inline bool ShouldUseSilentAim()
 {
     return Options::Aimbot::AimingType == 2 || Options::Aimbot::SilentAim;
@@ -622,12 +651,13 @@ inline void RunAimbot(ImDrawList* drawList)
             {
                 if (ShouldUseSilentAim())
                 {
-                    CameraRotation(target);
+                    ViewportSilentAim(targetPos, Dimensions);
                     if (Options::Aimbot::SilentAimMode == 1)
                         SpoofMousePosition(targetPos);
                 }
                 else
                 {
+                    ResetViewport(Dimensions);
                     switch (Options::Aimbot::AimingType)
                     {
                     case 0:
@@ -652,22 +682,32 @@ inline void RunAimbot(ImDrawList* drawList)
             {
                 if (ShouldUseSilentAim())
                 {
-                    CameraRotation(target);
+                    ViewportSilentAim(targetPos, Dimensions);
                     if (Options::Aimbot::SilentAimMode == 1)
                         SpoofMousePosition(targetPos);
                 }
                 else
                 {
+                    ResetViewport(Dimensions);
                     Mouse(targetPos, p);
                 }
                 break;
             }
 
             default:
+                ResetViewport(Dimensions);
                 break;
             }
 
         }
+        else
+        {
+            ResetViewport(Dimensions);
+        }
+    }
+    else
+    {
+        ResetViewport(Dimensions);
     }
 }
 

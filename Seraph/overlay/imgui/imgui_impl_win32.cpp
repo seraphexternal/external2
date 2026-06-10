@@ -1,6 +1,10 @@
 // dear imgui: Platform Backend for Windows (standard windows API for 32 and 64 bits applications)
 // This needs to be used along with a Renderer (e.g. DirectX11, OpenGL3, Vulkan..)
 
+#ifdef _MSC_VER
+#pragma warning (disable: 26812)    // [Static Analyzer] The enum type 'xxx' is unscoped. Prefer 'enum class' over 'enum' (Enum.3). ImGui uses unscoped enum flag bitmasks heavily.
+#endif
+
 // Implemented features:
 //  [X] Platform: Clipboard support (for Win32 this is actually part of core dear imgui)
 //  [X] Platform: Mouse cursor shape and visibility. Disable with 'io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange'.

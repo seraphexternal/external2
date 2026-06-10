@@ -1,6 +1,10 @@
 // dear imgui: Renderer Backend for DirectX11
 // This needs to be used along with a Platform Backend (e.g. Win32)
 
+#ifdef _MSC_VER
+#pragma warning (disable: 26812)    // [Static Analyzer] The enum type 'xxx' is unscoped. Prefer 'enum class' over 'enum' (Enum.3). ImGui uses unscoped enum flag bitmasks heavily.
+#endif
+
 // Implemented features:
 //  [X] Renderer: User texture binding. Use 'ID3D11ShaderResourceView*' as ImTextureID. Read the FAQ about ImTextureID!
 //  [X] Renderer: Support for large meshes (64k+ vertices) with 16-bit indices.

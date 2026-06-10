@@ -1,7 +1,20 @@
+// Windows headers define the `min` / `max` preprocessor macros
+// which clash with `std::max` / `std::min` used by the
+// MenuWeather particle engine. Defining NOMINMAX FIRST ensures
+// every windows-family header (transitively pulled in by the
+// project headers on lines below) respects the opt-out.
+#define NOMINMAX
 #include "renderer.h"
 #include "../rbx/configs/configs.h"
 #include <shobjidl.h>
 #pragma comment(lib, "ole32.lib")
+
+#include <random>
+#include <algorithm>
+
+#ifdef _MSC_VER
+#pragma warning (disable: 26812)    // [Static Analyzer] The enum type 'xxx' is unscoped. Prefer 'enum class' over 'enum' (Enum.3). ImGui uses unscoped enum flag bitmasks heavily.
+#endif
 
 ID3D11Device* g_pd3dDevice = nullptr;
 ID3D11DeviceContext* g_pd3dDeviceContext = nullptr;
@@ -9,6 +22,225 @@ IDXGISwapChain* g_pSwapChain = nullptr;
 bool g_SwapChainOccluded = false;
 UINT g_ResizeWidth = 0, g_ResizeHeight = 0;
 ID3D11RenderTargetView* g_mainRenderTargetView = nullptr;
+
+// -----------------------------------------------------------------------------
+// MenuFonts: file-scope mirror of the menu font choices pre-loaded into the
+// ImGui font atlas at startup. The Misc tab's "Menu Font" combo just picks
+// an index here, and the per-frame menu drawing in ShowImgui PushFont/PopFont
+// the chosen entry so the change shows up live (no atlas rebuild).
+// -----------------------------------------------------------------------------
+namespace MenuFonts
+{
+    inline ImFont* Fonts[7] = {};
+    inline const char* Names[7] = {
+        "Verdana", "Segoe UI", "Tahoma", "Arial",
+        "Georgia", "Calibri", "Consolas"
+    };
+    inline int Count = 0;
+}
+
+// Bootstrap guard for MenuWeather engine state. Flipped to true during
+// one-time startup and re-flipped to true after a successful LoadConfig so
+// the engine re-reads the freshly-loaded Options::Weather::*. Without this,
+// SyncToOptions() in Update() would clobber the just-loaded Options with
+// stale Engine values on subsequent frames.
+inline bool g_MenuWeatherNeedsBootstrap = true;
+
+// -----------------------------------------------------------------------------
+// Menu weather (snow / rain) effect. This is a self-contained visual feature
+// drawn on top of the menu via ImGui::GetWindowDrawList(). State is stored
+// here with sensible defaults so it survives without needing entries in
+// options.h. All options are exposed in the Misc -> Menu -> Weather panel.
+//
+// Performance: 200-400 particles is comfortable at 60fps. The default 150
+// keeps GPU draw-call cost near-zero on top of the menu's existing draw list.
+// -----------------------------------------------------------------------------
+namespace MenuWeather
+{
+    struct Particle
+    {
+        float x, y;
+        float vx, vy;
+    };
+
+    inline bool Enabled = false;
+    inline int  Type = 0;                 // 0 = snow, 1 = rain
+    inline int  Intensity = 150;          // particle count (capped 64..2000)
+    inline float Speed = 1.0f;            // vertical velocity multiplier
+    inline float Wind = 0.0f;             // horizontal drift (units per frame)
+    inline float Color[3] = { 1.0f, 1.0f, 1.0f };
+    inline float SnowSize = 1.8f;         // pixel radius of each snowflake
+    inline float RainThickness = 1.4f;    // pixel width of each rain streak
+
+    inline std::vector<Particle> particles;
+    inline std::mt19937 rng{ std::random_device{}() };
+    inline bool initialised = false;
+    inline int lastRenderedIntensity = 0;
+    inline float lastRenderedSpeed = -1.f;
+    inline float lastRenderedWind = -1.f;
+
+    inline void SeedParticle(Particle& p, bool anywhere, float maxX, float maxY)
+    {
+        p.x = static_cast<float>(rng() % std::max(1, static_cast<int>(maxX)));
+        p.y = anywhere
+            ? static_cast<float>(rng() % std::max(1, static_cast<int>(maxY)))
+            : -10.f;
+        const float angleJitter = (static_cast<float>(rng() % 100) / 100.f - 0.5f) * 0.4f;
+        p.vx = Wind * 0.025f + angleJitter;
+        p.vy = Speed * (0.6f + static_cast<float>(rng() % 60) / 100.f) * 1.2f;
+    }
+
+    inline void RebuildParticleBuffer(float maxX, float maxY)
+    {
+        particles.clear();
+        const int count = std::clamp(Intensity, 0, 2000);
+        particles.reserve(count);
+        for (int i = 0; i < count; ++i)
+        {
+            Particle p;
+            SeedParticle(p, true, maxX, maxY);
+            particles.push_back(p);
+        }
+        initialised = true;
+        lastRenderedIntensity = Intensity;
+        lastRenderedSpeed = Speed;
+        // Mirror user-tweakable engine-side state into the
+        // persistent Options snapshot so JSON save/load reflects
+        // the latest UI changes.
+        Options::Weather::Enabled       = Enabled;
+        Options::Weather::Type          = Type;
+        Options::Weather::Intensity     = Intensity;
+        Options::Weather::Speed         = Speed;
+        Options::Weather::Wind          = Wind;
+        Options::Weather::SnowSize      = SnowSize;
+        Options::Weather::RainThickness = RainThickness;
+        for (int i = 0; i < 3; ++i)
+            Options::Weather::Color[i] = Color[i];
+        lastRenderedWind = Wind;
+    }
+
+    // Copy persistent Options::Weather values into engine state.
+    // Called exactly ONCE on the first frame (one-time bootstrap); after
+    // that, MenuWeather::* is the source of truth and SyncToOptions()
+    // runs every frame inside Update() to back the engine state into
+    // Options for JSON persistence.
+    //
+    // Defensive clamps keep stale configs sane (Type in {0,1}, Intensity
+    // in [64, 2000]).
+    inline void SyncFromOptions()
+    {
+        Enabled       = Options::Weather::Enabled;
+        Type          = (Options::Weather::Type == 0 || Options::Weather::Type == 1) ? Options::Weather::Type : 0;
+        Intensity     = Options::Weather::Intensity < 64 ? 64 : (Options::Weather::Intensity > 2000 ? 2000 : Options::Weather::Intensity);
+        Speed         = Options::Weather::Speed;
+        Wind          = Options::Weather::Wind;
+        SnowSize      = Options::Weather::SnowSize;
+        RainThickness = Options::Weather::RainThickness;
+        for (int i = 0; i < 3; ++i)
+            Color[i] = Options::Weather::Color[i];
+    }
+
+    // Engine -> Options mirror. Runs each Update so widget-driven changes
+    // (toggles, slider drags, color edits) flow into the persistent
+    // Options snapshot without the UI ever having to write to Options.
+    inline void SyncToOptions()
+    {
+        Options::Weather::Enabled       = Enabled;
+        Options::Weather::Type          = Type;
+        Options::Weather::Intensity     = Intensity;
+        Options::Weather::Speed         = Speed;
+        Options::Weather::Wind          = Wind;
+        Options::Weather::SnowSize      = SnowSize;
+        Options::Weather::RainThickness = RainThickness;
+        for (int i = 0; i < 3; ++i)
+            Options::Weather::Color[i] = Color[i];
+    }
+
+    // Public re-bootstrap entry point. Clears engine runtime state and
+    // re-reads the persistent Options::Weather::* values. Called after
+    // LoadConfig so a freshly-loaded config takes effect instead of
+    // being clobbered by SyncToOptions from a stale Engine snapshot.
+    inline void Rebootstrap()
+    {
+        particles.clear();
+        initialised = false;
+        lastRenderedIntensity = 0;
+        lastRenderedSpeed = -1.f;
+        lastRenderedWind = -1.f;
+        SyncFromOptions();
+    }
+
+    inline void Update(float maxX, float maxY)
+    {
+        SyncToOptions();
+        if (!Enabled)
+        {
+            if (!particles.empty())
+            {
+                particles.clear();
+                initialised = false;
+            }
+            return;
+        }
+
+        if (!initialised || lastRenderedIntensity != Intensity
+            || lastRenderedSpeed != Speed || lastRenderedWind != Wind)
+        {
+            RebuildParticleBuffer(maxX, maxY);
+            return;
+        }
+
+        for (auto& p : particles)
+        {
+            p.x += p.vx;
+            p.y += p.vy;
+
+            if (p.y > maxY + 12.f)
+                SeedParticle(p, false, maxX, maxY);
+            if (p.x < -8.f)            p.x = maxX + 4.f;
+            else if (p.x > maxX + 8.f) p.x = -4.f;
+        }
+    }
+
+    inline void Render(ImDrawList* drawList, const ImVec2& origin, const ImVec2& size)
+    {
+        if (!Enabled || particles.empty()) return;
+
+        const ImU32 col = IM_COL32(
+            static_cast<int>(std::clamp(Color[0], 0.f, 1.f) * 255.f),
+            static_cast<int>(std::clamp(Color[1], 0.f, 1.f) * 255.f),
+            static_cast<int>(std::clamp(Color[2], 0.f, 1.f) * 255.f),
+            200);
+
+        // Clip to the menu interior so particles cannot leak outside the
+        // window or overlap game HUD.
+        drawList->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
+
+        if (Type == 0) // Snow: small filled circles
+        {
+            for (const auto& p : particles)
+                drawList->AddCircleFilled(
+                    ImVec2(origin.x + p.x, origin.y + p.y),
+                    SnowSize, col, 8);
+        }
+        else // Rain: short slanted streaks
+        {
+            const float slant = Wind * 0.5f;
+            for (const auto& p : particles)
+            {
+                const float px = origin.x + p.x;
+                const float py = origin.y + p.y;
+                drawList->AddLine(
+                    ImVec2(px, py),
+                    ImVec2(px + slant, py + 8.f),
+                    col, RainThickness);
+            }
+        }
+
+        drawList->PopClipRect();
+    }
+}
+
 
 
 bool IsGameOnTop(const std::string& expectedTitle) {
@@ -145,8 +377,7 @@ static void RenderConfigTab()
         ImGui::TextDisabled("%d config(s)", (int)configsList.size());
         ImGui::Dummy(ImVec2(0, 4));
 
-        const float listHeight = ImGui::GetContentRegionAvail().y;
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 2));
+        const float listHeight = ImGui::GetContentRegionAvail().y;        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 4));
         ImGui::BeginChild("##config_list_scroll", ImVec2(-1, listHeight > 24.0f ? listHeight : 24.0f), false);
         for (int i = 0; i < (int)configsList.size(); i++)
         {
@@ -155,20 +386,29 @@ static void RenderConfigTab()
             const bool isAutoload = !autoloadSettings.configName.empty()
                 && NormalizeConfigFilename(configsList[i]) == autoloadSettings.configName;
 
-            std::string label = configsList[i];
-            if (isAutoload)
-                label += "  *";
+            // Each row is rendered as a tappable button so users can load a
+            // config just by tapping its name (no need to type the name
+            // first and then press "Load"). The right-aligned hint makes the
+            // affordance obvious.
+            const std::string rowLabel = isAutoload
+                ? (configsList[i] + "  *")
+                : configsList[i];
 
-            if (ImGui::Selectable(label.c_str(), isSelected, 0, ImVec2(-1, 0)))
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.06f, 0.06f, 0.06f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(main_color.x, main_color.y, main_color.z, 0.30f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(main_color.x, main_color.y, main_color.z, 0.55f));
+
+            if (ImGui::Button(rowLabel.c_str(), ImVec2(-1, 22)))
             {
                 selectedConfigIndex = i;
                 strncpy_s(configNameBuffer, configsList[i].c_str(), _TRUNCATE);
-                
+
                 const std::string name = NormalizeConfigFilename(configsList[i]);
                 if (LoadConfig(name))
                 {
                     configStatusSuccess = true;
                     configStatusMessage = "Loaded " + name;
+                    g_MenuWeatherNeedsBootstrap = true;
                 }
                 else
                 {
@@ -176,6 +416,10 @@ static void RenderConfigTab()
                     configStatusMessage = Config::lastError.empty() ? ("Failed to load " + name) : Config::lastError;
                 }
             }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Click to load this config");
+
+            ImGui::PopStyleColor(3);
             ImGui::PopID();
         }
         ImGui::EndChild();
@@ -217,6 +461,7 @@ static void RenderConfigTab()
                 {
                     configStatusSuccess = true;
                     configStatusMessage = "Loaded " + name;
+                    g_MenuWeatherNeedsBootstrap = true;
                 }
                 else
                 {
@@ -336,11 +581,84 @@ static void RenderConfigTab()
                 }
             }
         }
+
+        ImGui::Dummy(ImVec2(0, 8));
+        ImGui::Separator();
+        ImGui::Dummy(ImVec2(0, 6));
+        ImGui::TextDisabled("File actions");
+        ImGui::Dummy(ImVec2(0, 2));
+
+        // Import a config from any folder on disk (e.g. Desktop or Downloads).
+        // Surfaces a real Windows file picker so the user can browse to a
+        // .json file instead of hand-typing its name. The picker is OS-level
+        // and remains interactive even though the overlay is on top.
+        if (ImGui::Button("Import Config...", ImVec2(-1, 24)))
+        {
+            std::string pickedPath;
+            if (OpenWindowsFileDialog(true, pickedPath, "*.json\0*.json\0All Files\0*.*\0", "Import Seraph config"))
+            {
+                const bool ok = ImportConfigFromFile(std::filesystem::path(pickedPath));
+                if (ok)
+                {
+                    configsList = ListConfigFiles();
+                    selectedConfigIndex = -1;
+                    configStatusSuccess = true;
+                    configStatusMessage = "Imported " + std::filesystem::path(pickedPath).stem().string() + ".json";
+                }
+                else
+                {
+                    configStatusSuccess = false;
+                    configStatusMessage = Config::lastError.empty() ? "Import failed" : Config::lastError;
+                }
+            }
+        }
+
+        ImGui::Dummy(ImVec2(0, 3));
+
+        // Export the currently-typed (or selected) config out to any folder on
+        // disk via a Windows save-file picker. Saves with the existing name if
+        // a config is selected.
+        const std::string exportSource = configsList.empty()
+            ? NormalizeConfigFilename(configNameBuffer)
+            : (selectedConfigIndex >= 0 && selectedConfigIndex < (int)configsList.size()
+                ? NormalizeConfigFilename(configsList[selectedConfigIndex])
+                : NormalizeConfigFilename(configNameBuffer));
+
+        if (ImGui::Button("Export Config...", ImVec2(-1, 24)))
+        {
+            if (exportSource.empty())
+            {
+                configStatusSuccess = false;
+                configStatusMessage = "Select a config to export first";
+            }
+            else
+            {
+                std::string pickedPath;
+                const std::string suggestedName = exportSource;
+                if (OpenWindowsFileDialog(false, pickedPath, "*.json\0*.json\0All Files\0*.*\0", "Export Seraph config", suggestedName))
+                {
+                    const bool ok = ExportConfigToFile(exportSource, std::filesystem::path(pickedPath));
+                    if (ok)
+                    {
+                        configStatusSuccess = true;
+                        configStatusMessage = "Exported " + exportSource;
+                    }
+                    else
+                    {
+                        configStatusSuccess = false;
+                        configStatusMessage = Config::lastError.empty() ? "Export failed" : Config::lastError;
+                    }
+                }
+            }
+        }
     }
     ImGui::EndChild();
 
     ImGui::PopStyleColor(themeColorCount);
 }
+
+// (OpenWindowsFileDialog + UTF8ToWide / WideToUTF8 live in
+// Seraph/rbx/configs/configs.h)
 
 void RenderKeybindList(ImDrawList* drawList)
 {
@@ -477,6 +795,13 @@ void ShowImgui()
         0, 0, (int)width + 1, (int)height + 1,
         nullptr, nullptr, wc.hInstance, nullptr);
 
+    // Publish the overlay HWND so the file-dialog helpers (configs.h)
+    // can present Import/Export as modal-to-owner dialogs. This is what
+    // makes the OS dialog actually clickable when the overlay is open:
+    // ownership forces Windows to route mouse + focus through the
+    // dialog above our WS_EX_LAYERED + WS_EX_TOPMOST overlay.
+    g_OverlayHWND = hwnd;
+
     SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 255, LWA_ALPHA);
     MARGINS Margin = { -1 };
     DwmExtendFrameIntoClientArea(hwnd, &Margin);
@@ -513,7 +838,48 @@ void ShowImgui()
     config.PixelSnapH = true;
 
     ImFont* baseFont = io.Fonts->AddFontDefault(&config);
-    ImFont* font = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\verdana.ttf", 13.0f, &config, io.Fonts->GetGlyphRangesJapanese());
+
+    // Pre-load a curated set of Windows system fonts so users can switch
+    // the menu font at runtime via Options::Misc::MenuFont without us
+    // having to rebuild the font atlas on the fly (which would stall the
+    // overlay for ~50ms each time). Each entry must have its file on disk
+    // in C:\Windows\Fonts\ (resolvable via LoadSystemFont below).
+    struct MenuFontEntry { ImFont* font; const char* path; const char* name; };
+    static MenuFontEntry menuFonts[7];
+    int menuFontCount = 0;
+
+    auto LoadSystemFont = [&](const char* path, float size) -> ImFont*
+    {
+        const std::wstring widePath = UTF8ToWide(path);
+        if (widePath.empty()) return nullptr;
+        if (GetFileAttributesW(widePath.c_str()) == INVALID_FILE_ATTRIBUTES)
+            return nullptr;
+        return io.Fonts->AddFontFromFileTTF(path, size, &config, io.Fonts->GetGlyphRangesJapanese());
+    };
+
+    if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\verdana.ttf", 13.0f), "C:\\Windows\\Fonts\\verdana.ttf", "Verdana" };
+    if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\segoeui.ttf", 13.0f), "C:\\Windows\\Fonts\\segoeui.ttf", "Segoe UI" };
+    if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\tahoma.ttf", 13.0f),  "C:\\Windows\\Fonts\\tahoma.ttf",  "Tahoma" };
+    if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\arial.ttf",   13.0f), "C:\\Windows\\Fonts\\arial.ttf",   "Arial" };
+    if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\georgia.ttf",  13.0f), "C:\\Windows\\Fonts\\georgia.ttf",  "Georgia" };
+    if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\calibri.ttf",  13.0f), "C:\\Windows\\Fonts\\calibri.ttf",  "Calibri" };
+    if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\consola.ttf",  13.0f), "C:\\Windows\\Fonts\\consola.ttf",  "Consolas" };
+
+    // Mirror the loaded fonts into the file-scope MenuFonts namespace so
+    // ShowImgui can switch between them at runtime via PushFont/PopFont
+    // (instead of rebuilding the font atlas, which would stall the renderer).
+    for (int i = 0; i < menuFontCount && i < (int)(sizeof(MenuFonts::Fonts)/sizeof(MenuFonts::Fonts[0])); ++i)
+        MenuFonts::Fonts[i] = menuFonts[i].font;
+    MenuFonts::Count = menuFontCount;
+
+    // Apply current font selection; clamp to the loaded count so an out-of-
+    // range value falls back gracefully to the first entry (Verdana).
+    if (Options::Misc::MenuFont >= menuFontCount || Options::Misc::MenuFont < 0)
+        Options::Misc::MenuFont = 0;
+    ImFont* font = (menuFontCount > 0 && menuFonts[Options::Misc::MenuFont].font)
+        ? menuFonts[Options::Misc::MenuFont].font
+        : baseFont;
+    io.FontDefault = font;
 
     config.MergeMode = true;
     ImGui_ImplWin32_Init(hwnd);
@@ -563,6 +929,33 @@ void ShowImgui()
         ImGui::NewFrame();
 
         Globals::Viewport::Update();
+
+        // Bootstrap from persistent Options on the first frame, and again
+        // after a runtime LoadConfig (Configs tab) completes. The latter
+        // is signalled by the Configs tab setting g_MenuWeatherNeedsBootstrap
+        // back to true so the engine picks up freshly-loaded values instead
+        // of SyncToOptions clobbering them with stale Engine state.
+        if (g_MenuWeatherNeedsBootstrap)
+        {
+            MenuWeather::Rebootstrap();
+            g_MenuWeatherNeedsBootstrap = false;
+        }
+        MenuWeather::Update((float)ImGui::GetIO().DisplaySize.x, (float)ImGui::GetIO().DisplaySize.y);
+
+        // Keep Roblox global instance pointers updated/valid to prevent stale-pointer crashes
+        if (Globals::Roblox::DataModel.address)
+        {
+            static DWORD lastUpdateTick = 0;
+            DWORD currentTick = GetTickCount();
+            if (currentTick - lastUpdateTick > 500)
+            {
+                lastUpdateTick = currentTick;
+                Globals::Roblox::Workspace = Globals::Roblox::DataModel.FindFirstChildWhichIsA("Workspace");
+                Globals::Roblox::Players = Globals::Roblox::DataModel.FindFirstChildWhichIsA("Players");
+                Globals::Roblox::Camera = Globals::Roblox::Workspace.FindFirstChildWhichIsA("Camera");
+                Globals::Roblox::LocalPlayer = RobloxInstance(Memory->read<uintptr_t>(Globals::Roblox::Players.address + Offsets::Player::LocalPlayer));
+            }
+        }
 
         if (Options::Misc::MenuKey != 0 && (GetAsyncKeyState(Options::Misc::MenuKey) & 1))
         {
@@ -621,7 +1014,9 @@ void ShowImgui()
                     IM_COL32(0, 0, 0, static_cast<int>(backgroundAlpha * 180))
                 );
             }
-            auto s = ImVec2{}, p = ImVec2{}, gs = ImVec2{ 600, 420 };
+            // Visuals tab uses a wider layout so the ESP preview has a dedicated side panel
+            const float menuWidth = (tab == 1) ? 800.0f : 600.0f;
+            auto s = ImVec2{}, p = ImVec2{}, gs = ImVec2{ menuWidth, 420 };
             ImGui::SetNextWindowSize(gs);
             ImGui::SetNextWindowBgAlpha(menuAlpha);
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, menuAlpha);
@@ -633,7 +1028,7 @@ void ShowImgui()
 
                 draw->AddRectFilled(ImVec2(p.x, p.y + 0), ImVec2(p.x + s.x, p.y + s.y - 0), ImColor(8, 8, 8), 4); // bg
                 draw->AddRect(ImVec2(p.x + 1, p.y + 1), ImVec2(p.x + s.x - 1, p.y + s.y - 1), ImColor(27, 27, 27, 255), 4.5); // outline
-                draw->AddRect(ImVec2(p.x - -10, p.y + 35.3), ImVec2(p.x + s.x - 480, p.y + s.y - 36.85), ImColor(26, 26, 26, 255)); // subtabs outline
+                draw->AddRect(ImVec2(p.x + 10, p.y + 35.3), ImVec2(p.x + 120, p.y + s.y - 36.85), ImColor(26, 26, 26, 255)); // subtabs outline
 
                 draw->AddLine(ImVec2(p.x, p.y + s.y - 27), ImVec2(p.x + s.x, p.y + s.y - 27), ImColor(27, 27, 27, 255)); // top separator
                 draw->AddLine(ImVec2(p.x, p.y + 25), ImVec2(p.x + s.x, p.y + 25), ImColor(27, 27, 27, 255)); // tab separator
@@ -651,7 +1046,16 @@ void ShowImgui()
                     draw->AddLine(start_right, end_right, fade_color);
                 }
 
-                ImGui::PushFont(font);
+                // Use the chosen menu font. Fall back to ImGui's default font
+                // if MenuFonts hasn't populated yet (only on the very first
+                // frame, before pre-load completes).
+                ImFont* menuFont = (MenuFonts::Count > 0
+                    && Options::Misc::MenuFont >= 0
+                    && Options::Misc::MenuFont < MenuFonts::Count
+                    && MenuFonts::Fonts[Options::Misc::MenuFont])
+                    ? MenuFonts::Fonts[Options::Misc::MenuFont]
+                    : io.FontDefault;
+                ImGui::PushFont(menuFont);
                 draw->AddText(ImVec2(p.x + 9.5, p.y + 7), ImColor(main_color), "Seraph");
                 draw->AddText(ImVec2(p.x + 9.5, p.y + 384), ImColor(255, 255, 255, 100), "Build:");
                 draw->AddText(ImVec2(p.x + 41, p.y + 384), ImColor(main_color), ("Seraph.gg | Beta"));
@@ -667,7 +1071,8 @@ void ShowImgui()
                 if (ImGui::tab("Aim", tab == 0)) tab = 0; ImGui::SameLine();
                 if (ImGui::tab("Visuals", tab == 1)) tab = 1; ImGui::SameLine();
                 if (ImGui::tab("Misc", tab == 2)) tab = 2; ImGui::SameLine();
-                if (ImGui::tab("Configs", tab == 3)) tab = 3;
+                if (ImGui::tab("Movement", tab == 3)) tab = 3; ImGui::SameLine();
+                if (ImGui::tab("Configs", tab == 4)) tab = 4;
                 ImGui::EndGroup();
 
                 if (tab != lastTab)
@@ -687,6 +1092,9 @@ void ShowImgui()
                     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 28);
                     ImGui::SetCursorPosX(30);
                     if (ImGui::subtab("Hitbox", tab2 == 2)) tab2 = 2;
+                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 28);
+                    ImGui::SetCursorPosX(30);
+                    if (ImGui::subtab("360 Spin", tab2 == 3)) tab2 = 3;
 
                     if (tab2 == 0) {
                         ImGui::SetCursorPosY(38);
@@ -919,15 +1327,19 @@ void ShowImgui()
                             
                             ImGui::PopStyleColor(1);
 
+                            ImGui::Dummy(ImVec2(0, 4));
+                            ImGui::Separator();
+                            ImGui::Dummy(ImVec2(0, 4));
+
                             ImGui::Dummy(ImVec2(0, 8));
-                            
+
                             // Center keybind text
                             float panelWidth = 224.0f;
                             const char* keybindText = "Aimbot Key: [ None ]"; // Approximate max width
                             float textWidth = ImGui::CalcTextSize(keybindText).x;
                             float offsetX = (panelWidth - textWidth) / 2.0f;
                             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offsetX);
-                            
+
                             KeybindSelector(" Aimbot Key", &Options::Aimbot::AimbotKey);
                         }
                         ImGui::EndChild();
@@ -1059,6 +1471,40 @@ void ShowImgui()
                         }
                         ImGui::EndChild();
                     }
+                    else if (tab2 == 3) {
+                        // 360 Spin sub-tab -- dedicated panel for the spin feature.
+                        ImGui::SetCursorPosY(38);
+                        ImGui::SetCursorPosX(122);
+                        ImGui::MenuChild("Main Group", ImVec2(226, 337), false);
+                        {
+                            ImGui::PushStyleColor(ImGuiCol_CheckMark, main_color);
+                            ImGui::Checkbox("Enable 360 Spin", &Options::Spin360::Enabled);
+                            ImGui::PopStyleColor(1);
+
+                            ImGui::Dummy(ImVec2(0, 6));
+                            ImGui::TextWrapped("Spins your camera in a full 360\u00B0 circle while the Spin Key is held. Works in both first and third person.");
+                        }
+                        ImGui::EndChild();
+
+                        ImGui::SetCursorPosY(38);
+                        ImGui::SetCursorPosX(358);
+                        ImGui::MenuChild("Settings", ImVec2(224, 337), false);
+                        {
+                            ImGui::PushStyleColor(ImGuiCol_SliderGrab, main_color);
+                            ImGui::SliderFloat("Spin Speed", &Options::Spin360::Speed, 1.0f, 45.0f, "%.1f deg/tick");
+                            ImGui::PopStyleColor(1);
+
+                            ImGui::Dummy(ImVec2(0, 8));
+
+                            float panelWidth = 224.0f;
+                            const char* keybindText = "Spin Key: [ None ]";
+                            float textWidth = ImGui::CalcTextSize(keybindText).x;
+                            float offsetX = (panelWidth - textWidth) / 2.0f;
+                            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offsetX);
+                            KeybindSelector(" Spin Key", &Options::Spin360::HotKey);
+                        }
+                        ImGui::EndChild();
+                    }
                 }
                 else if (tab == 1)
                 {
@@ -1074,9 +1520,6 @@ void ShowImgui()
                     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 28);
                     ImGui::SetCursorPosX(30);
                     if (ImGui::subtab("Colours", tab2 == 3)) tab2 = 3;
-                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 28);
-                    ImGui::SetCursorPosX(30);
-                    if (ImGui::subtab("Preview", tab2 == 4)) tab2 = 4;
 
                     if (tab2 == 0) {
                         ImGui::SetCursorPosY(38);
@@ -1208,6 +1651,28 @@ void ShowImgui()
 
                             static const char* skyPresets[]{ "Default", "Night", "Space", "Sunset", "Storm" };
                             ImGui::Combo("Sky Preset", &Options::World::SkyboxPreset, skyPresets, IM_ARRAYSIZE(skyPresets));
+
+                            ImGui::Dummy(ImVec2(0, 10));
+                            ImGui::Separator();
+                            ImGui::Dummy(ImVec2(0, 10));
+
+                            // Material Changer (Chams)
+                            ImGui::TextDisabled("Material Changer (Chams)");
+                            ImGui::PushStyleColor(ImGuiCol_CheckMark, main_color);
+                            ImGui::Checkbox("Chams Enabled", &Options::Chams::Enabled);
+                            ImGui::PopStyleColor(1);
+
+                            static const char* materials[]{ "Neon", "ForceField", "Glass", "Plastic" };
+                            static int selectedMat = 0;
+                            if (ImGui::Combo("Chams Material", &selectedMat, materials, IM_ARRAYSIZE(materials)))
+                            {
+                                if (selectedMat == 0) Options::Chams::Material = 1584; // Neon
+                                else if (selectedMat == 1) Options::Chams::Material = 1200; // ForceField (estimate or common value)
+                                else if (selectedMat == 2) Options::Chams::Material = 256; // Glass
+                                else if (selectedMat == 3) Options::Chams::Material = 512; // Plastic/SmoothPlastic
+                            }
+
+                            ImGui::ColorEdit3("Chams Color", Options::Chams::Color, ImGuiColorEditFlags_NoInputs);
                         }
                         ImGui::EndChild();
 
@@ -1298,107 +1763,142 @@ void ShowImgui()
                         }
                         ImGui::EndChild();
                     }
-                    else if (tab2 == 4) {
-                        ImGui::SetCursorPosY(38);
-                        ImGui::SetCursorPosX(122);
-                        ImGui::MenuChild("ESP Preview", ImVec2(452, 337), false);
-                        {
-                            ImGui::TextDisabled("Live preview of enabled ESP options");
-                            ImGui::Dummy(ImVec2(0, 4));
 
-                            const ImVec2 previewSize(420.0f, 285.0f);
-                            ImGui::BeginChild("##esp_preview_panel", previewSize, true, ImGuiWindowFlags_NoScrollbar);
-                            if (Options::ESP::ESPPreview)
-                            {
-                                const ImVec2 previewPos = ImGui::GetCursorScreenPos();
-                                const ImVec2 contentSize = ImGui::GetContentRegionAvail();
-                                RenderESPPreview(ImGui::GetWindowDrawList(), previewPos, contentSize);
-                            }
-                            ImGui::EndChild();
-                        }
-                        ImGui::EndChild();
+                    // ESP Preview panel, always shown on the right side of the Visuals menu
+                    ImGui::SetCursorPosY(38);
+                    ImGui::SetCursorPosX(586);
+                    ImGui::MenuChild("ESP Preview", ImVec2(184, 337), false);
+                    {
+                        const ImVec2 previewPos = ImGui::GetCursorScreenPos();
+                        const ImVec2 contentSize = ImGui::GetContentRegionAvail();
+                        if (Options::ESP::ESPPreview)
+                            RenderESPPreview(ImGui::GetWindowDrawList(), previewPos, contentSize);
                     }
+                    ImGui::EndChild();
                 }
                 else if (tab == 2)
                 {
+                    // Misc tab - Local settings only
+                    ImGui::SetCursorPosY(38);
+                    ImGui::SetCursorPosX(122);
+                    ImGui::MenuChild("Main Group", ImVec2(226, 337), false);
+                    {
+                        // ---- Local behaviour toggles ----
+                        ImGui::PushStyleColor(ImGuiCol_CheckMark, main_color);
+                        ImGui::TextColored(main_color, "Local");
+                        ImGui::Dummy(ImVec2(0, 2));
+                        ImGui::Checkbox("Headless",       &Options::ESP::Headless);
+                        ImGui::Checkbox("Show FOV",       &Options::Aimbot::ShowFOV);
+                        ImGui::Checkbox("Show FOV Fill",  &Options::Aimbot::ShowFOVFill);
+                        ImGui::Checkbox("Crosshair",      &Options::Crosshair::Enabled);
+                        ImGui::Checkbox("Camera FOV",     &Options::Misc::FOVEnabled);
+                        ImGui::Checkbox("Cache NPCs",     &Options::Misc::CacheNPCs);
+                        ImGui::Checkbox("Keybind List",   &Options::Misc::KeybindList);
+                        ImGui::Checkbox("Stream Proof",   &Options::Misc::StreamProof);
+                        ImGui::PopStyleColor(1);
+
+                        ImGui::Dummy(ImVec2(0, 6));
+                        ImGui::Separator();
+                        ImGui::Dummy(ImVec2(0, 6));
+
+                        // ---- Menu Font ----
+                        ImGui::TextColored(main_color, "Menu Font");
+                        ImGui::Dummy(ImVec2(0, 2));
+                        ImGui::Combo("Font", &Options::Misc::MenuFont,
+                            MenuFonts::Names, IM_ARRAYSIZE(MenuFonts::Names));
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Live-switches the menu typography. Applies immediately.");
+
+                        ImGui::Dummy(ImVec2(0, 6));
+                        ImGui::Separator();
+                        ImGui::Dummy(ImVec2(0, 6));
+
+                        // ---- Menu Effect (snow / rain particles) ----
+                        ImGui::PushStyleColor(ImGuiCol_CheckMark, main_color);
+                        ImGui::TextColored(main_color, "Menu Effect");
+                        ImGui::Dummy(ImVec2(0, 2));
+                        ImGui::Checkbox("Enable", &MenuWeather::Enabled);
+                        ImGui::PopStyleColor(1);
+
+                        static const char* weatherKinds[] = { "Snow", "Rain" };
+                        ImGui::Combo("Type", &MenuWeather::Type, weatherKinds, 2);
+
+                        ImGui::PushStyleColor(ImGuiCol_SliderGrab, main_color);
+                        ImGui::SliderInt ("Intensity",       &MenuWeather::Intensity,     64,   2000, "%d particles");
+                        ImGui::SliderFloat("Fall Speed",     &MenuWeather::Speed,         0.2f, 6.0f,  "%.2fx");
+                        ImGui::SliderFloat("Wind",           &MenuWeather::Wind,         -3.f,  3.f,   "%.2fx");
+                        ImGui::SliderFloat("Snow Size",      &MenuWeather::SnowSize,      0.5f, 4.0f,  "%.1f px");
+                        ImGui::SliderFloat("Rain Thickness", &MenuWeather::RainThickness, 0.5f, 3.0f,  "%.1f px");
+                        ImGui::ColorEdit3 ("Particle Color", MenuWeather::Color, ImGuiColorEditFlags_NoInputs);
+                        ImGui::PopStyleColor(1);
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Falling snowflakes or rain streaks across the menu background. Settings are saved with your config.");
+                    }
+                    ImGui::EndChild();
+
+                    ImGui::SetCursorPosY(38);
+                    ImGui::SetCursorPosX(358);
+                    ImGui::MenuChild("Settings", ImVec2(224, 337), false);
+                    {
+                        ImGui::PushStyleColor(ImGuiCol_SliderGrab, main_color);
+                        
+                        if (Options::Misc::FOVEnabled)
+                        {
+                            ImGui::SliderFloat("Camera FOV", &Options::Misc::FOV, 70.f, 120.f, "%.0f");
+                        }
+                        
+                        ImGui::Dummy(ImVec2(0, 10));
+                        
+                        // Center the text
+                        float panelWidth = 224.0f;
+                        const char* posText = "Keybind List Position:";
+                        float textWidth = ImGui::CalcTextSize(posText).x;
+                        float offsetX = (panelWidth - textWidth) / 2.0f;
+                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offsetX);
+                        ImGui::Text(posText);
+                        
+                        ImGui::SliderFloat("Position X", &Options::Misc::KeybindListX, 0.0f, 1920.0f, "%.0f");
+                        ImGui::SliderFloat("Position Y", &Options::Misc::KeybindListY, 0.0f, 1080.0f, "%.0f");
+
+                        ImGui::Dummy(ImVec2(0, 8));
+
+                        const char* menuKeyText = "Menu Key: [ None ]";
+                        float menuKeyTextWidth = ImGui::CalcTextSize(menuKeyText).x;
+                        float menuKeyOffsetX = (panelWidth - menuKeyTextWidth) / 2.0f;
+                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + menuKeyOffsetX);
+                        KeybindSelector(" Menu Key", &Options::Misc::MenuKey);
+
+                        ImGui::Dummy(ImVec2(0, 15));
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 0.6f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.3f, 0.3f, 0.8f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+                        if (ImGui::Button("Unload", ImVec2(-1, 28)))
+                        {
+                            exit(0);
+                        }
+                        ImGui::PopStyleColor(3);
+
+                        ImGui::PopStyleColor(1);
+                    }
+                    ImGui::EndChild();
+                }
+                else if (tab == 3)
+                {
+                    // Movement tab
                     ImGui::SetCursorPosY(54);
                     ImGui::SetCursorPosX(30);
-                    if (ImGui::subtab("Local", tab2 == 0)) tab2 = 0;
+                    if (ImGui::subtab("Fly", tab2 == 0)) tab2 = 0;
                     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 28);
                     ImGui::SetCursorPosX(30);
-                    if (ImGui::subtab("Fly", tab2 == 1)) tab2 = 1;
+                    if (ImGui::subtab("WalkSpeed", tab2 == 1)) tab2 = 1;
                     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 28);
                     ImGui::SetCursorPosX(30);
-                    if (ImGui::subtab("WalkSpeed", tab2 == 2)) tab2 = 2;
+                    if (ImGui::subtab("Anti-Aim", tab2 == 2)) tab2 = 2;
                     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 28);
                     ImGui::SetCursorPosX(30);
-                    if (ImGui::subtab("Anti-Aim", tab2 == 3)) tab2 = 3;
+                    if (ImGui::subtab("TickRate", tab2 == 3)) tab2 = 3;
 
                     if (tab2 == 0) {
-                        ImGui::SetCursorPosY(38);
-                        ImGui::SetCursorPosX(122);
-                        ImGui::MenuChild("Main Group", ImVec2(226, 337), false);
-                        {
-                            ImGui::PushStyleColor(ImGuiCol_CheckMark, main_color);
-                            ImGui::Checkbox("Headless", &Options::ESP::Headless);
-                            ImGui::Checkbox("Show FOV", &Options::Aimbot::ShowFOV);
-                            ImGui::Checkbox("Show FOV Fill", &Options::Aimbot::ShowFOVFill);
-                            ImGui::Checkbox("Crosshair", &Options::Crosshair::Enabled);
-                            ImGui::Checkbox("Camera FOV", &Options::Misc::FOVEnabled);
-                            ImGui::Checkbox("Cache NPCs", &Options::Misc::CacheNPCs);
-                            ImGui::Checkbox("Keybind List", &Options::Misc::KeybindList);
-                            ImGui::Checkbox("Stream Proof", &Options::Misc::StreamProof);
-                            ImGui::PopStyleColor(1);
-                        }
-                        ImGui::EndChild();
-
-                        ImGui::SetCursorPosY(38);
-                        ImGui::SetCursorPosX(358);
-                        ImGui::MenuChild("Settings", ImVec2(224, 337), false);
-                        {
-                            ImGui::PushStyleColor(ImGuiCol_SliderGrab, main_color);
-                            
-                            if (Options::Misc::FOVEnabled)
-                            {
-                                ImGui::SliderFloat("Camera FOV", &Options::Misc::FOV, 70.f, 120.f, "%.0f");
-                            }
-                            
-                            ImGui::Dummy(ImVec2(0, 10));
-                            
-                            // Center the text
-                            float panelWidth = 224.0f;
-                            const char* posText = "Keybind List Position:";
-                            float textWidth = ImGui::CalcTextSize(posText).x;
-                            float offsetX = (panelWidth - textWidth) / 2.0f;
-                            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offsetX);
-                            ImGui::Text(posText);
-                            
-                            ImGui::SliderFloat("Position X", &Options::Misc::KeybindListX, 0.0f, 1920.0f, "%.0f");
-                            ImGui::SliderFloat("Position Y", &Options::Misc::KeybindListY, 0.0f, 1080.0f, "%.0f");
-
-                            ImGui::Dummy(ImVec2(0, 8));
-
-                            const char* menuKeyText = "Menu Key: [ None ]";
-                            float menuKeyTextWidth = ImGui::CalcTextSize(menuKeyText).x;
-                            float menuKeyOffsetX = (panelWidth - menuKeyTextWidth) / 2.0f;
-                            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + menuKeyOffsetX);
-                            KeybindSelector(" Menu Key", &Options::Misc::MenuKey);
-
-                            ImGui::Dummy(ImVec2(0, 15));
-                            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 0.6f));
-                            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.3f, 0.3f, 0.8f));
-                            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
-                            if (ImGui::Button("Unload", ImVec2(-1, 28)))
-                            {
-                                exit(0);
-                            }
-                            ImGui::PopStyleColor(3);
-
-                            ImGui::PopStyleColor(1);
-                        }
-                        ImGui::EndChild();
-                    }
-                    else if (tab2 == 1) {
                         ImGui::SetCursorPosY(38);
                         ImGui::SetCursorPosX(122);
                         ImGui::MenuChild("Main Group", ImVec2(226, 337), false);
@@ -1418,19 +1918,16 @@ void ShowImgui()
                             ImGui::PopStyleColor(1);
 
                             ImGui::Dummy(ImVec2(0, 8));
-                            
-                            // Center keybind text
                             float panelWidth = 224.0f;
                             const char* keybindText = "Fly Key: [ None ]";
                             float textWidth = ImGui::CalcTextSize(keybindText).x;
                             float offsetX = (panelWidth - textWidth) / 2.0f;
                             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offsetX);
-                            
                             KeybindSelector(" Fly Key", &Options::Fly::FlyKey);
                         }
                         ImGui::EndChild();
                     }
-                    else if (tab2 == 2) {
+                    else if (tab2 == 1) {
                         ImGui::SetCursorPosY(38);
                         ImGui::SetCursorPosX(122);
                         ImGui::MenuChild("Main Group", ImVec2(226, 337), false);
@@ -1450,19 +1947,16 @@ void ShowImgui()
                             ImGui::PopStyleColor(1);
 
                             ImGui::Dummy(ImVec2(0, 8));
-                            
-                            // Center keybind text
                             float panelWidth = 224.0f;
                             const char* keybindText = "WalkSpeed Key: [ None ]";
                             float textWidth = ImGui::CalcTextSize(keybindText).x;
                             float offsetX = (panelWidth - textWidth) / 2.0f;
                             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offsetX);
-                            
                             KeybindSelector(" WalkSpeed Key", &Options::WalkSpeed::WalkSpeedKey);
                         }
                         ImGui::EndChild();
                     }
-                    else if (tab2 == 3) {
+                    else if (tab2 == 2) {
                         ImGui::SetCursorPosY(38);
                         ImGui::SetCursorPosX(122);
                         ImGui::MenuChild("Anti-Aim", ImVec2(226, 337), false);
@@ -1487,8 +1981,36 @@ void ShowImgui()
                         }
                         ImGui::EndChild();
                     }
+                    else if (tab2 == 3) {
+                        ImGui::SetCursorPosY(38);
+                        ImGui::SetCursorPosX(122);
+                        ImGui::MenuChild("TickRate", ImVec2(226, 337), false);
+                        {
+                            ImGui::PushStyleColor(ImGuiCol_CheckMark, main_color);
+                            ImGui::Checkbox("Enabled", &Options::TickRate::Enabled);
+                            ImGui::PopStyleColor(1);
+                        }
+                        ImGui::EndChild();
+
+                        ImGui::SetCursorPosY(38);
+                        ImGui::SetCursorPosX(358);
+                        ImGui::MenuChild("Settings", ImVec2(224, 337), false);
+                        {
+                            ImGui::PushStyleColor(ImGuiCol_SliderGrab, main_color);
+                            ImGui::SliderFloat("Tick Rate", &Options::TickRate::Rate, 10.0f, 1000.0f, "%.0f");
+                            ImGui::PopStyleColor(1);
+
+                            ImGui::Dummy(ImVec2(0, 10));
+                            if (ImGui::Button("Default (60)", ImVec2(-1, 24))) Options::TickRate::Rate = 60.0f;
+                            if (ImGui::Button("High (120)", ImVec2(-1, 24))) Options::TickRate::Rate = 120.0f;
+                            if (ImGui::Button("Ultra (240)", ImVec2(-1, 24))) Options::TickRate::Rate = 240.0f;
+                            if (ImGui::Button("Extreme (500)", ImVec2(-1, 24))) Options::TickRate::Rate = 500.0f;
+                            if (ImGui::Button("Max (1000)", ImVec2(-1, 24))) Options::TickRate::Rate = 1000.0f;
+                        }
+                        ImGui::EndChild();
+                    }
                 }
-                else if (tab == 3)
+                else if (tab == 4)
                 {
                     RenderConfigTab();
                 }
@@ -1523,6 +2045,11 @@ void ShowImgui()
             RenderCrosshair(ImGui::GetBackgroundDrawList());
             
             CombatFeedback::Render(ImGui::GetBackgroundDrawList());
+        if (MenuWeather::Enabled)
+        {
+            const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+            MenuWeather::Render(ImGui::GetBackgroundDrawList(), ImVec2(0.0f, 0.0f), displaySize);
+        }
 
             // Render keybind list
             RenderKeybindList(ImGui::GetBackgroundDrawList());

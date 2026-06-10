@@ -12,8 +12,12 @@
 #include <vector>
 #include <mutex>
 #include <shlobj.h>
+#include <shobjidl.h>
+#include <knownfolders.h>
+#include <objbase.h>
 
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "ole32.lib")
 
 using json = nlohmann::json;
 
@@ -446,6 +450,17 @@ inline json BuildConfigJson()
         { "Strength", Options::AntiAim::Strength }
     };
 
+    j["Weather"] = {
+        { "Enabled",        Options::Weather::Enabled },
+        { "Type",           Options::Weather::Type },
+        { "Intensity",      Options::Weather::Intensity },
+        { "Speed",          Options::Weather::Speed },
+        { "Wind",           Options::Weather::Wind },
+        { "Color",          ToJsonColor(Options::Weather::Color, 3) },
+        { "SnowSize",       Options::Weather::SnowSize },
+        { "RainThickness",  Options::Weather::RainThickness }
+    };
+
     return j;
 }
 
@@ -695,8 +710,21 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(aa, "Strength", Options::AntiAim::Strength);
     }
 
+    if (data.is_object() && data.contains("Weather"))
+    {
+        const auto& w = data["Weather"];
+        LoadVal(w, "Enabled",       Options::Weather::Enabled);
+        LoadVal(w, "Type",          Options::Weather::Type);
+        LoadVal(w, "Intensity",     Options::Weather::Intensity);
+        LoadVal(w, "Speed",         Options::Weather::Speed);
+        LoadVal(w, "Wind",          Options::Weather::Wind);
+        LoadVal(w, "SnowSize",      Options::Weather::SnowSize);
+        LoadVal(w, "RainThickness", Options::Weather::RainThickness);
+        LoadFloatArray(w, "Color",   Options::Weather::Color);
+    }
+
     if (Options::Misc::MenuKey == 0)
-        Options::Misc::MenuKey = VK_INSERT;
+        Options::Misc::MenuKey = VK_RSHIFT;
 }
 
 inline bool SaveConfig(std::string configName)
@@ -976,4 +1004,367 @@ inline void ClearAutoloadIfMatches(const std::string& deletedConfigName)
 inline bool CreateConfig(std::string configName)
 {
     return SaveConfig(std::move(configName));
+}
+
+// ----- UTF-8 <-> UTF-16 helpers used by the file dialog (shobjidl.h) -----
+inline std::wstring UTF8ToWide(const std::string& in)
+{
+    if (in.empty()) return std::wstring();
+    const int needed = MultiByteToWideChar(CP_UTF8, 0, in.c_str(), (int)in.size(), nullptr, 0);
+    if (needed <= 0) return std::wstring();
+    std::wstring out((size_t)needed, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, in.c_str(), (int)in.size(), out.data(), needed);
+    return out;
+}
+
+inline std::string WideToUTF8(const std::wstring& in)
+{
+    if (in.empty()) return std::string();
+    const int needed = WideCharToMultiByte(CP_UTF8, 0, in.c_str(), (int)in.size(), nullptr, 0, nullptr, nullptr);
+    if (needed <= 0) return std::string();
+    std::string out((size_t)needed, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, in.c_str(), (int)in.size(), out.data(), needed, nullptr, nullptr);
+    return out;
+}
+
+// Globally exposed so the file dialog helpers in configs.h can parent the
+// OS dialog to the overlay window. Set by ShowImgui once the overlay HWND
+// is created and cleared back to nullptr on shutdown. Reading from the
+// file dialog is safe because dialogs are only invoked from the UI loop
+// while the overlay is alive.
+// Globally exposed so renderer.cpp / main loop can publish the overlay HWND
+// once the WS_EX_LAYERED window is created. Read by the file-dialog helpers
+// to send a foreground-activation nudge before IFileDialog::Show().
+inline HWND g_OverlayHWND = nullptr;
+
+// Dedicated owner window used by IFileDialog::Show(). A layered / tool-window
+// overlay HWND cannot reliably own a modal dialog on Windows -- WS_EX_LAYERED
+// breaks modal focus routing and WS_EX_TOOLWINDOW blocks foreground status,
+// so the dialog ends up visually present yet unclickable. To work around
+// this, we maintain a separate invisible top-level window:
+//   * WS_OVERLAPPED (real top-level window, can own modal dialogs)
+//   * NO WS_EX_LAYERED, NO WS_EX_TOOLWINDOW (so focus routes correctly)
+//   * minimized + placed off-screen at (32000, 32000) so it's invisible
+// Created lazily on the first dialog call and re-used thereafter.
+inline HWND g_FileDialogOwnerHWND = nullptr;
+
+inline LRESULT CALLBACK SeraphDialogOwnerWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+inline HWND EnsureDialogOwnerWindow()
+{
+    if (g_FileDialogOwnerHWND && IsWindow(g_FileDialogOwnerHWND))
+        return g_FileDialogOwnerHWND;
+
+    static bool classRegistered = false;
+    if (!classRegistered)
+    {
+        WNDCLASSEXW wc = {};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = SeraphDialogOwnerWndProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"SeraphDialogOwnerClass";
+        if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+            return nullptr;
+        classRegistered = true;
+    }
+
+    // WS_OVERLAPPED + small dimensions + offscreen position. We don't call
+    // ShowWindow so it stays invisible; the IFileDialog::Show() call will
+    // activate it as the modal owner.
+    HWND h = CreateWindowExW(
+        0,                              // no ex-style: keep focus-friendly
+        L"SeraphDialogOwnerClass",
+        L"Seraph Dialog Owner",
+        WS_OVERLAPPED,
+        0, 0, 1, 1,                     // 1x1 px, off-screen
+        nullptr, nullptr,
+        GetModuleHandleW(nullptr), nullptr);
+    if (!h)
+        return nullptr;
+
+    // Belt-and-braces: move it to a never-seen coordinate + ensure hidden.
+    SetWindowPos(h, nullptr, 32000, 32000, 0, 0,
+        SWP_NOSIZE | SWP_NOZORDER | SWP_HIDEWINDOW | SWP_NOACTIVATE);
+
+    g_FileDialogOwnerHWND = h;
+    return h;
+}
+
+// ----- Native file dialog (Import / Export) -----
+// Opens a Windows file dialog (open or save). Returns true and writes the
+// picked file path (UTF-8) into `outPath` on success.
+//
+// Internally uses IFileDialog (the common base interface) so a single
+// code path can dispatch to either CLSID_FileOpenDialog (Import) or
+// CLSID_FileSaveDialog (Export). Save mode receives FOS_OVERWRITEPROMPT
+// so the OS prompts before overwriting an existing file.
+//
+// Show() blocks until the user picks a file or cancels. The dialog is
+// OWNED by the Seraph overlay HWND (when available) so Windows routes
+// focus / mouse input correctly above the WS_EX_LAYERED overlay. We
+// also activate the overlay to foreground BEFORE Show() to make sure
+// the system treats it as the modal owner (Show() can otherwise push
+// the dialog above the TOPMOST overlay without giving it active focus).
+//
+// The filter string format matches the Win32 OPENFILENAME convention:
+// e.g. "*.json\0*.json\0All Files\0*.*\0" (each entry is name\0pattern\0,
+// terminated by an extra \0).
+inline bool OpenWindowsFileDialog(bool openDialog, std::string& outPath,
+                                  const char* fileTypesFilter, const char* title,
+                                  const std::string& defaultFileName = std::string())
+{
+    outPath.clear();
+
+    // Make sure COM is initialised on this thread before touching shell APIs.
+    // We tolerate being called from a context where COM apartment was
+    // already set (the main UI loop calls CoInitializeEx once at startup).
+    HRESULT initHr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    const bool weInitialised = (initHr == S_OK);
+    (void)initHr;
+
+    // Use the IFileDialog base interface (shared by both IFileOpenDialog
+    // and IFileSaveDialog), then dispatch via the appropriate CLSID so
+    // we don't pass invalid flag combinations like FOS_OVERWRITEPROMPT
+    // to an open dialog (which returns E_INVALIDARG).
+    IFileDialog* pDialog = nullptr;
+    REFCLSID clsid = openDialog ? CLSID_FileOpenDialog : CLSID_FileSaveDialog;
+    HRESULT hr = CoCreateInstance(clsid, NULL, CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&pDialog));
+    if (FAILED(hr) || !pDialog)
+    {
+        if (weInitialised) CoUninitialize();
+        return false;
+    }
+
+    DWORD baseFlags = FOS_NOCHANGEDIR | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST;
+    // FOS_OVERWRITEPROMPT only meaningful for save dialogs; the open
+    // dialog ignores it, but setting it explicitly is benign.
+    if (!openDialog)
+        baseFlags |= FOS_OVERWRITEPROMPT;
+
+    pDialog->SetOptions(baseFlags);
+
+    // Default the dialog to a sensible starting folder so users don't have
+    // to navigate from the OS's last-used folder. For Save mode, start in
+    // the user's Documents folder (most common place to dump exported
+    // configs). For Open mode, start in the Seraph configs folder itself
+    // so users who already have configs can pick them up immediately;
+    // fall back to Documents if we can't resolve the configs path.
+    if (!openDialog)
+    {
+        PWSTR docs = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_DEFAULT, NULL, &docs)) && docs)
+        {
+            IShellItem* pFolder = nullptr;
+            if (SUCCEEDED(SHCreateItemFromParsingName(docs, NULL, IID_PPV_ARGS(&pFolder)) && pFolder))
+            {
+                pDialog->SetFolder(pFolder);
+                pFolder->Release();
+            }
+            CoTaskMemFree(docs);
+        }
+    }
+    else
+    {
+        const std::filesystem::path configsPath = GetConfigFilePath(std::string{}).parent_path();
+        std::error_code ec;
+        if (!configsPath.empty() && std::filesystem::exists(configsPath, ec) && !ec)
+        {
+            IShellItem* pFolder = nullptr;
+            std::wstring widePath = UTF8ToWide(configsPath.string());
+            if (!widePath.empty())
+            {
+                IShellItem* pFolder = nullptr;
+                HRESULT folderHr = SHCreateItemFromParsingName(widePath.c_str(), NULL, IID_PPV_ARGS(&pFolder));
+                if (SUCCEEDED(folderHr) && pFolder)
+                {
+                    pDialog->SetFolder(pFolder);
+                    pFolder->Release();
+                }
+            }
+        }
+    }
+
+    if (fileTypesFilter && *fileTypesFilter)
+    {
+        // SetFileTypes retains pointers to the COMDLG_FILTERSPEC structs
+        // and the wchar strings inside them. We hand it references into
+        // local wstrings that outlive Show().
+        std::vector<std::pair<std::wstring, std::wstring>> specs;
+        std::string filter = fileTypesFilter;
+        size_t pos = 0;
+        while (pos < filter.size())
+        {
+            size_t nul = filter.find('\0', pos);
+            if (nul == std::string::npos) break;
+            std::string name = filter.substr(pos, nul - pos);
+            pos = nul + 1;
+            if (pos >= filter.size()) break;
+            size_t nul2 = filter.find('\0', pos);
+            if (nul2 == std::string::npos) break;
+            std::string pattern = filter.substr(pos, nul2 - pos);
+            pos = nul2 + 1;
+            specs.emplace_back(UTF8ToWide(name), UTF8ToWide(pattern));
+        }
+        if (!specs.empty())
+        {
+            std::vector<COMDLG_FILTERSPEC> nativeSpecs;
+            nativeSpecs.reserve(specs.size());
+            for (auto& s : specs)
+                nativeSpecs.push_back({ s.first.c_str(), s.second.c_str() });
+            pDialog->SetFileTypes((UINT)nativeSpecs.size(), nativeSpecs.data());
+        }
+    }
+
+    if (title && *title)
+        pDialog->SetTitle(UTF8ToWide(title).c_str());
+
+    if (!defaultFileName.empty() && !openDialog)
+        pDialog->SetFileName(UTF8ToWide(defaultFileName).c_str());
+
+    // Choose the dialog owner. The overlay HWND is WS_EX_LAYERED +
+    // WS_EX_TOOLWINDOW which cannot reliably own a modal dialog (the OS
+    // routes mouse / focus through the dialog visually but the call
+    // chain fails to deliver clicks). We fall back to a dedicated,
+    // regular WS_OVERLAPPED owner window that is invisible + off-screen.
+    // That window is focus-friendly and Windows treats the dialog as
+    // truly modal-to-owner, restoring clickability.
+    HWND owner = EnsureDialogOwnerWindow();
+    if (!owner && g_OverlayHWND && IsWindow(g_OverlayHWND))
+        owner = g_OverlayHWND;
+
+    if (owner)
+        SetForegroundWindow(owner);
+
+    // While the modal dialog is up, the renderer's ::PeekMessage and
+    // ::DispatchMessage keep spinning on the same thread. ImGui's WndProc
+    // handler inside the overlay HWND would otherwise compete with the
+    // dialog's modal loop for mouse events, which can manifest as the
+    // dialog appearing visually on top yet not receiving clicks. We force
+    // WS_EX_TRANSPARENT on the overlay for the duration of Show() so the
+    // OS mouse-routing ignores the overlay HWND entirely. The previous
+    // ex-style is captured and restored after Show() returns so the menu
+    // is interactive again immediately when the dialog closes.
+    LONG prevExStyle = 0;
+    bool toggledOverlayTransparency = false;
+    if (g_OverlayHWND && IsWindow(g_OverlayHWND))
+    {
+        prevExStyle = GetWindowLong(g_OverlayHWND, GWL_EXSTYLE);
+        SetWindowLong(g_OverlayHWND, GWL_EXSTYLE, prevExStyle | WS_EX_TRANSPARENT);
+        SetWindowPos(g_OverlayHWND, nullptr, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        toggledOverlayTransparency = true;
+    }
+
+    hr = pDialog->Show(owner);
+
+    if (toggledOverlayTransparency)
+    {
+        SetWindowLong(g_OverlayHWND, GWL_EXSTYLE, prevExStyle);
+        SetWindowPos(g_OverlayHWND, nullptr, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
+
+    bool result = false;
+    if (hr == S_OK)
+    {
+        IShellItem* pItem = nullptr;
+        if (SUCCEEDED(pDialog->GetResult(&pItem)) && pItem)
+        {
+            PWSTR pszPath = nullptr;
+            if (SUCCEEDED(pItem->GetDisplayName(SIGDN_FILESYSPATH, &pszPath)) && pszPath)
+            {
+                outPath = WideToUTF8(pszPath);
+                CoTaskMemFree(pszPath);
+                result = true;
+            }
+            pItem->Release();
+        }
+    }
+
+    pDialog->Release();
+    if (weInitialised) CoUninitialize();
+    return result;
+}
+
+// Copy an external config file (.json) into the configs folder. Used by the
+// "Import" button which surfaces a Windows file picker so the user can drag
+// configs from any folder (Desktop, Downloads, etc.) into Seraph without
+// having to copy/paste manually.
+inline bool ImportConfigFromFile(const std::filesystem::path& sourcePath)
+{
+    std::lock_guard<std::recursive_mutex> lock(Config::Mutex());
+    InitializeConfigPaths();
+
+    if (sourcePath.empty() || !std::filesystem::exists(sourcePath))
+    {
+        Config::lastError = "Source file does not exist";
+        return false;
+    }
+
+    if (sourcePath.extension() != ".json")
+    {
+        Config::lastError = "Config files must be .json";
+        return false;
+    }
+
+    json data;
+    if (!ReadJsonFile(sourcePath, data))
+        return false;   // lastError already populated by ReadJsonFile
+
+    const std::filesystem::path destPath = GetConfigFilePath(sourcePath.stem().string());
+    std::error_code ec;
+    std::filesystem::create_directories(destPath.parent_path(), ec);
+    ec.clear();
+
+    if (std::filesystem::exists(destPath, ec))
+    {
+        Config::lastError = "A config with that name already exists";
+        return false;
+    }
+
+    std::filesystem::copy_file(sourcePath, destPath, std::filesystem::copy_options::none, ec);
+    if (ec)
+    {
+        Config::lastError = "Could not copy file: " + ec.message();
+        return false;
+    }
+    return true;
+}
+
+// Copy one of the Seraph configs out to an arbitrary destination on disk.
+// Used by the "Export" button so users can share configs (e.g. save to
+// Desktop / Downloads / a Discord-attached location).
+inline bool ExportConfigToFile(const std::string& configName, const std::filesystem::path& destinationPath)
+{
+    std::lock_guard<std::recursive_mutex> lock(Config::Mutex());
+    InitializeConfigPaths();
+
+    const std::filesystem::path srcPath = GetConfigFilePath(configName);
+    if (!std::filesystem::exists(srcPath))
+    {
+        Config::lastError = "Source config does not exist";
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(destinationPath.parent_path(), ec);
+    ec.clear();
+
+    if (std::filesystem::exists(destinationPath, ec))
+    {
+        Config::lastError = "Destination file already exists";
+        return false;
+    }
+
+    std::filesystem::copy_file(srcPath, destinationPath, std::filesystem::copy_options::none, ec);
+    if (ec)
+    {
+        Config::lastError = "Could not copy file: " + ec.message();
+        return false;
+    }
+    return true;
 }

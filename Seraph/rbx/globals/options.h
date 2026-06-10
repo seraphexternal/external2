@@ -5,6 +5,8 @@ namespace Options
 {
 	namespace Misc
 	{
+		inline int MenuFont = 0; // index into the pre-loaded font array in renderer.cpp
+
 		inline bool Bypass = false;
 		inline bool FOVEnabled = false;
 		inline float FOV = 70.f;
@@ -13,7 +15,7 @@ namespace Options
 		inline float KeybindListX = 20.0f;
 		inline float KeybindListY = 80.0f;
 		inline bool StreamProof = true;
-		inline int MenuKey = VK_INSERT;
+		inline int MenuKey = VK_RSHIFT;
 		inline float MenuAccentColor[3] = {1.0f, 0.41f, 0.71f}; // Pink (255, 105, 180) converted to 0-1 range
 	}
 	namespace HitboxExpander
@@ -255,5 +257,42 @@ namespace Options
 		inline int Mode = 0; // 0 spin, 1 jitter, 2 random
 		inline float Speed = 12.0f;
 		inline float Strength = 35.0f;
+	}
+
+	namespace Spin360
+	{
+		inline bool Enabled = false;
+		inline float Speed = 20.0f;
+		inline int HotKey = 0;
+	}
+
+	namespace TickRate
+	{
+		inline bool Enabled = false;
+		inline float Rate = 60.0f;
+	}
+
+	namespace Chams
+	{
+		inline bool Enabled = false;
+		inline float Color[3] = { 1.0f, 0.41f, 0.71f }; // Pink
+		inline int Material = 1584; // 1584 = neon
+	}
+
+	namespace Weather
+	{
+		// Snow / rain particle effect for the menu background. The
+		// MenuWeather engine in renderer.cpp reads these each frame
+		// via MenuWeather::SyncFromOptions(), so changes here (and
+		// from the Misc tab UI) flow through immediately and are
+		// saved with the user's config.
+		inline bool  Enabled       = false;
+		inline int   Type          = 0;     // 0 = snow, 1 = rain
+		inline int   Intensity     = 150;   // particle count (clamped 64 - 2000)
+		inline float Speed         = 1.0f;  // vertical fall speed multiplier
+		inline float Wind          = 0.0f;  // horizontal drift, negative = left
+		inline float Color[3]      = { 1.0f, 1.0f, 1.0f };
+		inline float SnowSize      = 1.8f;  // pixel radius of each snowflake
+		inline float RainThickness = 1.4f;  // pixel width of each rain streak
 	}
 }

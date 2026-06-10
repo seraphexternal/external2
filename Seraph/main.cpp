@@ -1,3 +1,7 @@
+#ifdef _MSC_VER
+#pragma warning (disable: 26812)    // [Static Analyzer] The enum type 'xxx' is unscoped. Prefer 'enum class' over 'enum' (Enum.3). ImGui uses unscoped enum flag bitmasks heavily.
+#endif
+
 #include <thread>
 #include <sstream>
 #include <filesystem>
@@ -10,6 +14,9 @@
 #include "features/speed.h"
 #include "features/world.h"
 #include "features/antiaim.h"
+#include "features/tickrate.h"
+#include "features/spin360.h"
+#include "features/chams.h"
 #include "rbx/Caches/playercache.h"
 #include "rbx/Caches/playerobjectscache.h"
 #include "rbx/Caches/TPHandler.h"
@@ -40,6 +47,8 @@ static void HideConsoleWindow()
 int main()
 {
     HideConsoleWindow();
+
+
 
     InitializeConfigPaths();
 
@@ -124,6 +133,9 @@ int main()
         std::thread(SpeedLoop).detach();
         std::thread(WorldLoop).detach();
         std::thread(AntiAimLoop).detach();
+        std::thread(TickRateLoop).detach();
+        std::thread(Spin360Loop).detach();
+        std::thread(ChamsLoop).detach();
 
         // Monitor process exits cleanly and without CPU cycles using synchronize handle
         HANDLE processHandle = OpenProcess(SYNCHRONIZE, FALSE, Memory->getProcessId());

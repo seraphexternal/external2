@@ -1,5 +1,151 @@
 #pragma once
 
+#include <urlmon.h>
+#include <wininet.h>
+#include <gdiplus.h>
+#include <vector>
+#include <string>
+#include <thread>
+#include <chrono>
+#include <d3d11.h>
+
+#pragma comment(lib, "urlmon.lib")
+#pragma comment(lib, "wininet.lib")
+#pragma comment(lib, "gdiplus.lib")
+
+extern ID3D11Device* g_pd3dDevice;
+
+namespace ESPPreviewAvatar
+{
+    inline ID3D11ShaderResourceView* g_LocalPlayerAvatarSRV = nullptr;
+    inline int g_LocalPlayerAvatarWidth = 0;
+    inline int g_LocalPlayerAvatarHeight = 0;
+    inline uint64_t g_LastUserId = 0;
+    inline bool g_IsDownloadingAvatar = false;
+    inline bool g_GdiplusInitialized = false;
+    inline ULONG_PTR g_GdiplusToken = 0;
+    // Cooldown gate: prevents us from spawning a new avatar-fetch thread
+    // every frame when the thumbnail API keeps returning no imageUrl
+    // (e.g. private/deleted accounts). 5 seconds is a reasonable balance
+    // between being responsive on success and not hammering the endpoint.
+    inline std::chrono::steady_clock::time_point g_LastAttemptTime =
+        std::chrono::steady_clock::time_point{};
+
+    inline void InitGDIPlus()
+    {
+        if (!g_GdiplusInitialized)
+        {
+            Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+            Gdiplus::GdiplusStartup(&g_GdiplusToken, &gdiplusStartupInput, NULL);
+            g_GdiplusInitialized = true;
+        }
+    }
+
+    inline void ShutdownGDIPlus()
+    {
+        if (g_GdiplusInitialized)
+        {
+            Gdiplus::GdiplusShutdown(g_GdiplusToken);
+            g_GdiplusInitialized = false;
+        }
+    }
+
+    inline std::string FetchUrl(const std::string& url)
+    {
+        std::string response;
+        HINTERNET hInternet = InternetOpenA("Seraph", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+        if (hInternet)
+        {
+            HINTERNET hConnect = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0, INTERNET_FLAG_RELOAD, 0);
+            if (hConnect)
+            {
+                char buffer[1024];
+                DWORD bytesRead = 0;
+                while (InternetReadFile(hConnect, buffer, sizeof(buffer) - 1, &bytesRead) && bytesRead > 0)
+                {
+                    buffer[bytesRead] = '\0';
+                    response += buffer;
+                }
+                InternetCloseHandle(hConnect);
+            }
+            InternetCloseHandle(hInternet);
+        }
+        return response;
+    }
+
+    inline bool LoadTextureWithGDIPlus(ID3D11Device* device, const wchar_t* filename, ID3D11ShaderResourceView** out_srv, int* out_width, int* out_height)
+    {
+        InitGDIPlus();
+
+        Gdiplus::Bitmap* bitmap = Gdiplus::Bitmap::FromFile(filename);
+        if (!bitmap || bitmap->GetLastStatus() != Gdiplus::Ok)
+        {
+            if (bitmap) delete bitmap;
+            return false;
+        }
+
+        UINT width = bitmap->GetWidth();
+        UINT height = bitmap->GetHeight();
+
+        Gdiplus::Rect rect(0, 0, width, height);
+        Gdiplus::BitmapData bitmapData;
+        
+        if (bitmap->LockBits(&rect, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &bitmapData) != Gdiplus::Ok)
+        {
+            delete bitmap;
+            return false;
+        }
+
+        std::vector<unsigned char> rgba(width * height * 4);
+        unsigned char* src = (unsigned char*)bitmapData.Scan0;
+        for (UINT i = 0; i < width * height; i++)
+        {
+            rgba[i * 4 + 0] = src[i * 4 + 2]; // R
+            rgba[i * 4 + 1] = src[i * 4 + 1]; // G
+            rgba[i * 4 + 2] = src[i * 4 + 0]; // B
+            rgba[i * 4 + 3] = src[i * 4 + 3]; // A
+        }
+        bitmap->UnlockBits(&bitmapData);
+        delete bitmap;
+
+        D3D11_TEXTURE2D_DESC desc = {};
+        desc.Width = width;
+        desc.Height = height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        D3D11_SUBRESOURCE_DATA initData = {};
+        initData.pSysMem = rgba.data();
+        initData.SysMemPitch = width * 4;
+
+        ID3D11Texture2D* texture = nullptr;
+        HRESULT hr = device->CreateTexture2D(&desc, &initData, &texture);
+        if (FAILED(hr))
+            return false;
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format = desc.Format;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = 1;
+
+        hr = device->CreateShaderResourceView(texture, &srvDesc, out_srv);
+        texture->Release();
+
+        if (SUCCEEDED(hr))
+        {
+            *out_width = width;
+            *out_height = height;
+            return true;
+        }
+        return false;
+    }
+}
+
+
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -509,11 +655,9 @@ inline void RenderESP(ImDrawList* drawList)
             const float dotRadius = EspClamp((bottom - top) * 0.04f, 2.f, 5.f);
             drawList->AddCircleFilled(head2D, dotRadius, activeHeadDotColor, 12);
         }
-
         if (Options::ESP::Name)
         {
             std::string displayName = player.Name;
-            displayName += " (C:" + std::to_string(player.TeamColor & 0xFFFF) + " N:" + (player.TeamName.empty() ? "None" : player.TeamName) + " B:" + std::to_string(player.TeamBrickColor & 0xFFFF) + ")";
             
             const float baseSize = Options::ESP::NameSize;
             const float fontSize = (baseSize * scale > 11.f) ? baseSize * scale : 11.f;
@@ -612,11 +756,132 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
     drawList->AddRectFilled(rectMin, rectMax, IM_COL32(8, 8, 8, 255), 4.0f);
     drawList->AddRect(rectMin, rectMax, IM_COL32(27, 27, 27, 255), 4.0f);
 
+    // Perspective grid floor (3D-like depth)
+    {
+        const float floorTopY = rectMin.y + (rectMax.y - rectMin.y) * 0.40f;
+        const float vpX = (rectMin.x + rectMax.x) * 0.5f;
+        const ImU32 gridColor = IM_COL32(45, 45, 55, 110);
+        const ImU32 gridColorHot = IM_COL32(
+            static_cast<int>(Options::Misc::MenuAccentColor[0] * 255.f),
+            static_cast<int>(Options::Misc::MenuAccentColor[1] * 255.f),
+            static_cast<int>(Options::Misc::MenuAccentColor[2] * 255.f),
+            70);
+
+        // Horizontal floor lines (denser near the back / vanishing point)
+        for (int i = 1; i <= 8; ++i)
+        {
+            float t = (float)i / 9.0f;
+            float y = floorTopY + (rectMax.y - floorTopY) * t * t;
+            ImU32 col = (i == 4 || i == 8) ? gridColorHot : gridColor;
+            drawList->AddLine(ImVec2(rectMin.x, y), ImVec2(rectMax.x, y), col, 1.0f);
+        }
+
+        // Vertical lines fanning out from the vanishing point down to the floor
+        const int vLines = 9;
+        for (int i = -vLines; i <= vLines; ++i)
+        {
+            float t = (float)i / (float)vLines;
+            float xBottom = vpX + t * (rectMax.x - rectMin.x) * 0.62f;
+            ImU32 col = (i == 0) ? gridColorHot : gridColor;
+            drawList->AddLine(ImVec2(vpX, floorTopY), ImVec2(xBottom, rectMax.y), col, 1.0f);
+        }
+
+        // Horizon line at the back (subtle accent)
+        drawList->AddLine(ImVec2(rectMin.x, floorTopY), ImVec2(rectMax.x, floorTopY),
+            IM_COL32(
+                static_cast<int>(Options::Misc::MenuAccentColor[0] * 255.f),
+                static_cast<int>(Options::Misc::MenuAccentColor[1] * 255.f),
+                static_cast<int>(Options::Misc::MenuAccentColor[2] * 255.f),
+                90),
+            1.2f);
+    }
+
+    // Dynamic local player avatar updater
+    if (Globals::Roblox::LocalPlayer.address)
+    {
+        uint64_t userId = Memory->read<uint64_t>(Globals::Roblox::LocalPlayer.address + Offsets::Player::UserId);
+        // We do NOT mark g_LastUserId here -- we only update it after the texture
+        // is actually loaded successfully, so failed lookups (Roblox returning no
+        // imageUrl, network errors, GDI+ decode failures) will be retried on the
+        // next frame instead of being silently skipped forever.
+        //
+        // Cooldown: we enforce a minimum retry interval (5s) when re-fetching the
+        // SAME userId (i.e. pit-stop-style retries for an account that never loads
+        // successfully), but a real account switch (userId != g_LastUserId) is
+        // fetched immediately even if 5s hasn't elapsed, so logging into a
+        // different account right after one failed lookup still updates the avatar
+        // without waiting.
+        const auto now = std::chrono::steady_clock::now();
+        const bool userChanged = (userId != 0 && userId != ESPPreviewAvatar::g_LastUserId);
+        const bool cooldownOk = (now - ESPPreviewAvatar::g_LastAttemptTime) >= std::chrono::seconds(5);
+        const bool needAvatar = (ESPPreviewAvatar::g_LocalPlayerAvatarSRV == nullptr);
+        const bool shouldFetch = userId != 0
+            && g_pd3dDevice != nullptr
+            && !ESPPreviewAvatar::g_IsDownloadingAvatar
+            && (needAvatar || userChanged)
+            && (userChanged || cooldownOk);
+
+        if (shouldFetch)
+        {
+            ESPPreviewAvatar::g_IsDownloadingAvatar = true;
+            ESPPreviewAvatar::g_LastAttemptTime = now;
+            const uint64_t requestedUserId = userId;
+            std::thread([requestedUserId]() {
+                bool succeeded = false;
+                try {
+                    std::string url = "https://thumbnails.roblox.com/v1/users/avatar?userIds=" + std::to_string(requestedUserId) + "&size=352x352&format=Png&isCircular=false";
+                    std::string response = ESPPreviewAvatar::FetchUrl(url);
+                    size_t imgUrlPos = response.find("\"imageUrl\":\"");
+                    if (imgUrlPos != std::string::npos)
+                    {
+                        size_t start = imgUrlPos + 12;
+                        size_t end = response.find("\"", start);
+                        if (end != std::string::npos)
+                        {
+                            std::string imageUrl = response.substr(start, end - start);
+                            char tempPath[MAX_PATH];
+                            GetTempPathA(MAX_PATH, tempPath);
+                            std::string localFile = std::string(tempPath) + "seraph_avatar.png";
+                            DeleteFileA(localFile.c_str());
+                            HRESULT hr = URLDownloadToFileA(NULL, imageUrl.c_str(), localFile.c_str(), 0, NULL);
+                            if (SUCCEEDED(hr))
+                            {
+                                std::wstring wideFile(localFile.begin(), localFile.end());
+                                ID3D11ShaderResourceView* newSrv = nullptr;
+                                int w = 0, h = 0;
+                                if (ESPPreviewAvatar::LoadTextureWithGDIPlus(g_pd3dDevice, wideFile.c_str(), &newSrv, &w, &h))
+                                {
+                                    if (ESPPreviewAvatar::g_LocalPlayerAvatarSRV)
+                                    {
+                                        ESPPreviewAvatar::g_LocalPlayerAvatarSRV->Release();
+                                    }
+                                    ESPPreviewAvatar::g_LocalPlayerAvatarSRV = newSrv;
+                                    ESPPreviewAvatar::g_LocalPlayerAvatarWidth = w;
+                                    ESPPreviewAvatar::g_LocalPlayerAvatarHeight = h;
+                                    ESPPreviewAvatar::g_LastUserId = requestedUserId;
+                                    succeeded = true;
+                                }
+                            }
+                        }
+                    }
+                } catch(...) {}
+                ESPPreviewAvatar::g_IsDownloadingAvatar = false;
+                (void)succeeded; // currently informational; g_LastUserId tracks the real success state
+            }).detach();
+        }
+    }
+
     const float pad = 22.0f;
     const float left = origin.x + pad;
     const float right = origin.x + size.x - pad;
-    const float top = origin.y + pad + 8.0f;
-    const float bottom = origin.y + size.y - pad;
+    const float top = origin.y + pad + 15.0f;
+    const float bottom = origin.y + size.y - pad - 10.0f;
+
+    // Draw the local player's actual 2D avatar inside the preview area
+    if (ESPPreviewAvatar::g_LocalPlayerAvatarSRV)
+    {
+        drawList->AddImage(ESPPreviewAvatar::g_LocalPlayerAvatarSRV, ImVec2(left - 10.0f, top - 25.0f), ImVec2(right + 10.0f, bottom + 15.0f));
+    }
 
     const ImU32 boxColor = IM_COL32(
         static_cast<int>(Options::ESP::BoxColor[0] * 255.f),
@@ -624,12 +889,11 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
         static_cast<int>(Options::ESP::BoxColor[2] * 255.f),
         255);
 
-    const int boxType = Options::ESP::BoxType == 0 ? 1 : Options::ESP::BoxType;
-
-    if (boxType == 1)
+    // Respect the user's "None" selection so the box actually turns off.
+    if (Options::ESP::BoxType == 1)
         drawList->AddRect(ImVec2(left, top), ImVec2(right, bottom), boxColor, 0, 0, Options::ESP::BoxThickness);
 
-    if (Options::ESP::CornerESP || boxType == 1)
+    if (Options::ESP::CornerESP || Options::ESP::BoxType == 1)
     {
         const float cornerLen = 18.0f;
         const ImU32 cornerColor = IM_COL32(
@@ -676,9 +940,9 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
 
     if (Options::ESP::Name)
     {
-        const char* previewName = "Player";
-        const ImVec2 textSize = ImGui::CalcTextSize(previewName);
-        drawList->AddText(ImVec2((left + right) * 0.5f - textSize.x * 0.5f, top - 34.0f), IM_COL32(255, 255, 255, 255), previewName);
+        std::string previewName = Globals::Roblox::LocalPlayer.address ? Globals::Roblox::LocalPlayer.Name() : "Player";
+        const ImVec2 textSize = ImGui::CalcTextSize(previewName.c_str());
+        drawList->AddText(ImVec2((left + right) * 0.5f - textSize.x * 0.5f, top - 34.0f), IM_COL32(255, 255, 255, 255), previewName.c_str());
     }
 
     if (Options::ESP::Distance)
@@ -688,6 +952,27 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
         drawList->AddText(ImVec2((left + right) * 0.5f - textSize.x * 0.5f, bottom + 4.0f), IM_COL32(200, 200, 200, 255), distText);
     }
 
+    // Head circle as a proper round head sitting on top of the figure.
+    // Sized as a fraction of the box width (the head is roughly the same
+    // width as the shoulders in a Roblox character).
+    if (Options::ESP::HeadCircle)
+    {
+        const float headCircleColor = IM_COL32(
+            static_cast<int>(Options::ESP::HeadCircleColor[0] * 255.f),
+            static_cast<int>(Options::ESP::HeadCircleColor[1] * 255.f),
+            static_cast<int>(Options::ESP::HeadCircleColor[2] * 255.f),
+            230);
+
+        const float cx = (left + right) * 0.5f;
+        const float boxWidth = right - left;
+        const float boxHeight = bottom - top;
+        const float radius = EspClamp(boxWidth * Options::ESP::HeadCircleScale * 1.6f, 6.f, 26.f);
+        // Position the head just inside the top of the box so it isn't floating.
+        const float cy = top + radius + 4.f;
+
+        drawList->AddCircle(ImVec2(cx, cy), radius, headCircleColor, 32, Options::ESP::HeadCircleThickness);
+    }
+
     if (Options::ESP::Skeleton)
     {
         const ImU32 skel = IM_COL32(
@@ -695,12 +980,53 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
             static_cast<int>(Options::ESP::SkeletonColor[1] * 255.f),
             static_cast<int>(Options::ESP::SkeletonColor[2] * 255.f),
             255);
+        const float thickness = EspClamp(Options::ESP::SkeletonThickness, 1.0f, 10.0f);
+
+        // Build a real skeleton: head, spine, shoulders, arms, hips, legs.
         const float cx = (left + right) * 0.5f;
-        const float midY = (top + bottom) * 0.5f;
-        drawList->AddLine(ImVec2(cx, top + 10.0f), ImVec2(cx, midY), skel, 1.8f);
-        drawList->AddLine(ImVec2(cx, midY), ImVec2(left + 12.0f, bottom - 10.0f), skel, 1.8f);
-        drawList->AddLine(ImVec2(cx, midY), ImVec2(right - 12.0f, bottom - 10.0f), skel, 1.8f);
-        drawList->AddLine(ImVec2(cx, midY), ImVec2(cx, bottom - 8.0f), skel, 1.8f);
+        const float boxWidth = right - left;
+        const float boxHeight = bottom - top;
+
+        const float headRadius = EspClamp(boxWidth * 0.18f, 6.f, 14.f);
+        const ImVec2 headCenter(cx, top + headRadius + 4.f);
+
+        const float shoulderY = headCenter.y + headRadius + boxHeight * 0.08f;
+        const float hipY = top + boxHeight * 0.58f;
+        const float footY = bottom - 4.f;
+
+        const float shoulderHalf = boxWidth * 0.30f;
+        const float hipHalf = boxWidth * 0.16f;
+        const float armBend = boxHeight * 0.18f;
+
+        const ImVec2 headTop(headCenter.x, headCenter.y - headRadius);
+        const ImVec2 neck(headCenter.x, shoulderY - 2.f);
+        const ImVec2 hip(cx, hipY);
+        const ImVec2 lShoulder(cx - shoulderHalf, shoulderY);
+        const ImVec2 rShoulder(cx + shoulderHalf, shoulderY);
+        const ImVec2 lElbow(cx - shoulderHalf, shoulderY + armBend);
+        const ImVec2 rElbow(cx + shoulderHalf, shoulderY + armBend);
+        const ImVec2 lHand(cx - shoulderHalf, shoulderY + armBend + armBend * 0.6f);
+        const ImVec2 rHand(cx + shoulderHalf, shoulderY + armBend + armBend * 0.6f);
+        const ImVec2 lKnee(cx - hipHalf, hipY + (footY - hipY) * 0.5f);
+        const ImVec2 rKnee(cx + hipHalf, hipY + (footY - hipY) * 0.5f);
+        const ImVec2 lFoot(cx - hipHalf, footY);
+        const ImVec2 rFoot(cx + hipHalf, footY);
+
+        // Spine: head -> neck -> hip
+        drawList->AddLine(headTop, neck, skel, thickness);
+        drawList->AddLine(neck, hip, skel, thickness);
+
+        // Arms: shoulder -> elbow -> hand
+        drawList->AddLine(lShoulder, lElbow, skel, thickness);
+        drawList->AddLine(lElbow, lHand, skel, thickness);
+        drawList->AddLine(rShoulder, rElbow, skel, thickness);
+        drawList->AddLine(rElbow, rHand, skel, thickness);
+
+        // Legs: hip -> knee -> foot
+        drawList->AddLine(hip, lKnee, skel, thickness);
+        drawList->AddLine(lKnee, lFoot, skel, thickness);
+        drawList->AddLine(hip, rKnee, skel, thickness);
+        drawList->AddLine(rKnee, rFoot, skel, thickness);
     }
 
     if (Options::Combat::HitChams)

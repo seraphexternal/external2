@@ -93,6 +93,7 @@ Index of this file:
 // Visual Studio warnings
 #ifdef _MSC_VER
 #pragma warning (disable: 4996) // 'This function or variable may be unsafe': strcpy, strdup, sprintf, vsnprintf, sscanf, fopen
+#pragma warning (disable: 26812) // [Static Analyzer] The enum type 'xxx' is unscoped. Prefer 'enum class' over 'enum' (Enum.3). Library uses unscoped enum flag bitmasks by design.
 #endif
 
 // Clang/GCC warnings with -Weverything
