@@ -4,8 +4,10 @@
 #include <string>
 #include <cmath>
 #include <mutex>
+#include <atomic>
 #include <algorithm>
 #include <unordered_map>
+#include <thread>
 
 #include "../rbx/globals/globals.h"
 #include "../rbx/globals/options.h"
@@ -25,7 +27,7 @@ namespace Visibility
 
     inline std::vector<Occluder> occluders;
     inline std::mutex occluderMutex;
-    inline int refreshCooldown = 0;
+    inline std::atomic<int> refreshCooldown{0};
     inline std::unordered_map<uintptr_t, bool> playerVisibleCache;
     inline std::unordered_map<uintptr_t, bool> pointVisibleCache;
 
@@ -145,13 +147,8 @@ namespace Visibility
             ScanTree(child, depth + 1, cameraPos, maxDistance, skipCharacterModel);
     }
 
-    inline void RefreshOccludersIfNeeded()
+    inline void RunOccluderScan()
     {
-        if (--refreshCooldown > 0)
-            return;
-
-        refreshCooldown = 240;
-
         if (!Globals::Roblox::Workspace.address || !Globals::Roblox::Camera.address)
             return;
 
@@ -160,11 +157,8 @@ namespace Visibility
         const float maxDistance = Options::ESP::VisibilityMaxDistance;
         const uintptr_t localCharacter = Globals::Roblox::LocalPlayer.Character().address;
 
-        {
-            std::lock_guard<std::mutex> lock(occluderMutex);
-            occluders.clear();
-            occluders.reserve(450);
-        }
+        std::vector<Occluder> collected;
+        collected.reserve(450);
 
         for (const auto& child : Globals::Roblox::Workspace.GetChildren())
         {
@@ -172,6 +166,46 @@ namespace Visibility
             if (cls == "Folder" || cls == "Model" || cls == "Terrain" || IsPartClass(cls))
                 ScanTree(child, 0, cameraPos, maxDistance, localCharacter);
         }
+
+        std::lock_guard<std::mutex> lock(occluderMutex);
+        occluders = std::move(collected);
+    }
+
+    inline std::atomic<bool> scanInProgress{ false };
+
+    inline void RefreshOccludersIfNeeded()
+    {
+        if (--refreshCooldown > 0)
+            return;
+
+        refreshCooldown = 240;
+
+        if (scanInProgress.load())
+            return;
+
+        scanInProgress.store(true);
+        std::thread([]() {
+            RunOccluderScan();
+            scanInProgress.store(false);
+        }).detach();
+    }
+
+    inline void StartOccluderThread()
+    {
+        std::thread([]() {
+            while (true)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                if (--refreshCooldown > 0)
+                    continue;
+                refreshCooldown = 240;
+                if (scanInProgress.load())
+                    continue;
+                scanInProgress.store(true);
+                RunOccluderScan();
+                scanInProgress.store(false);
+            }
+        }).detach();
     }
 
     inline bool RayIntersectsSphere(
@@ -203,11 +237,16 @@ namespace Visibility
 
     inline bool IsPointVisible(const Vectors::Vector3& target, uintptr_t ignoreModelAddress)
     {
-        if ((!Options::ESP::VisibilityCheck && !Options::ESP::VisibilityChams) || !Globals::Roblox::Camera.address)
+        if ((!Options::ESP::VisibilityCheck && !Options::ESP::VisibilityChams && !Options::Chams::Enabled) || !Globals::Roblox::Camera.address)
             return true;
 
-        const Vectors::Vector3 origin = Memory->read<Vectors::Vector3>(
-            Globals::Roblox::Camera.address + Offsets::Camera::Position);
+        Vectors::Vector3 origin;
+        try
+        {
+            origin = Memory->read<Vectors::Vector3>(
+                Globals::Roblox::Camera.address + Offsets::Camera::Position);
+        }
+        catch (...) { return true; }
 
         Vectors::Vector3 delta = {
             target.x - origin.x,
@@ -248,7 +287,7 @@ namespace Visibility
 
     inline bool IsPointVisibleCached(uintptr_t cacheKey, const Vectors::Vector3& target, uintptr_t ignoreModelAddress)
     {
-        if (!Options::ESP::VisibilityCheck && !Options::ESP::VisibilityChams)
+        if (!Options::ESP::VisibilityCheck && !Options::ESP::VisibilityChams && !Options::Chams::Enabled)
             return true;
 
         if (cacheKey != 0)
@@ -263,6 +302,58 @@ namespace Visibility
             pointVisibleCache[cacheKey] = visible;
 
         return visible;
+    }
+
+    // Forced line-of-sight test that ignores the ESP visibility toggles, so
+    // bullet tracers and hitsounds can respect walls even when ESP is off.
+    inline bool IsPointVisibleForced(const Vectors::Vector3& target, uintptr_t ignoreModelAddress)
+    {
+        if (!Globals::Roblox::Camera.address)
+            return true;
+
+        Vectors::Vector3 origin;
+        try
+        {
+            origin = Memory->read<Vectors::Vector3>(
+                Globals::Roblox::Camera.address + Offsets::Camera::Position);
+        }
+        catch (...) { return true; }
+
+        Vectors::Vector3 delta = {
+            target.x - origin.x,
+            target.y - origin.y,
+            target.z - origin.z
+        };
+
+        const float distance = delta.Magnitude();
+        if (distance < 1.5f)
+            return true;
+
+        delta.x /= distance;
+        delta.y /= distance;
+        delta.z /= distance;
+
+        const float maxDistance = distance - 0.75f;
+        if (maxDistance <= 0.5f)
+            return true;
+
+        const float cullDistance = distance + 12.f;
+
+        std::lock_guard<std::mutex> lock(occluderMutex);
+        for (const auto& wall : occluders)
+        {
+            if (ignoreModelAddress != 0 && wall.modelAddress == ignoreModelAddress)
+                continue;
+
+            const float wallDist = wall.position.Distance(origin);
+            if (wallDist > cullDistance)
+                continue;
+
+            if (RayIntersectsSphere(origin, delta, wall.position, wall.radius + 0.35f, maxDistance))
+                return false;
+        }
+
+        return true;
     }
 
     inline bool IsPlayerVisibleImpl(const RobloxPlayer& player)
@@ -295,6 +386,15 @@ namespace Visibility
             playerVisibleCache[player.address] = visible;
 
         return visible;
+    }
+
+    // Always-perform raycast check, independent of ESP::VisibilityCheck toggle.
+    // Used by aimbot/triggerbot/ragebot WallCheck so it works even when ESP visibility colors are off.
+    inline bool IsPlayerOccluded(const RobloxPlayer& player)
+    {
+        if (!Globals::Roblox::Camera.address)
+            return false;
+        return !IsPlayerVisibleImpl(player);
     }
 
     inline ImU32 MakeColor(const float rgb[3], int alpha = 255)

@@ -24,7 +24,9 @@ inline void CachePlayers()
 		}
 
 		// Get local player's character to exclude it from NPC detection
-		auto localCharacter = Globals::Roblox::LocalPlayer.Character();
+		RobloxInstance localCharacter(0);
+		if (Globals::Roblox::LocalPlayer.address)
+			localCharacter = Globals::Roblox::LocalPlayer.Character();
 
 		// Cache real players from Players service
 		auto children = Globals::Roblox::Players.GetChildren();
@@ -41,9 +43,57 @@ inline void CachePlayers()
 			}
 		}
 
+		// If any player has no Character, try to find characters in Workspace by memory scanning
+		bool needsFallback = false;
+		for (auto& player : tempList)
+		{
+			if (!player.Character().address)
+			{
+				needsFallback = true;
+				break;
+			}
+		}
+		if (needsFallback)
+		{
+			PopulateCharacterFallbacks();
+			playerCharacterAddresses.clear();
+			for (auto& player : tempList)
+			{
+				auto charInst = player.Character();
+				if (charInst.address != 0)
+				{
+					playerCharacterAddresses.push_back(charInst.address);
+				}
+			}
+		}
+
+		// Overkill bypass: Chickynoid manages characters separately from Player objects.
+		// If no player has a character after fallback, find all workspace characters directly.
+		bool overkillBypass = false;
+		if (Globals::Roblox::isOverkill && playerCharacterAddresses.empty() && !tempList.empty())
+		{
+			tempList.clear();
+			overkillBypass = true;
+
+			std::string localName;
+			if (Globals::Roblox::LocalPlayer.address)
+				localName = Globals::Roblox::LocalPlayer.Name();
+
+			auto characters = FindAllCharactersInWorkspace();
+			for (auto& ch : characters)
+			{
+				std::string name = ch.model.Name();
+				if (name.find("Dummy") != std::string::npos || name == "Noob")
+					continue;
+				if (!localName.empty() && name == localName)
+					continue;
+				tempList.push_back(ch.model);
+			}
+		}
+
 		// Cache NPCs from Workspace - look for any Model with a Humanoid
 		auto workspace = Globals::Roblox::Workspace;
-		if (workspace.address != 0 && Options::Misc::CacheNPCs)
+		if (workspace.address != 0 && Options::Misc::CacheNPCs && !overkillBypass)
 		{
 			auto workspaceChildren = workspace.GetChildren();
 			

@@ -16,7 +16,11 @@ void SpeedLoop()
             static bool wasKeyPressed = false;
             bool isKeyPressed = (GetAsyncKeyState(Options::WalkSpeed::WalkSpeedKey) & 0x8000) != 0;
 
-            if (Options::WalkSpeed::ToggleType == 1) // Toggle mode
+            if (Options::WalkSpeed::ToggleType == 2) // Always On
+            {
+                Options::WalkSpeed::Toggled = true;
+            }
+            else if (Options::WalkSpeed::ToggleType == 1) // Toggle mode
             {
                 if (isKeyPressed && !wasKeyPressed)
                 {
@@ -28,6 +32,11 @@ void SpeedLoop()
             {
                 Options::WalkSpeed::Toggled = isKeyPressed;
             }
+        }
+        else
+        {
+            if (Options::WalkSpeed::ToggleType == 2)
+                Options::WalkSpeed::Toggled = true;
         }
 
         if (!Options::WalkSpeed::Enabled || !Options::WalkSpeed::Toggled)

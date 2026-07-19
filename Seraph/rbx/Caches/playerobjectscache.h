@@ -40,12 +40,14 @@ inline void CachePlayerObjects()
 			{
 				// For NPCs (models), the object IS the character
 				p.Name = player.Name();
-				p.Team = RobloxInstance(0); // NPCs don't have teams
+				p.Team = RobloxInstance(0);
 				p.TeamColor = 0;
 				p.TeamBrickColor = 0;
 				p.TeamName = "";
 				p.Character = player;
 				p.Humanoid = p.Character.FindFirstChildWhichIsA("Humanoid");
+				if (!p.Humanoid.address)
+					continue;
 				p.Health = Memory->read<float>(p.Humanoid.address + Offsets::Humanoid::Health);
 				p.MaxHealth = Memory->read<float>(p.Humanoid.address + Offsets::Humanoid::MaxHealth);
 			}
@@ -66,7 +68,11 @@ inline void CachePlayerObjects()
 					p.TeamBrickColor = 0;
 				}
 				p.Character = player.Character();
+				if (!p.Character.address)
+					continue;
 				p.Humanoid = p.Character.FindFirstChildWhichIsA("Humanoid");
+				if (!p.Humanoid.address)
+					continue;
 				p.Health = player.Health();
 				p.MaxHealth = player.MaxHealth();
 			}
@@ -81,6 +87,21 @@ inline void CachePlayerObjects()
 				uintptr_t primitiveAddr = Memory->read<uintptr_t>(p.HumanoidRootPart.address + Offsets::BasePart::Primitive);
 				if (primitiveAddr)
 					p.Velocity = Memory->read<Vectors::Vector3>(primitiveAddr + Offsets::Primitive::AssemblyLinearVelocity);
+			}
+
+			// Cache equipped tool name
+			p.ToolName = "";
+			if (p.Character.address)
+			{
+				auto children = p.Character.GetChildren();
+				for (auto& child : children)
+				{
+					if (child.Class() == "Tool" || child.Class() == "HopperBin")
+					{
+						p.ToolName = child.Name();
+						break;
+					}
+				}
 			}
 
 			switch (p.RigType)

@@ -3,6 +3,8 @@
 #include <shellapi.h>
 #include <thread>
 
+#define IDI_ICON1 101
+
 #pragma comment(lib, "Shell32.lib")
 
 // Unique message ID for tray icon callbacks
@@ -57,8 +59,8 @@ static void AddTrayIcon()
     g_TrayIconData.uFlags       = NIF_ICON | NIF_TIP | NIF_MESSAGE;
     g_TrayIconData.uCallbackMessage = WM_TRAYICON;
 
-    // Use a standard Windows application icon as a placeholder
-    g_TrayIconData.hIcon = LoadIconW(NULL, IDI_APPLICATION);
+    // Use the embedded application icon from fleasion.ico
+    g_TrayIconData.hIcon = LoadIconW(GetModuleHandle(NULL), MAKEINTRESOURCEW(IDI_ICON1));
 
     // Tooltip shown in the hidden icons menu – max 128 wide chars (NOTIFYICONDATA v2)
     wcscpy_s(g_TrayIconData.szTip, L"Fleasion - Running");
@@ -88,20 +90,6 @@ static void TrayMessageLoop()
     }
 }
 
-// Call once at startup from a detached thread (or directly)
-static void InitTray()
-{
-    g_TrayRunning = true;
-    AddTrayIcon();
-    TrayMessageLoop();
-}
-
-// Call at shutdown to clean up
-static void ShutdownTray()
-{
-    g_TrayRunning = false;
-    RemoveTrayIcon();
-    // Post quit so the message loop unblocks if it is still running
-    if (g_TrayMsgWnd)
-        PostMessageW(g_TrayMsgWnd, WM_QUIT, 0, 0);
-}
+// Forward declarations – implementations are in tray.cpp
+void InitTray();
+void ShutdownTray();

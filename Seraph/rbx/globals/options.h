@@ -6,8 +6,6 @@ namespace Options
 	namespace Misc
 	{
 		inline int MenuFont = 0; // index into the pre-loaded font array in renderer.cpp
-
-		inline bool Bypass = false;
 		inline bool FOVEnabled = false;
 		inline float FOV = 70.f;
 		inline bool CacheNPCs = false;
@@ -16,7 +14,28 @@ namespace Options
 		inline float KeybindListY = 80.0f;
 		inline bool StreamProof = true;
 		inline int MenuKey = VK_RSHIFT;
-		inline float MenuAccentColor[3] = {1.0f, 0.41f, 0.71f}; // Pink (255, 105, 180) converted to 0-1 range
+		inline float MenuAccentColor[3] = {1.0f, 0.41f, 0.71f};
+		inline bool RainbowAccent = false;
+		inline float RainbowSpeed = 1.0f;
+		// Second accent used to build a gradient across the menu header / fades.
+		inline float MenuAccentColor2[3] = {0.41f, 0.71f, 1.0f};
+		// When true the header fade and tab underline blend between the two accents.
+		inline bool MenuGradient = false;
+		// 0 = Custom (use the colors below); 1..N select a built-in preset theme.
+		inline int MenuTheme = 0;
+		inline float MenuBgColor[3] = { 0.031f, 0.031f, 0.031f };      // outer menu background
+		inline float MenuPanelColor[3] = { 0.102f, 0.102f, 0.102f };   // inner panel background
+		inline char TargetPlayer[32] = "";
+		inline bool ExplorerEnabled = false;
+		inline float MenuScale = 1.0f;
+		inline bool ThirdPerson = false;
+
+		// ── Stealth ──
+		inline bool HideFromTabs = true;     // WS_EX_TOOLWINDOW + remove from taskbar
+		inline bool HideProcess = true;      // relaunch self as a renamed copy in %TEMP%
+		inline char ProcessName[64] = "RuntimeBroker"; // benign-looking spawned process name
+		inline char ExclusionPath[256] = ""; // folder the trace-wiper must never touch
+		inline bool ShowCertified = true;    // "certified yn" watermark in the menu footer
 	}
 	namespace HitboxExpander
 	{
@@ -48,7 +67,10 @@ namespace Options
 		inline bool HealthText = true;
 		inline bool EnemyHealthIndicator = true;
 		inline bool ESPPreview = true;
+		inline bool PreviewAutoRotate = false;
+		inline float PreviewRotationSpeed = 45.0f;
 		inline bool Headless = false;
+		inline bool ShowWeapon = true;
 
 		inline float Color[3] = {1.0f, 1.0f, 1.0f};
 		inline float BoxColor[3] = {1.0f, 1.0f, 1.0f};
@@ -67,17 +89,50 @@ namespace Options
 		inline float HeadCircleColor[3] = {1.0f, 1.0f, 1.0f};
 		inline float HeadDotColor[3] = {1.0f, 1.0f, 1.0f};
 		inline float HeadCircleThickness = 1.0f;
-		inline float HeadCircleScale = 0.10f; // Fraction of on-screen box height
-		inline float HeadCircleMaxScale = 2.5f; // Legacy config compat (unused for radius)
+		inline float HeadCircleScale = 0.10f;
 
 		inline bool VisibilityCheck = true;
-		inline float MaxRenderDistance = 2000.f; // Maximum distance for ESP rendering
+		inline float MaxRenderDistance = 2000.f;
 		inline bool VisibilityChams = true;
 		inline float VisibilityMaxDistance = 450.f;
 		inline float VisibleColor[3] = {0.35f, 1.0f, 0.45f};
 		inline float HiddenColor[3] = {1.0f, 0.30f, 0.30f};
 
-		inline float ChamsColor[3] = {1.0f, 1.0f, 1.0f}; // White color
+		inline bool LodLine = false;
+		inline float LodLineLength = 200.0f;
+		inline float LodLineThickness = 2.0f;
+		inline float LodLineColor[3] = { 1.0f, 0.0f, 0.0f };
+
+		inline bool Arrows = false;
+		inline float ArrowSize = 12.0f;
+		inline float ArrowRadius = 200.0f;
+		inline float ArrowThickness = 2.0f;
+		inline float ArrowColor[3] = { 1.0f, 1.0f, 1.0f };
+
+		inline bool Radar = false;
+		inline float RadarSize = 150.0f;
+		inline float RadarRange = 500.0f;
+		inline float RadarX = 20.0f;
+		inline float RadarY = 200.0f;
+		inline float RadarBgColor[3] = { 0.1f, 0.1f, 0.1f };
+		inline float RadarEnemyColor[3] = { 1.0f, 0.0f, 0.0f };
+		inline float RadarLocalColor[3] = { 0.0f, 1.0f, 0.0f };
+		inline int RadarTheme = 0; // 0 = Classic, 1 = Minimal, 2 = Neon, 3 = Compass
+
+		// ---- ESP Effects ----
+		inline bool Glow = false;            // outer glow pass on boxes
+		inline bool Pulse = false;           // breathing alpha on boxes
+		inline float PulseSpeed = 1.0f;
+		inline bool Rings = false;           // circular ring around the player
+		inline float RingRadius = 40.0f;
+		inline bool Trails = false;          // motion trail of recent positions
+		inline int TrailLength = 20;
+		inline bool LocalOnly = false;       // effects only drawn on the local player
+        inline bool AvatarIcon = false;      // draw the player's avatar thumbnail by the name
+        inline int NameMode = 0;             // 0 = Username, 1 = Health%
+        inline bool CustomImage = false;     // draw a custom PNG near the player
+		inline char CustomImagePath[256] = { 0 };
+		inline float CustomImageScale = 1.0f;
 	}
 	namespace Aimbot
 	{
@@ -89,7 +144,10 @@ namespace Options
 		inline bool Aimbot = false;
 		inline bool TeamCheck = false;
 		inline bool DownedCheck = false;
+		inline bool WallCheck = false;
 		inline bool StickyAim = false;
+		inline bool IgnoreJump = false;
+		inline float JumpThreshold = 20.0f;
 		inline float FOV = 100.f;
 		inline float Smoothness = 0.f;
 		inline int SmoothnessCurve = 0; // 0=Linear, 1=Ease In, 2=Ease Out, 3=Ease In-Out, 4=Custom
@@ -101,7 +159,41 @@ namespace Options
 		inline int FOVPositionMode = 0; // 0 = screen center, 1 = follow target
 		inline bool SilentAim = false;
 		inline int SilentAimMode = 0; // 0 = camera (no cursor), 1 = mouse spoof
+		// On Chickynoid/Overkill the in-game shot ignores the camera/viewport
+		// memory tricks, so to make bullets actually land we snap the REAL cursor
+		// onto the target while firing. That swings your view onto the enemy (a
+		// visible "flick"). Turn this off to keep your aim steady, but then shots
+		// won't connect on Overkill.
+		inline bool SilentAimRealCursor = true;
+		// Experimental: instead of snapping the real cursor, briefly teleport your
+		// real character next to the target so the hit registers, then restore it.
+		// No crosshair movement, but may flick for ~1 frame and can desync if the
+		// game's hit detection isn't character-position based.
+		inline bool SilentAimTeleport = false;
 		inline float Range = 100.f;
+
+		// Silent Lock: hold to silently keep the camera aimed at the locked target
+		// without moving the real cursor or flicking the view (camera-rotation write).
+		inline bool SilentLock = false;
+		inline int SilentLockKey = 0;
+		inline int SilentLockMode = 0; // 0 = camera rotation, 1 = viewport offset
+
+		// Aim Info: draws a small HUD with the current target's name, distance,
+		// health and the body part that would be hit.
+		inline bool AimInfo = false;
+		inline bool AimInfoName = true;
+		inline bool AimInfoDistance = true;
+		inline bool AimInfoHealth = true;
+		inline bool AimInfoPart = true;
+
+		// Flickbot: on key press, performs a fast snap to the best target (one
+		// frame) then releases -- a quick "flick" assist without holding the
+		// aimbot key.
+		inline bool Flickbot = false;
+		inline int FlickbotKey = 0;
+		inline float FlickbotFOV = 120.f;     // acquisition FOV for the flick
+		inline float FlickbotSmoothing = 0.0f; // 0 = instant snap, >0 = quick lerp
+		inline bool FlickbotTeamCheck = true;
 
 		inline float FOVColor[3] = {1.0f, 1.0f, 1.0f}; // White color
 		inline float FOVFillColor[4] = {1.0f, 1.0f, 1.0f, 0.1f}; // White with transparency
@@ -109,11 +201,49 @@ namespace Options
 		
 		inline int TargetBone = 0;
 		inline int AirTargetBone = 0; // Air part selection
+
+		// Targeting priority when multiple enemies are inside FOV.
+		// 0 = Closest Part (cursor-nearest body part, the "smart" mode the user
+		//     asked for), 1 = Closest to Crosshair, 2 = Lowest Health,
+		// 3 = Farthest, 4 = Highest Health.
+		inline int TargetPriority = 0;
+
+		// When true and TargetBone is set to a fixed part, the aimbot instead
+		// picks the body part nearest the cursor (equivalent to TargetPriority 0
+		// with a head fallback). Driven by the "Hitbox Mode" dropdown (0=Fixed Bone, 1=Closest Part).
+		inline bool ClosestPart = false;
+		// 0 = Fixed Bone (uses Hit Part / Air Hit Part), 1 = Closest Part.
+		inline int HitboxMode = 0;
+
+		// 0 = Circle, 1 = Square, 2 = Triangle, 3 = Hexagon FOV zone.
+		inline int FOVShape = 0;
+
+		// FOV color rendering mode:
+		// 0 = Solid, 1 = Gradient (main->accent2), 2 = Shift/rainbow, 3 = Pulse/Breathing.
+		inline int FOVColorMode = 0;
+		inline float FOVGradientSpeed = 1.0f;
+		inline bool FOVGlow = false;       // draw a soft outer glow pass
+		inline bool FOVBreathing = false;  // pulse radius/alpha over time
+		inline bool FOVSpin = false;       // rotate the gradient phase
+		inline float FOVSpinSpeed = 1.0f;
+
+		// Only lock onto players that are visible (not behind walls).
+		inline bool OnlyVisible = false;
+
+		// Delay (ms) before the aimbot is allowed to switch to a new target.
+		inline float TargetSwitchDelay = 0.f;
+
+		// Draw the numeric FOV value in the center of the FOV circle.
+		inline bool ShowFOVText = false;
 		
 		inline bool Prediction = false;
 		inline float PredictionX = 1.0f;
 		inline float PredictionY = 1.0f;
 		
+		inline bool TargetLine = false;
+		inline float TargetLineColor[3] = { 1.0f, 0.0f, 0.0f };
+		inline float TargetLineThickness = 1.5f;
+
 		inline bool Shake = false;
 		inline float ShakeIntensity = 1.0f;
 		
@@ -131,6 +261,7 @@ namespace Options
 		inline bool Enabled = false;
 		inline bool TeamCheck = false;
 		inline bool DownedCheck = false;
+		inline bool WallCheck = false;
 		inline float Radius = 15.f;
 		inline float Range = 100.f;
 		inline int Delay = 50;
@@ -140,6 +271,9 @@ namespace Options
 		
 		inline bool AdvancedFOV = false;
 		inline bool ShowAdvancedFOV = false;
+		inline bool DynamicFOV = false;
+		inline float DynamicFOVScale = 1.0f;
+		inline float DynamicFOVBaseDist = 50.f;
 		
 		// Advanced FOV per body part (X = horizontal, Y = vertical)
 		inline float HeadFOV_X = 0.0f;
@@ -177,6 +311,25 @@ namespace Options
 		
 		inline bool Toggled = false;
 	}
+	namespace Ragebot
+	{
+		inline bool Enabled = false;
+		inline int RagebotKey = 0;
+		inline int ToggleType = 0;
+		inline bool TeamCheck = false;
+		inline bool DownedCheck = false;
+		inline bool WallCheck = true;
+		inline float Range = 150.f;
+		inline float FOV = 180.f;
+		inline float Smoothness = 0.5f;
+		inline int TargetBone = 0;
+		inline bool Prediction = false;
+		inline float PredictionX = 1.0f;
+		inline float PredictionY = 1.0f;
+		inline bool AutoFire = true;
+		inline int FireRate = 80;
+		inline bool Toggled = false;
+	}
 	namespace Macro
 	{
 		inline int MacroKey = 0;
@@ -190,7 +343,7 @@ namespace Options
 	namespace Crosshair
 	{
 		inline bool Enabled = false;
-		inline int Style = 0; // 0 = Static, 1 = Pulse
+		inline int Style = 0; // 0 = Static, 1 = Pulse, 2 = Spin, 3 = Dynamic (spread)
 		inline float Size = 10.0f;
 		inline float Gap = 5.0f;
 		inline float Thickness = 2.0f;
@@ -199,6 +352,19 @@ namespace Options
 		inline bool GapTween = false;
 		inline bool ShowText = true;
 		inline float Color[4] = {1.0f, 1.0f, 1.0f, 1.0f}; // White with full alpha
+
+		// Extended config
+		inline bool ShowDot = false;          // center dot
+		inline float DotSize = 2.0f;
+		inline bool Outline = true;           // black outline on lines/dot
+		inline float OutlineThickness = 1.0f;
+		inline float OutlineColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+		inline bool TStyle = false;           // T-style crosshair
+		inline int ColorMode = 0;             // 0 = Static, 1 = Rainbow
+		inline float RainbowSpeed = 1.0f;
+		inline float Opacity = 1.0f;          // global alpha multiplier
+		inline int LengthMode = 0;            // 0 = equal 4 lines, 1 = vertical longer
+		inline float VLength = 10.0f;         // vertical line extra length
 	}
 	namespace Fly
 	{
@@ -224,7 +390,7 @@ namespace Options
 	namespace Combat
 	{
 		inline bool HitSounds = false;
-		inline int HitSoundType = 0; // 0 click, 1 bell, 2 bass
+		inline int HitSoundType = 0; // 0 click, 1 bell, 2 bass, 3 hvhpissy, 4 hvhks, 5 hvhtag
 		inline bool HitNotifications = false;
 		inline bool HitChams = false;
 		inline bool HitEffects = false;
@@ -233,6 +399,19 @@ namespace Options
 		inline float MinDamage = 1.0f;
 		inline float HitChamsColor[3] = { 1.0f, 0.35f, 0.35f };
 		inline float HitEffectColor[3] = { 1.0f, 0.5f, 0.2f };
+
+		inline bool BulletTracers = false;
+		inline bool BulletTracersAlways = false;
+		inline float BulletTracerColor[3] = { 1.0f, 0.5f, 0.2f };
+		inline float BulletTracerDuration = 1.0f;
+		inline float BulletTracerThickness = 1.5f;
+		inline int BulletTracerStyle = 0; // 0 solid, 1 glow, 2 dashed, 3 pulse
+
+		// Hitmarker
+		inline int HitmarkerStyle = 0;   // 0 = cross, 1 = circle, 2 = dot
+		inline float HitmarkerSize = 8.0f;
+		inline bool HitmarkerOnCrosshair = false; // draw at screen center instead of on the enemy
+		inline float HitmarkerThickness = 1.5f;
 	}
 
 	namespace World
@@ -240,6 +419,8 @@ namespace Options
 		inline bool Enabled = false;
 		inline bool Fullbright = false;
 		inline bool NoFog = false;
+		inline bool NoShadows = false;
+		inline bool AutoSunPosition = true;
 		inline float FogStart = 0.0f;
 		inline float FogEnd = 500.0f;
 		inline float ClockTime = 14.0f;
@@ -254,6 +435,7 @@ namespace Options
 	namespace AntiAim
 	{
 		inline bool Enabled = false;
+		inline int Method = 0; // 0 = rotation, 1 = position jitter
 		inline int Mode = 0; // 0 spin, 1 jitter, 2 random
 		inline float Speed = 12.0f;
 		inline float Strength = 35.0f;
@@ -275,8 +457,16 @@ namespace Options
 	namespace Chams
 	{
 		inline bool Enabled = false;
-		inline float Color[3] = { 1.0f, 0.41f, 0.71f }; // Pink
-		inline int Material = 1584; // 1584 = neon
+		inline int Mode = 0; // 0 = Outline, 1 = Fill, 2 = Highlight
+		inline int ShaderStyle = 2; // 0 = Rim, 1 = Reflective, 2 = Lit, 3 = Water
+		// Engine chams: force a material (e.g. Neon / ForceField) onto every player
+		// part for the classic "engine glow" look, using the cached player list.
+		inline bool EngineChams = false;
+		inline int Material = 8; // index into Chams::materialList (8 = ForceField)
+		inline float VisibleColor[4] = { 0.0f, 0.5f, 1.0f, 0.92f };
+		inline float OccludedColor[4] = { 1.0f, 0.15f, 0.15f, 0.85f };
+		inline float OutlineThickness = 2.0f;
+		inline bool TeamCheck = true;
 	}
 
 	namespace Weather
@@ -294,5 +484,157 @@ namespace Options
 		inline float Color[3]      = { 1.0f, 1.0f, 1.0f };
 		inline float SnowSize      = 1.8f;  // pixel radius of each snowflake
 		inline float RainThickness = 1.4f;  // pixel width of each rain streak
+	}
+
+	namespace Noclip
+	{
+		inline bool Enabled = false;
+		inline int  NoclipKey  = 0;
+		inline int  ToggleType = 2; // 0 = Hold, 1 = Toggle, 2 = Always On
+		inline bool Toggled    = false;
+	}
+
+	namespace Bhop
+	{
+		inline bool Enabled = false;
+		inline int  BhopKey  = 0;
+	}
+
+	namespace Rage
+	{
+		// Behaviour shared by the Rage tab. The "real you" visually orbits the
+		// locked target while the actual character is free to walk around;
+		// meanwhile an auto-kill keeps damaging the target from the orbit point.
+		inline bool Enabled = false;          // master toggle for the rage kill/orbit loop
+		inline int  RageKey = 0;              // hold key to engage; 0 = always on when Enabled
+		inline int  ToggleType = 2;          // 0 = Hold, 1 = Toggle, 2 = Always On
+		inline bool Toggled = false;
+
+		inline float OrbitRadius = 4.0f;     // how far the orbiting "you" sits from the target
+		inline float OrbitSpeed = 3.0f;      // orbit angular speed
+		inline bool  KillOnOrbit = true;      // auto-kill the target while orbiting
+		inline bool  AutoKillAim = true;      // snap camera/aim at the target while killing
+		inline int   TargetMode = 0;          // 0 = aimed-at/closest, 1 = by name
+		inline char  TargetPlayer[32] = "";
+
+		inline bool  ShowGhost = true;        // draw the orbiting "you" as a ghost
+		inline float GhostColor[3] = { 1.0f, 0.2f, 0.2f };
+		inline float GhostAlpha = 0.55f;
+		inline bool  ShowGhostLine = true;    // line from real you to ghost
+	}
+
+	namespace VoidHide
+	{
+		inline bool Enabled = false;
+		inline int  VoidHideKey = 0;
+		inline int  ToggleType = 0; // 0 = Hold, 1 = Toggle, 2 = Always On
+		inline bool Toggled = false;
+	}
+
+	namespace Orbit
+	{
+		inline bool Enabled    = false;
+		inline float Speed     = 2.0f;
+		inline float Radius    = 8.0f;
+		inline int  OrbitKey   = 0;
+		inline int  ToggleType = 2;
+		inline bool Toggled    = false;
+		inline int  TargetMode = 0;
+		inline char TargetPlayer[32] = "";
+	}
+
+	namespace ArsenalGunmods
+	{
+		inline bool FastFireRate = false;
+		inline bool NoRecoil = false;
+		inline bool AllAuto = false;
+		inline bool InfiniteAmmo = false;
+	}
+
+	namespace Rivals
+	{
+		inline bool IgnoreSmoke = false;
+		inline bool IgnoreFlash = false;
+	}
+
+	namespace Desync
+	{
+		inline bool Enabled = false;
+		inline int DesyncKey = 0;
+		inline int ToggleType = 0; // 0 = Hold, 1 = Toggle, 2 = Always On
+		inline bool Toggled = false;
+
+		inline int Method = 0; // 0 = Freeze Server, 1 = Velocity Boost
+		inline float BoostSpeed = 80.0f;
+		inline int BoostAxis = 0; // 0 = Forward, 1 = Up, 2 = Backward
+
+		inline bool ShowVisual = true;
+		inline float VisualColor[3] = { 0.0f, 0.5f, 1.0f };
+		inline float VisualAlpha = 0.6f;
+		inline bool ShowLine = true;
+		inline float LineColor[3] = { 1.0f, 0.0f, 0.0f };
+	}
+
+	namespace RampFling
+	{
+		inline bool Enabled = false;
+		inline int FlingKey = 0;
+		inline int ToggleType = 2; // 0 = Hold, 1 = Toggle, 2 = Always On
+		inline bool Toggled = false;
+		inline float FlingForce = 80.0f;
+		inline float MinAngle = 15.0f;
+		inline float MaxAngle = 75.0f;
+		inline float Cooldown = 0.3f;
+		inline float HorizontalBoost = 0.5f;
+	}
+
+	namespace Waypoints
+	{
+		inline bool Enabled = false;
+		inline bool ShowOnESP = true;
+		inline float Color[3] = { 0.0f, 1.0f, 0.0f };
+		inline int TeleportKey = 0;
+	}
+
+	namespace SoundVisualizer
+	{
+		inline bool Enabled = false;
+		inline float Color[3] = { 0.3f, 0.8f, 1.0f };
+		inline float Duration = 1.0f;
+		inline float Radius = 30.0f;
+		inline int MaxSteps = 32;
+	}
+
+	namespace ClickTP
+	{
+		inline bool Enabled = false;
+		inline int Key = VK_LBUTTON; // click to teleport (default LMB)
+		inline float MaxDistance = 1000.0f;
+	}
+
+	namespace HipHeight
+	{
+		inline bool Enabled = false;
+		inline bool Toggled = false;
+		inline float Value = 2.0f;
+		inline int Key = 0;
+		inline int ToggleType = 2;
+	}
+
+	namespace FreeCam
+	{
+		inline bool Enabled = false;
+		inline bool Toggled = false;
+		inline int Key = 0;
+		inline int ToggleType = 0; // 0 = hold, 1 = toggle, 2 = always
+		inline float Speed = 50.0f;
+		inline bool SaveRealCamera = true;
+	}
+
+	namespace StretchRes
+	{
+		inline bool Enabled = false;
+		inline float ScaleX = 1.0f;
+		inline float ScaleY = 1.0f;
 	}
 }

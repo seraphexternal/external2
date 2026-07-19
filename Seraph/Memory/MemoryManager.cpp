@@ -2,27 +2,70 @@
 #include <vector>
 
 int32_t MemoryManager::getProcessId(const std::string& processName) {
-	uint32_t processId = 0;
+	// Collect every matching process. Multiple RobloxPlayerBeta.exe instances can
+	// exist (launcher, crash handler, etc.); we must attach to the one that owns
+	// the actual game window, not a helper process.
+	std::vector<uint32_t> pids;
 	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, NULL);
-
-	if (snapshot == INVALID_HANDLE_VALUE) {
-		return processId;
-	}
+	if (snapshot == INVALID_HANDLE_VALUE) return 0;
 
 	PROCESSENTRY32 processEntry{};
 	processEntry.dwSize = sizeof(PROCESSENTRY32);
-
 	if (Process32First(snapshot, &processEntry)) {
 		do {
-			if (!_stricmp(processName.c_str(), processEntry.szExeFile)) {
-				processId = processEntry.th32ProcessID;
-				break;
-			}
+			if (!_stricmp(processName.c_str(), processEntry.szExeFile))
+				pids.push_back(processEntry.th32ProcessID);
 		} while (Process32Next(snapshot, &processEntry));
 	}
-
 	CloseHandle(snapshot);
-	return processId;
+
+	if (pids.empty()) return 0;
+
+	// Find which of those PIDs owns a visible top-level window with a title
+	// (the game client). Launcher/helper processes usually have no window or an
+	// empty title. Prefer the foreground window's PID as a tie-breaker.
+	DWORD fgPid = 0;
+	{
+		HWND fg = GetForegroundWindow();
+		if (fg) GetWindowThreadProcessId(fg, &fgPid);
+	}
+
+	uint32_t windowedPid = 0;
+	struct WinCheck { uint32_t pid; bool found; };
+	for (uint32_t p : pids) {
+		WinCheck wc{ p, false };
+		EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
+			auto* wc = reinterpret_cast<WinCheck*>(lParam);
+			if (!IsWindowVisible(hwnd) || GetWindow(hwnd, GW_OWNER) != nullptr)
+				return TRUE;
+			wchar_t title[256] = { 0 };
+			if (GetWindowTextW(hwnd, title, 256) == 0)
+				return TRUE; // no title -> not the game client
+			DWORD wpid = 0;
+			GetWindowThreadProcessId(hwnd, &wpid);
+			if (wpid == wc->pid) { wc->found = true; return FALSE; }
+			return TRUE;
+		}, reinterpret_cast<LPARAM>(&wc));
+		if (wc.found) {
+			windowedPid = p;
+			break;
+		}
+	}
+
+	if (windowedPid != 0) {
+		// Prefer the foreground game if it's among the windowed matches.
+		if (fgPid != 0) {
+			for (uint32_t p : pids) {
+				if (p == fgPid) { windowedPid = p; break; }
+			}
+		}
+		return (int32_t)windowedPid;
+	}
+
+	// Fallback: highest PID (most recently started).
+	uint32_t best = 0;
+	for (uint32_t p : pids) if (p > best) best = p;
+	return (int32_t)best;
 }
 
 uintptr_t MemoryManager::getModuleAddress(const std::string& moduleName) {

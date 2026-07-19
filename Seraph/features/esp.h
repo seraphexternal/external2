@@ -5,9 +5,12 @@
 #include <gdiplus.h>
 #include <vector>
 #include <string>
+#include <unordered_map>
 #include <thread>
 #include <chrono>
+#include <cmath>
 #include <d3d11.h>
+#include "avatar3d.h"
 
 #pragma comment(lib, "urlmon.lib")
 #pragma comment(lib, "wininet.lib")
@@ -207,7 +210,9 @@ inline bool EspAnyEnabled()
         || Options::ESP::EnemyHealthIndicator
         || Options::Combat::HitChams
         || Options::ESP::VisibilityCheck
-        || Options::ESP::VisibilityChams;
+        || Options::ESP::VisibilityChams
+        || Options::ESP::Arrows
+        || Options::ESP::Radar;
 }
 
 inline void RenderESP(ImDrawList* drawList)
@@ -220,7 +225,12 @@ inline void RenderESP(ImDrawList* drawList)
         static bool wasKeyPressed = false;
         bool isKeyPressed = KeyBind::IsPressed(Options::ESP::ESPKey);
         
-        if (Options::ESP::ToggleType == 1)
+        if (Options::ESP::ToggleType == 2)
+        {
+            // Always On
+            Options::ESP::Toggled = true;
+        }
+        else if (Options::ESP::ToggleType == 1)
         {
             if (isKeyPressed && !wasKeyPressed)
                 Options::ESP::Toggled = !Options::ESP::Toggled;
@@ -237,6 +247,12 @@ inline void RenderESP(ImDrawList* drawList)
                 return;
             }
         }
+    }
+    else
+    {
+        // No key set
+        if (Options::ESP::ToggleType == 2)
+            Options::ESP::Toggled = true;
     }
 
     if (!drawList || !Globals::Viewport::Valid || !EspAnyEnabled())
@@ -258,6 +274,24 @@ inline void RenderESP(ImDrawList* drawList)
     else if (localHead.address) localPos = localHead.Position();
 
     Visibility::BeginFrame();
+
+    // Per-player screen-position history for motion trails.
+    static std::unordered_map<uint64_t, std::vector<ImVec2>> s_TrailHistory;
+    if (Options::ESP::Trails)
+    {
+        // Prune dead players occasionally to avoid unbounded growth.
+        static int s_PruneTick = 0;
+        if ((++s_PruneTick % 120) == 0)
+        {
+            for (auto it = s_TrailHistory.begin(); it != s_TrailHistory.end(); )
+            {
+                bool alive = false;
+                for (const auto& p : Globals::Caches::CachedPlayerObjects)
+                    if (p.address == it->first) { alive = true; break; }
+                if (!alive) it = s_TrailHistory.erase(it); else ++it;
+            }
+        }
+    }
 
     if (Options::ESP::VisibilityCheck || Options::ESP::VisibilityChams)
         Visibility::RefreshOccludersIfNeeded();
@@ -481,9 +515,82 @@ inline void RenderESP(ImDrawList* drawList)
 
         if (Options::ESP::BoxType == 1)
         {
+            ImU32 boxCol = activeBoxColor;
+            // Pulse: modulate the box alpha with a sine wave.
+            if (Options::ESP::Pulse)
+            {
+                float a = 0.45f + 0.55f * (0.5f + 0.5f * sinf(static_cast<float>(ImGui::GetTime()) * Options::ESP::PulseSpeed * 3.0f));
+                boxCol = (boxCol & 0x00FFFFFF) | (static_cast<int>(a * 255) << 24);
+            }
+
+            // Glow: a few thicker, low-alpha passes just outside the box.
+            if (Options::ESP::Glow)
+            {
+                for (int g = 3; g >= 1; g--)
+                {
+                    ImU32 gc = (boxCol & 0x00FFFFFF) | (static_cast<int>(30 / g) << 24);
+                    drawList->AddRect(
+                        ImVec2(left - g * 2.0f, top - g * 2.0f),
+                        ImVec2(right + g * 2.0f, bottom + g * 2.0f),
+                        gc, 0.f, 0, Options::ESP::BoxThickness + g * 2.0f);
+                }
+            }
+
             if (!Options::ESP::RemoveBorders)
                 drawList->AddRect(ImVec2(left, top), ImVec2(right, bottom), IM_COL32(0, 0, 0, 255), 0.f, 0, Options::ESP::BoxThickness + 1.5f);
-            drawList->AddRect(ImVec2(left, top), ImVec2(right, bottom), activeBoxColor, 0.f, 0, Options::ESP::BoxThickness);
+            drawList->AddRect(ImVec2(left, top), ImVec2(right, bottom), boxCol, 0.f, 0, Options::ESP::BoxThickness);
+        }
+
+        // ---- Rings (horizontal ellipse on the ground under the player, breathing) ----
+        if (Options::ESP::Rings)
+        {
+            auto feet = targetHRP.address ? targetHRP.Position() : targetHead.Position();
+            float breath = 1.0f + 0.08f * sinf(ImGui::GetTime() * 2.5f);
+            float r = Options::ESP::RingRadius * scale * breath;
+            const int segments = 32;
+            ImVec2 pts[segments];
+            int validPts = 0;
+            ImU32 ringCol = Options::ESP::VisibilityCheck
+                ? (playerVisible ? Visibility::GetVisibleColor() : Visibility::GetHiddenColor())
+                : IM_COL32(
+                    static_cast<int>(Options::ESP::BoxColor[0] * 255.f),
+                    static_cast<int>(Options::ESP::BoxColor[1] * 255.f),
+                    static_cast<int>(Options::ESP::BoxColor[2] * 255.f), 200);
+            for (int i = 0; i < segments; i++)
+            {
+                float a = (6.2831855f / segments) * i;
+                Vectors::Vector3 wp = { feet.x + r * cosf(a), feet.y, feet.z + r * sinf(a) };
+                auto sp = WorldToScreen(wp);
+                if (sp.x == -1.f || sp.y == -1.f) continue;
+                pts[validPts++] = ImVec2(sp.x, sp.y);
+            }
+            if (validPts >= 3)
+                drawList->AddPolyline(pts, validPts, ringCol, 0, 2.0f);
+        }
+
+        // ---- Trails (motion history) ----
+        if (Options::ESP::Trails)
+        {
+            auto& hist = s_TrailHistory[player.address];
+            const auto hrScreen = WorldToScreen(targetHRP.address ? targetHRP.Position() : targetHead.Position());
+            if (hrScreen.x != -1.f && hrScreen.y != -1.f)
+            {
+                hist.push_back(ImVec2(hrScreen.x, hrScreen.y));
+                if ((int)hist.size() > Options::ESP::TrailLength)
+                    hist.erase(hist.begin());
+            }
+            if (hist.size() >= 2)
+            {
+                ImU32 trailCol = Options::ESP::VisibilityCheck
+                    ? (playerVisible ? Visibility::GetVisibleColor() : Visibility::GetHiddenColor())
+                    : activeBoxColor;
+                for (size_t i = 1; i < hist.size(); i++)
+                {
+                    float a = static_cast<float>(i) / static_cast<float>(hist.size());
+                    ImU32 seg = (trailCol & 0x00FFFFFF) | (static_cast<int>(a * 180) << 24);
+                    drawList->AddLine(hist[i - 1], hist[i], seg, 2.0f);
+                }
+            }
         }
 
         if (Options::ESP::CornerESP)
@@ -657,14 +764,25 @@ inline void RenderESP(ImDrawList* drawList)
         }
         if (Options::ESP::Name)
         {
-            std::string displayName = player.Name;
-            
+            std::string displayName;
+            switch (Options::ESP::NameMode)
+            {
+            case 1:
+            {
+                float hp = liveMaxHealth > 0.f ? (liveHealth / liveMaxHealth) * 100.f : 0.f;
+                char buf[32]; snprintf(buf, sizeof(buf), "%.0f%%", hp);
+                displayName = buf;
+                break;
+            }
+            default: displayName = player.Name; break;
+            }
+
             const float baseSize = Options::ESP::NameSize;
             const float fontSize = (baseSize * scale > 11.f) ? baseSize * scale : 11.f;
             const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, displayName.c_str());
             const ImVec2 namePos(head2D.x - textSize.x * 0.5f, top - textSize.y - 2.f);
             newHeadName = namePos;
-            
+
             float t = Options::ESP::NameThickness;
             if (t > 0.0f)
             {
@@ -676,6 +794,38 @@ inline void RenderESP(ImDrawList* drawList)
             }
 
             drawList->AddText(font, fontSize, namePos, activeNameColor, displayName.c_str());
+
+            // Avatar icon: draw the player's cached thumbnail to the left of the name.
+            if (Options::ESP::AvatarIcon && ESPPreviewAvatar::g_LocalPlayerAvatarSRV && player.address == Globals::Roblox::LocalPlayer.address)
+            {
+                float iconH = textSize.y + 4.f;
+                float iconW = iconH;
+                ImVec2 iconPos(namePos.x - iconW - 3.f, namePos.y - 2.f);
+                drawList->AddImage(ESPPreviewAvatar::g_LocalPlayerAvatarSRV, iconPos, ImVec2(iconPos.x + iconW, iconPos.y + iconH));
+            }
+        }
+
+        // Custom image drawn near the box (e.g. a logo / chams decal).
+        if (Options::ESP::CustomImage && Options::ESP::CustomImagePath[0])
+        {
+            static ID3D11ShaderResourceView* s_CustomImg = nullptr;
+            static std::string s_CustomImgPath;
+            if (s_CustomImgPath != Options::ESP::CustomImagePath)
+            {
+                if (s_CustomImg) { s_CustomImg->Release(); s_CustomImg = nullptr; }
+                s_CustomImgPath = Options::ESP::CustomImagePath;
+                int w = 0, h = 0;
+                wchar_t widePath[256];
+                MultiByteToWideChar(CP_UTF8, 0, Options::ESP::CustomImagePath, -1, widePath, 256);
+                ESPPreviewAvatar::LoadTextureWithGDIPlus(g_pd3dDevice, widePath, &s_CustomImg, &w, &h);
+            }
+            if (s_CustomImg)
+            {
+                float imgH = 48.f * Options::ESP::CustomImageScale * scale;
+                float imgW = imgH;
+                ImVec2 imgPos(left - imgW - 4.f, top);
+                drawList->AddImage(s_CustomImg, imgPos, ImVec2(imgPos.x + imgW, imgPos.y + imgH));
+            }
         }
 
         if (Options::ESP::Distance)
@@ -694,6 +844,14 @@ inline void RenderESP(ImDrawList* drawList)
                 ? (playerVisible ? Visibility::GetVisibleColor() : Visibility::GetHiddenColor())
                 : distanceColor;
             drawList->AddText(font, fontSize, distPos, activeDistanceColor, distText);
+
+            if (Options::ESP::ShowWeapon && !player.ToolName.empty())
+            {
+                const float wpnFontSize = (11.f * scale > 9.f) ? 11.f * scale : 9.f;
+                const ImVec2 wpnTextSize = font->CalcTextSizeA(wpnFontSize, FLT_MAX, 0.f, player.ToolName.c_str());
+                const ImVec2 wpnPos((left + right) * 0.5f - wpnTextSize.x * 0.5f, distPos.y + textSize.y + 2.f);
+                drawList->AddText(font, wpnFontSize, wpnPos, IM_COL32(255, 200, 100, 220), player.ToolName.c_str());
+            }
         }
 
         if (Options::ESP::Health)
@@ -743,6 +901,63 @@ inline void RenderESP(ImDrawList* drawList)
                 0,
                 255);
             drawList->AddText(font, fontSize, hpPos, hpColor, hpText);
+        }
+    }
+
+    // Local-only effects: when enabled, draw a ring / glow around the local player.
+    if (Options::ESP::LocalOnly && localHRP.address)
+    {
+        const auto localScreen = WorldToScreen(localHRP.Position());
+        if (localScreen.x != -1.f && localScreen.y != -1.f)
+        {
+            float dist = localPos.x != 0 ? localHRP.Position().Distance(localPos) : 1.f;
+            float lscale = EspClamp(450.f / EspClamp(dist, 1.f, 4500.f), 0.65f, 2.5f);
+            ImU32 localCol = IM_COL32(
+                static_cast<int>(Options::ESP::RadarLocalColor[0] * 255.f),
+                static_cast<int>(Options::ESP::RadarLocalColor[1] * 255.f),
+                static_cast<int>(Options::ESP::RadarLocalColor[2] * 255.f), 220);
+
+            if (Options::ESP::Glow)
+            {
+                auto lpos = localHRP.Position();
+                const int gsegs = 32;
+                for (int g = 3; g >= 1; g--)
+                {
+                    float gr = (Options::ESP::RingRadius * lscale + g * 2.0f);
+                    ImU32 gc = (localCol & 0x00FFFFFF) | (static_cast<int>(30 / g) << 24);
+                    ImVec2 gpts[gsegs];
+                    int gv = 0;
+                    for (int i = 0; i < gsegs; i++)
+                    {
+                        float a = (6.2831855f / gsegs) * i;
+                        Vectors::Vector3 wp = { lpos.x + gr * cosf(a), lpos.y, lpos.z + gr * sinf(a) };
+                        auto sp = WorldToScreen(wp);
+                        if (sp.x == -1.f || sp.y == -1.f) continue;
+                        gpts[gv++] = ImVec2(sp.x, sp.y);
+                    }
+                    if (gv >= 3)
+                        drawList->AddPolyline(gpts, gv, gc, 0, 2.0f + g * 2.0f);
+                }
+            }
+            if (Options::ESP::Rings)
+            {
+                float breath = 1.0f + 0.08f * sinf(ImGui::GetTime() * 2.5f);
+                float lr = Options::ESP::RingRadius * lscale * breath;
+                const int segs = 32;
+                ImVec2 lpts[segs];
+                int lv = 0;
+                auto lpos = localHRP.Position();
+                for (int i = 0; i < segs; i++)
+                {
+                    float a = (6.2831855f / segs) * i;
+                    Vectors::Vector3 wp = { lpos.x + lr * cosf(a), lpos.y, lpos.z + lr * sinf(a) };
+                    auto sp = WorldToScreen(wp);
+                    if (sp.x == -1.f || sp.y == -1.f) continue;
+                    lpts[lv++] = ImVec2(sp.x, sp.y);
+                }
+                if (lv >= 3)
+                    drawList->AddPolyline(lpts, lv, localCol, 0, 2.0f);
+            }
         }
     }
 }
@@ -800,6 +1015,7 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
     if (Globals::Roblox::LocalPlayer.address)
     {
         uint64_t userId = Memory->read<uint64_t>(Globals::Roblox::LocalPlayer.address + Offsets::Player::UserId);
+        Avatar3D::RequestModel(userId);
         // We do NOT mark g_LastUserId here -- we only update it after the texture
         // is actually loaded successfully, so failed lookups (Roblox returning no
         // imageUrl, network errors, GDI+ decode failures) will be retried on the
@@ -877,11 +1093,147 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
     const float top = origin.y + pad + 15.0f;
     const float bottom = origin.y + size.y - pad - 10.0f;
 
-    // Draw the local player's actual 2D avatar inside the preview area
-    if (ESPPreviewAvatar::g_LocalPlayerAvatarSRV)
+    // --- Rotation state ---
+    static float s_RotAngle = 0.0f;
+    static float s_DragOffX = 0.0f;
+    static float s_DragOffY = 0.0f;
+    static bool  s_WasDrag = false;
+    static ImVec2 s_LastM = {};
     {
-        drawList->AddImage(ESPPreviewAvatar::g_LocalPlayerAvatarSRV, ImVec2(left - 10.0f, top - 25.0f), ImVec2(right + 10.0f, bottom + 15.0f));
+        if (Options::ESP::PreviewAutoRotate)
+        {
+            s_RotAngle += Options::ESP::PreviewRotationSpeed * ImGui::GetIO().DeltaTime;
+            if (s_RotAngle > 360.0f) s_RotAngle -= 360.0f;
+        }
+
+        const ImVec2 pMin(origin.x, origin.y);
+        const ImVec2 pMax(origin.x + size.x, origin.y + size.y);
+        const bool hover = ImGui::IsMouseHoveringRect(pMin, pMax);
+
+        // Left-drag = rotate
+        if (hover && ImGui::IsMouseDown(0))
+        {
+            ImVec2 m = ImGui::GetIO().MousePos;
+            if (!s_WasDrag) { s_LastM = m; s_WasDrag = true; }
+            else { s_RotAngle += (m.x - s_LastM.x) * 0.8f; s_LastM = m; }
+            if (s_RotAngle > 360.0f) s_RotAngle -= 360.0f;
+            if (s_RotAngle < 0.0f) s_RotAngle += 360.0f;
+        }
+        else s_WasDrag = false;
+
+        // Middle-drag = move
+        {
+            static ImVec2 s_RM = {}; static bool s_RD = false;
+            if (hover && ImGui::IsMouseDown(2))
+            {
+                ImVec2 m = ImGui::GetIO().MousePos;
+                if (!s_RD) { s_RM = m; s_RD = true; }
+                else { s_DragOffX += m.x - s_RM.x; s_DragOffY += m.y - s_RM.y; s_RM = m; }
+            }
+            else s_RD = false;
+        }
+
+        // Clamp
+        float mx = (right - left) * 0.35f, my = (bottom - top) * 0.35f;
+        if (s_DragOffX > mx) s_DragOffX = mx; if (s_DragOffX < -mx) s_DragOffX = -mx;
+        if (s_DragOffY > my) s_DragOffY = my; if (s_DragOffY < -my) s_DragOffY = -my;
+
+        // Double-click reset
+        if (hover && ImGui::IsMouseDoubleClicked(0)) { s_DragOffX = 0; s_DragOffY = 0; }
+
+        // Drift back when not interacting
+        if (!hover && !ImGui::IsMouseDown(0) && !ImGui::IsMouseDown(2))
+        {
+            s_DragOffX *= 0.92f; s_DragOffY *= 0.92f;
+            if (fabsf(s_DragOffX) < 0.1f) s_DragOffX = 0;
+            if (fabsf(s_DragOffY) < 0.1f) s_DragOffY = 0;
+        }
     }
+
+    // --- Projected preview center ---
+    const float cx = (left + right) * 0.5f + s_DragOffX;
+    const float cy = (top + bottom) * 0.5f + s_DragOffY;
+    const float boxW = right - left;
+    const float boxH = bottom - top;
+    const float cosA = cosf(s_RotAngle * 3.14159265f / 180.0f);
+
+    // Character half-extents (normalized to box size)
+    const float charHalfW = boxW * 0.22f;
+    const float charTop = cy - boxH * 0.44f;
+    const float charBot = cy + boxH * 0.44f;
+    const float charH = charBot - charTop;
+
+    // Helper: project a 3D joint to 2D screen pos
+    // jointX: -1..1 lateral offset, jointY: 0..1 from top to bottom of character
+    auto project = [&](float jointX, float jointY) -> ImVec2 {
+        return ImVec2(cx + jointX * charHalfW * cosA, charTop + jointY * charH);
+    };
+
+    // --- Draw avatar: 3D model if available, else 2D fallback ---
+    float bLeft = 0, bRight = 0, bTop = 0, bBot = 0;
+    bool has3D = false;
+
+    uint64_t curUserId = 0;
+    if (Globals::Roblox::LocalPlayer.address)
+        curUserId = Memory->read<uint64_t>(Globals::Roblox::LocalPlayer.address + Offsets::Player::UserId);
+
+    const Avatar3D::Model* mdl = Avatar3D::GetModel(curUserId);
+    if (mdl && mdl->valid)
+    {
+        has3D = true;
+        ImVec2 previewOrigin(origin.x, origin.y);
+        ImVec2 previewSize(size.x, size.y);
+        Avatar3D::RenderModel(drawList, *mdl, previewOrigin, previewSize, s_RotAngle, Options::Misc::MenuAccentColor);
+        auto bounds = Avatar3D::GetProjectedBounds(*mdl, previewOrigin, previewSize, s_RotAngle);
+        bLeft = bounds.left - 8.0f;
+        bRight = bounds.right + 8.0f;
+        bTop = bounds.top - 8.0f;
+        bBot = bounds.bottom + 8.0f;
+    }
+    else
+    {
+        has3D = false;
+        float avatarH = boxH * 0.85f;
+        float avatarW = avatarH;
+        if (ESPPreviewAvatar::g_LocalPlayerAvatarSRV)
+        {
+            float aspect = (float)ESPPreviewAvatar::g_LocalPlayerAvatarWidth / (float)ESPPreviewAvatar::g_LocalPlayerAvatarHeight;
+            avatarW = avatarH * aspect;
+        }
+        if (avatarW > boxW * 0.85f) { avatarW = boxW * 0.85f; avatarH = avatarW / (ESPPreviewAvatar::g_LocalPlayerAvatarSRV ? ((float)ESPPreviewAvatar::g_LocalPlayerAvatarWidth / (float)ESPPreviewAvatar::g_LocalPlayerAvatarHeight) : 1.0f); }
+
+        float bboxHalfW = avatarW * 0.5f + boxW * 0.04f;
+        float bboxHalfH = avatarH * 0.5f + boxH * 0.03f;
+        float bboxCX = (left + right) * 0.5f + s_DragOffX;
+        float bboxCY = (top + bottom) * 0.5f + s_DragOffY;
+        bLeft = bboxCX - bboxHalfW;
+        bRight = bboxCX + bboxHalfW;
+        bTop = bboxCY - bboxHalfH;
+        bBot = bboxCY + bboxHalfH;
+
+        if (ESPPreviewAvatar::g_LocalPlayerAvatarSRV)
+        {
+            float tintFactor = fmaxf(0.3f, (cosA * 0.35f + 0.65f));
+            int c = (int)(tintFactor * 255);
+            bool back = cosA < -0.1f;
+            drawList->AddImage(ESPPreviewAvatar::g_LocalPlayerAvatarSRV,
+                ImVec2(bboxCX - avatarW * 0.5f, bboxCY - avatarH * 0.5f),
+                ImVec2(bboxCX + avatarW * 0.5f, bboxCY + avatarH * 0.5f),
+                ImVec2(back ? 1 : 0, 0), ImVec2(back ? 0 : 1, 1),
+                IM_COL32(c, c, back ? c/3 : c, 230));
+        }
+        else
+        {
+            drawList->AddCircle(ImVec2(bboxCX, bboxCY - avatarH * 0.3f), avatarW * 0.18f, IM_COL32(60, 60, 65, 120), 24);
+            ImVec2 tl(bboxCX - avatarW * 0.25f, bboxCY - avatarH * 0.05f);
+            ImVec2 tr(bboxCX + avatarW * 0.25f, bboxCY - avatarH * 0.05f);
+            ImVec2 bl(bboxCX - avatarW * 0.25f, bboxCY + avatarH * 0.3f);
+            ImVec2 br(bboxCX + avatarW * 0.25f, bboxCY + avatarH * 0.3f);
+            drawList->AddQuad(tl, tr, br, bl, IM_COL32(60, 60, 65, 80));
+        }
+    }
+
+    // --- ESP overlays use the bounding box from 3D or 2D ---
 
     const ImU32 boxColor = IM_COL32(
         static_cast<int>(Options::ESP::BoxColor[0] * 255.f),
@@ -889,9 +1241,8 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
         static_cast<int>(Options::ESP::BoxColor[2] * 255.f),
         255);
 
-    // Respect the user's "None" selection so the box actually turns off.
     if (Options::ESP::BoxType == 1)
-        drawList->AddRect(ImVec2(left, top), ImVec2(right, bottom), boxColor, 0, 0, Options::ESP::BoxThickness);
+        drawList->AddRect(ImVec2(bLeft, bTop), ImVec2(bRight, bBot), boxColor, 0, 0, Options::ESP::BoxThickness);
 
     if (Options::ESP::CornerESP || Options::ESP::BoxType == 1)
     {
@@ -901,78 +1252,69 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
             static_cast<int>(Options::ESP::CornerColor[1] * 255.f),
             static_cast<int>(Options::ESP::CornerColor[2] * 255.f),
             255);
-
-        auto corner = [&](ImVec2 a, ImVec2 b, ImVec2 c)
-        {
+        auto corner = [&](ImVec2 a, ImVec2 b, ImVec2 c) {
             drawList->AddLine(a, b, cornerColor, 1.8f);
             drawList->AddLine(a, c, cornerColor, 1.8f);
         };
-
-        corner(ImVec2(left, top), ImVec2(left + cornerLen, top), ImVec2(left, top + cornerLen));
-        corner(ImVec2(right, top), ImVec2(right - cornerLen, top), ImVec2(right, top + cornerLen));
-        corner(ImVec2(left, bottom), ImVec2(left + cornerLen, bottom), ImVec2(left, bottom - cornerLen));
-        corner(ImVec2(right, bottom), ImVec2(right - cornerLen, bottom), ImVec2(right, bottom - cornerLen));
+        corner(ImVec2(bLeft, bTop), ImVec2(bLeft + cornerLen, bTop), ImVec2(bLeft, bTop + cornerLen));
+        corner(ImVec2(bRight, bTop), ImVec2(bRight - cornerLen, bTop), ImVec2(bRight, bTop + cornerLen));
+        corner(ImVec2(bLeft, bBot), ImVec2(bLeft + cornerLen, bBot), ImVec2(bLeft, bBot - cornerLen));
+        corner(ImVec2(bRight, bBot), ImVec2(bRight - cornerLen, bBot), ImVec2(bRight, bBot - cornerLen));
     }
 
     if (Options::ESP::Health)
     {
-        const float barWidth = 4.0f;
+        const float barW = 4.0f;
         const float healthPct = 0.65f;
-        drawList->AddRectFilled(ImVec2(right + 3.0f, top), ImVec2(right + 3.0f + barWidth, bottom), IM_COL32(30, 30, 30, 200));
-        const float filledTop = bottom - (bottom - top) * healthPct;
-        drawList->AddRectFilled(ImVec2(right + 3.0f, filledTop), ImVec2(right + 3.0f + barWidth, bottom), IM_COL32(80, 220, 60, 230));
-        drawList->AddRect(ImVec2(right + 3.0f, top), ImVec2(right + 3.0f + barWidth, bottom), IM_COL32(0, 0, 0, 255));
+        drawList->AddRectFilled(ImVec2(bRight + 3.0f, bTop), ImVec2(bRight + 3.0f + barW, bBot), IM_COL32(30, 30, 30, 200));
+        const float filledTop = bBot - (bBot - bTop) * healthPct;
+        drawList->AddRectFilled(ImVec2(bRight + 3.0f, filledTop), ImVec2(bRight + 3.0f + barW, bBot), IM_COL32(80, 220, 60, 230));
+        drawList->AddRect(ImVec2(bRight + 3.0f, bTop), ImVec2(bRight + 3.0f + barW, bBot), IM_COL32(0, 0, 0, 255));
     }
 
     if (Options::ESP::HealthText)
     {
         const char* hpText = "65/100";
-        const ImVec2 textSize = ImGui::CalcTextSize(hpText);
-        drawList->AddText(ImVec2(right + 10.0f, (top + bottom) * 0.5f - textSize.y * 0.5f), IM_COL32(255, 255, 255, 230), hpText);
+        const ImVec2 ts = ImGui::CalcTextSize(hpText);
+        drawList->AddText(ImVec2(bRight + 10.0f, (bTop + bBot) * 0.5f - ts.y * 0.5f), IM_COL32(255, 255, 255, 230), hpText);
     }
 
     if (Options::ESP::EnemyHealthIndicator)
     {
         const char* hpText = "65 HP";
-        const ImVec2 textSize = ImGui::CalcTextSize(hpText);
-        drawList->AddText(ImVec2((left + right) * 0.5f - textSize.x * 0.5f, top - 18.0f), IM_COL32(0, 220, 60, 255), hpText);
+        const ImVec2 ts = ImGui::CalcTextSize(hpText);
+        drawList->AddText(ImVec2(cx - ts.x * 0.5f, bTop - 18.0f), IM_COL32(0, 220, 60, 255), hpText);
     }
 
     if (Options::ESP::Name)
     {
         std::string previewName = Globals::Roblox::LocalPlayer.address ? Globals::Roblox::LocalPlayer.Name() : "Player";
-        const ImVec2 textSize = ImGui::CalcTextSize(previewName.c_str());
-        drawList->AddText(ImVec2((left + right) * 0.5f - textSize.x * 0.5f, top - 34.0f), IM_COL32(255, 255, 255, 255), previewName.c_str());
+        const ImVec2 ts = ImGui::CalcTextSize(previewName.c_str());
+        drawList->AddText(ImVec2(cx - ts.x * 0.5f, bTop - 34.0f), IM_COL32(255, 255, 255, 255), previewName.c_str());
     }
 
     if (Options::ESP::Distance)
     {
         const char* distText = "42 studs";
-        const ImVec2 textSize = ImGui::CalcTextSize(distText);
-        drawList->AddText(ImVec2((left + right) * 0.5f - textSize.x * 0.5f, bottom + 4.0f), IM_COL32(200, 200, 200, 255), distText);
+        const ImVec2 ts = ImGui::CalcTextSize(distText);
+        drawList->AddText(ImVec2(cx - ts.x * 0.5f, bBot + 4.0f), IM_COL32(200, 200, 200, 255), distText);
     }
 
-    // Head circle as a proper round head sitting on top of the figure.
-    // Sized as a fraction of the box width (the head is roughly the same
-    // width as the shoulders in a Roblox character).
+    // Head circle
     if (Options::ESP::HeadCircle)
     {
-        const float headCircleColor = IM_COL32(
+        const ImU32 hcc = IM_COL32(
             static_cast<int>(Options::ESP::HeadCircleColor[0] * 255.f),
             static_cast<int>(Options::ESP::HeadCircleColor[1] * 255.f),
             static_cast<int>(Options::ESP::HeadCircleColor[2] * 255.f),
             230);
-
-        const float cx = (left + right) * 0.5f;
-        const float boxWidth = right - left;
-        const float boxHeight = bottom - top;
-        const float radius = EspClamp(boxWidth * Options::ESP::HeadCircleScale * 1.6f, 6.f, 26.f);
-        // Position the head just inside the top of the box so it isn't floating.
-        const float cy = top + radius + 4.f;
-
-        drawList->AddCircle(ImVec2(cx, cy), radius, headCircleColor, 32, Options::ESP::HeadCircleThickness);
+        const float headR = EspClamp(boxW * Options::ESP::HeadCircleScale * 1.6f, 6.f, 26.f);
+        const float hcX = (bLeft + bRight) * 0.5f;
+        const float hcY = bTop + headR + 2.0f;
+        drawList->AddCircle(ImVec2(hcX, hcY), headR, hcc, 32, Options::ESP::HeadCircleThickness);
     }
 
+    // Skeleton — all joints projected through the same rotation
     if (Options::ESP::Skeleton)
     {
         const ImU32 skel = IM_COL32(
@@ -980,64 +1322,56 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
             static_cast<int>(Options::ESP::SkeletonColor[1] * 255.f),
             static_cast<int>(Options::ESP::SkeletonColor[2] * 255.f),
             255);
-        const float thickness = EspClamp(Options::ESP::SkeletonThickness, 1.0f, 10.0f);
+        const float thick = EspClamp(Options::ESP::SkeletonThickness, 1.0f, 10.0f);
 
-        // Build a real skeleton: head, spine, shoulders, arms, hips, legs.
-        const float cx = (left + right) * 0.5f;
-        const float boxWidth = right - left;
-        const float boxHeight = bottom - top;
+        // Project joints relative to the bounding box (works for both 2D and 3D)
+        auto proj = [&](float jx, float jy) -> ImVec2 {
+            float px = bLeft + (bRight - bLeft) * (jx * 0.5f + 0.5f);
+            float py = bTop + (bBot - bTop) * jy;
+            return ImVec2(px, py);
+        };
 
-        const float headRadius = EspClamp(boxWidth * 0.18f, 6.f, 14.f);
-        const ImVec2 headCenter(cx, top + headRadius + 4.f);
+        const ImVec2 headTop    = proj(0.0f,  0.00f);
+        const ImVec2 headCenter = proj(0.0f,  0.08f);
+        const ImVec2 neck       = proj(0.0f,  0.18f);
+        const ImVec2 lShoulder  = proj(-0.5f, 0.22f);
+        const ImVec2 rShoulder  = proj(0.5f,  0.22f);
+        const ImVec2 lElbow     = proj(-0.5f, 0.38f);
+        const ImVec2 rElbow     = proj(0.5f,  0.38f);
+        const ImVec2 lHand      = proj(-0.5f, 0.52f);
+        const ImVec2 rHand      = proj(0.5f,  0.52f);
+        const ImVec2 hip        = proj(0.0f,  0.55f);
+        const ImVec2 lHip       = proj(-0.28f, 0.55f);
+        const ImVec2 rHip       = proj(0.28f,  0.55f);
+        const ImVec2 lKnee      = proj(-0.28f, 0.75f);
+        const ImVec2 rKnee      = proj(0.28f,  0.75f);
+        const ImVec2 lFoot      = proj(-0.28f, 0.95f);
+        const ImVec2 rFoot      = proj(0.28f,  0.95f);
 
-        const float shoulderY = headCenter.y + headRadius + boxHeight * 0.08f;
-        const float hipY = top + boxHeight * 0.58f;
-        const float footY = bottom - 4.f;
-
-        const float shoulderHalf = boxWidth * 0.30f;
-        const float hipHalf = boxWidth * 0.16f;
-        const float armBend = boxHeight * 0.18f;
-
-        const ImVec2 headTop(headCenter.x, headCenter.y - headRadius);
-        const ImVec2 neck(headCenter.x, shoulderY - 2.f);
-        const ImVec2 hip(cx, hipY);
-        const ImVec2 lShoulder(cx - shoulderHalf, shoulderY);
-        const ImVec2 rShoulder(cx + shoulderHalf, shoulderY);
-        const ImVec2 lElbow(cx - shoulderHalf, shoulderY + armBend);
-        const ImVec2 rElbow(cx + shoulderHalf, shoulderY + armBend);
-        const ImVec2 lHand(cx - shoulderHalf, shoulderY + armBend + armBend * 0.6f);
-        const ImVec2 rHand(cx + shoulderHalf, shoulderY + armBend + armBend * 0.6f);
-        const ImVec2 lKnee(cx - hipHalf, hipY + (footY - hipY) * 0.5f);
-        const ImVec2 rKnee(cx + hipHalf, hipY + (footY - hipY) * 0.5f);
-        const ImVec2 lFoot(cx - hipHalf, footY);
-        const ImVec2 rFoot(cx + hipHalf, footY);
-
-        // Spine: head -> neck -> hip
-        drawList->AddLine(headTop, neck, skel, thickness);
-        drawList->AddLine(neck, hip, skel, thickness);
-
-        // Arms: shoulder -> elbow -> hand
-        drawList->AddLine(lShoulder, lElbow, skel, thickness);
-        drawList->AddLine(lElbow, lHand, skel, thickness);
-        drawList->AddLine(rShoulder, rElbow, skel, thickness);
-        drawList->AddLine(rElbow, rHand, skel, thickness);
-
-        // Legs: hip -> knee -> foot
-        drawList->AddLine(hip, lKnee, skel, thickness);
-        drawList->AddLine(lKnee, lFoot, skel, thickness);
-        drawList->AddLine(hip, rKnee, skel, thickness);
-        drawList->AddLine(rKnee, rFoot, skel, thickness);
+        // Spine
+        drawList->AddLine(headTop, neck, skel, thick);
+        drawList->AddLine(neck, hip, skel, thick);
+        // Arms
+        drawList->AddLine(lShoulder, lElbow, skel, thick);
+        drawList->AddLine(lElbow, lHand, skel, thick);
+        drawList->AddLine(rShoulder, rElbow, skel, thick);
+        drawList->AddLine(rElbow, rHand, skel, thick);
+        // Legs
+        drawList->AddLine(hip, lKnee, skel, thick);
+        drawList->AddLine(lKnee, lFoot, skel, thick);
+        drawList->AddLine(hip, rKnee, skel, thick);
+        drawList->AddLine(rKnee, rFoot, skel, thick);
     }
 
     if (Options::Combat::HitChams)
     {
-        drawList->AddRectFilled(ImVec2(left, top), ImVec2(right, bottom),
+        drawList->AddRectFilled(ImVec2(bLeft, bTop), ImVec2(bRight, bBot),
             IM_COL32(
                 static_cast<int>(Options::Combat::HitChamsColor[0] * 255.f),
                 static_cast<int>(Options::Combat::HitChamsColor[1] * 255.f),
                 static_cast<int>(Options::Combat::HitChamsColor[2] * 255.f),
                 100));
-        drawList->AddRect(ImVec2(left, top), ImVec2(right, bottom),
+        drawList->AddRect(ImVec2(bLeft, bTop), ImVec2(bRight, bBot),
             IM_COL32(
                 static_cast<int>(Options::Combat::HitChamsColor[0] * 255.f),
                 static_cast<int>(Options::Combat::HitChamsColor[1] * 255.f),
@@ -1047,4 +1381,279 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
     }
 
     drawList->PopClipRect();
+}
+
+inline void RenderArrows(ImDrawList* drawList)
+{
+    if (!Options::ESP::Arrows || !Options::ESP::Enabled)
+        return;
+
+    if (!drawList || !Globals::Viewport::Valid)
+        return;
+
+    if (Options::ESP::ESPKey != 0)
+    {
+        if (Options::ESP::ToggleType == 1 && !Options::ESP::Toggled)
+            return;
+        if (Options::ESP::ToggleType == 0 && !KeyBind::IsPressed(Options::ESP::ESPKey))
+            return;
+    }
+
+    const auto localCharacter = Globals::Roblox::LocalPlayer.Character();
+    auto localHRP = localCharacter.FindFirstChild("HumanoidRootPart");
+    if (!localHRP.address)
+        return;
+
+    const auto localPos = localHRP.Position();
+    const ImVec2 screenCenter(
+        Globals::Viewport::Dimensions.x * 0.5f + Globals::Viewport::ScreenPos.x,
+        Globals::Viewport::Dimensions.y * 0.5f + Globals::Viewport::ScreenPos.y
+    );
+
+    const ImU32 arrowColor = IM_COL32(
+        static_cast<int>(Options::ESP::ArrowColor[0] * 255.f),
+        static_cast<int>(Options::ESP::ArrowColor[1] * 255.f),
+        static_cast<int>(Options::ESP::ArrowColor[2] * 255.f),
+        255);
+
+    const float radius = Options::ESP::ArrowRadius;
+    const float size = Options::ESP::ArrowSize;
+    const float thickness = Options::ESP::ArrowThickness;
+
+    auto camCFrame = Globals::Roblox::Camera.CFrame();
+    auto camForward = camCFrame.GetLookVector();
+    auto camRight = camCFrame.GetRightVector();
+    auto camPos = camCFrame.Position();
+
+    for (const auto& player : Globals::Caches::CachedPlayerObjects)
+    {
+        if (!player.address || player.address == Globals::Roblox::LocalPlayer.address)
+            continue;
+
+        if (Options::ESP::TeamCheck && IsTeammate(player))
+            continue;
+
+        auto hrp = player.HumanoidRootPart;
+        if (!hrp.address)
+            continue;
+
+        auto targetPos = hrp.Position();
+        float dxT = targetPos.x - camPos.x;
+        float dyT = targetPos.y - camPos.y;
+        float dzT = targetPos.z - camPos.z;
+        if (dxT * dxT + dyT * dyT + dzT * dzT > 1000000.f)
+            continue;
+
+        auto targetPos2D = WorldToScreen(targetPos);
+
+        bool isOnScreen = targetPos2D.x > 0.f && targetPos2D.y > 0.f;
+        if (isOnScreen)
+        {
+            float dx = targetPos2D.x - screenCenter.x;
+            float dy = targetPos2D.y - screenCenter.y;
+            float distFromCenter = sqrtf(dx * dx + dy * dy);
+            float maxDist = (Globals::Viewport::Dimensions.x * 0.5f) - 30.f;
+            if (distFromCenter < maxDist)
+                continue;
+        }
+
+        // Project target into camera space
+        auto toTarget = hrp.Position() - camPos;
+        float fwd = toTarget.x * camForward.x + toTarget.y * camForward.y + toTarget.z * camForward.z;
+        float rgt = toTarget.x * camRight.x + toTarget.y * camRight.y + toTarget.z * camRight.z;
+
+        float screenAngle = atan2f(rgt, fwd);
+
+        // Arrow position: sin for X (right), -cos for Y (up on screen)
+        float arrowX = screenCenter.x + sinf(screenAngle) * radius;
+        float arrowY = screenCenter.y - cosf(screenAngle) * radius;
+
+        // Arrow tip points outward from center
+        float tipX = arrowX + sinf(screenAngle) * size;
+        float tipY = arrowY - cosf(screenAngle) * size;
+
+        // Perpendicular for the base wings
+        float perpX = cosf(screenAngle);
+        float perpY = sinf(screenAngle);
+
+        float baseX = arrowX - sinf(screenAngle) * size * 0.5f;
+        float baseY = arrowY + cosf(screenAngle) * size * 0.5f;
+
+        ImVec2 tip(tipX, tipY);
+        ImVec2 left(baseX + perpX * size * 0.4f, baseY + perpY * size * 0.4f);
+        ImVec2 right(baseX - perpX * size * 0.4f, baseY - perpY * size * 0.4f);
+
+        drawList->AddTriangleFilled(tip, left, right, arrowColor);
+        drawList->AddTriangle(tip, left, right, IM_COL32(0, 0, 0, 255), thickness);
+    }
+}
+
+inline void RenderRadar(ImDrawList* drawList)
+{
+    if (!Options::ESP::Radar || !Options::ESP::Enabled)
+        return;
+
+    if (!drawList || !Globals::Viewport::Valid)
+        return;
+
+    if (Options::ESP::ESPKey != 0)
+    {
+        if (Options::ESP::ToggleType == 1 && !Options::ESP::Toggled)
+            return;
+        if (Options::ESP::ToggleType == 0 && !KeyBind::IsPressed(Options::ESP::ESPKey))
+            return;
+    }
+
+    const auto localCharacter = Globals::Roblox::LocalPlayer.Character();
+    auto localHRP = localCharacter.FindFirstChild("HumanoidRootPart");
+    if (!localHRP.address)
+        return;
+
+    const auto localPos = localHRP.Position();
+    const float radarSize = Options::ESP::RadarSize;
+    const float radarRange = Options::ESP::RadarRange;
+    const float dotRadius = 3.0f;
+
+    const ImVec2 radarCenter(
+        Options::ESP::RadarX + radarSize + Globals::Viewport::ScreenPos.x,
+        Options::ESP::RadarY + radarSize + Globals::Viewport::ScreenPos.y
+    );
+
+    const ImU32 bgColor = IM_COL32(
+        static_cast<int>(Options::ESP::RadarBgColor[0] * 255.f),
+        static_cast<int>(Options::ESP::RadarBgColor[1] * 255.f),
+        static_cast<int>(Options::ESP::RadarBgColor[2] * 255.f),
+        150);
+
+    const ImU32 enemyColor = IM_COL32(
+        static_cast<int>(Options::ESP::RadarEnemyColor[0] * 255.f),
+        static_cast<int>(Options::ESP::RadarEnemyColor[1] * 255.f),
+        static_cast<int>(Options::ESP::RadarEnemyColor[2] * 255.f),
+        255);
+
+    const ImU32 localColor = IM_COL32(
+        static_cast<int>(Options::ESP::RadarLocalColor[0] * 255.f),
+        static_cast<int>(Options::ESP::RadarLocalColor[1] * 255.f),
+        static_cast<int>(Options::ESP::RadarLocalColor[2] * 255.f),
+        255);
+
+    const int theme = Options::ESP::RadarTheme;
+
+    // ── Background / frame per theme ──
+    if (theme == 2) // Neon
+    {
+        drawList->AddCircleFilled(radarCenter, radarSize, IM_COL32(5, 10, 20, 180));
+        drawList->AddCircle(radarCenter, radarSize, IM_COL32(0, 255, 200, 200), 64);
+        // Glow rings
+        for (int g = 1; g <= 3; g++)
+            drawList->AddCircle(radarCenter, radarSize - g * (radarSize / 4.0f),
+                IM_COL32(0, 255, 200, 40), 48);
+    }
+    else if (theme == 1) // Minimal
+    {
+        drawList->AddCircleFilled(radarCenter, radarSize, IM_COL32(0, 0, 0, 120));
+        drawList->AddCircle(radarCenter, radarSize, IM_COL32(255, 255, 255, 60), 64);
+    }
+    else if (theme == 3) // Compass
+    {
+        drawList->AddCircleFilled(radarCenter, radarSize, bgColor);
+        drawList->AddCircle(radarCenter, radarSize, IM_COL32(255, 255, 255, 140), 64);
+        // Range rings
+        for (int r = 1; r <= 3; r++)
+            drawList->AddCircle(radarCenter, radarSize * r / 3.0f, IM_COL32(255, 255, 255, 40), 48);
+        // Compass ticks (N/E/S/W) using camera-relative right/forward
+        auto cf = Globals::Roblox::Camera.CFrame();
+        auto fwd = cf.GetLookVector();
+        auto rgt = cf.GetRightVector();
+        auto drawTick = [&](float fx, float fy, const char* label, ImU32 c)
+        {
+            float mx = (fx / radarRange) * radarSize;
+            float my = -(fy / radarRange) * radarSize;
+            ImVec2 p(radarCenter.x + mx, radarCenter.y + my);
+            drawList->AddText(ImVec2(p.x - 4, p.y - 8), c, label);
+        };
+        drawTick(0, radarSize * 0.9f, "N", IM_COL32(255, 255, 255, 200));
+        drawTick(radarSize * 0.9f, 0, "E", IM_COL32(255, 255, 255, 200));
+        drawTick(0, -radarSize * 0.9f, "S", IM_COL32(255, 255, 255, 200));
+        drawTick(-radarSize * 0.9f, 0, "W", IM_COL32(255, 255, 255, 200));
+    }
+    else // Classic
+    {
+        drawList->AddCircleFilled(radarCenter, radarSize, bgColor);
+        drawList->AddCircle(radarCenter, radarSize, IM_COL32(255, 255, 255, 100), 64);
+        drawList->AddLine(ImVec2(radarCenter.x - radarSize, radarCenter.y),
+                          ImVec2(radarCenter.x + radarSize, radarCenter.y),
+                          IM_COL32(255, 255, 255, 50));
+        drawList->AddLine(ImVec2(radarCenter.x, radarCenter.y - radarSize),
+                          ImVec2(radarCenter.x, radarCenter.y + radarSize),
+                          IM_COL32(255, 255, 255, 50));
+    }
+
+    // Local player dot (square in minimal/neon themes for a sharper look)
+    if (theme == 1 || theme == 2)
+        drawList->AddRectFilled(ImVec2(radarCenter.x - (dotRadius + 1.f), radarCenter.y - (dotRadius + 1.f)),
+            ImVec2(radarCenter.x + (dotRadius + 1.f), radarCenter.y + (dotRadius + 1.f)), localColor);
+    else
+        drawList->AddCircleFilled(radarCenter, dotRadius + 1.f, localColor);
+
+    auto camCFrame = Globals::Roblox::Camera.CFrame();
+    auto camForward = camCFrame.GetLookVector();
+    auto camRight = camCFrame.GetRightVector();
+    auto camPos = camCFrame.Position();
+
+    for (const auto& player : Globals::Caches::CachedPlayerObjects)
+    {
+        if (!player.address || player.address == Globals::Roblox::LocalPlayer.address)
+            continue;
+
+        if (Options::ESP::TeamCheck && IsTeammate(player))
+            continue;
+
+        auto hrp = player.HumanoidRootPart;
+        if (!hrp.address)
+            continue;
+
+        auto targetPos = hrp.Position();
+        float dxT = targetPos.x - camPos.x;
+        float dyT = targetPos.y - camPos.y;
+        float dzT = targetPos.z - camPos.z;
+        if (dxT * dxT + dyT * dyT + dzT * dzT > 1000000.f)
+            continue;
+
+        // Project target into camera space
+        auto toTarget = targetPos - camPos;
+        float fwd = toTarget.x * camForward.x + toTarget.y * camForward.y + toTarget.z * camForward.z;
+        float rgt = toTarget.x * camRight.x + toTarget.y * camRight.y + toTarget.z * camRight.z;
+
+        // Clamp to radar range
+        float dist = sqrtf(rgt * rgt + fwd * fwd);
+        if (dist > radarRange)
+        {
+            rgt = rgt / dist * radarRange;
+            fwd = fwd / dist * radarRange;
+        }
+
+        // Map to radar: right = X, forward = -Y (up on screen)
+        float mapX = (rgt / radarRange) * radarSize;
+        float mapY = -(fwd / radarRange) * radarSize;
+
+        ImVec2 dotPos(radarCenter.x + mapX, radarCenter.y + mapY);
+        if (theme == 2) // Neon: outer glow + bright core
+        {
+            drawList->AddCircleFilled(dotPos, dotRadius + 3.f, IM_COL32(
+                static_cast<int>(Options::ESP::RadarEnemyColor[0] * 255.f),
+                static_cast<int>(Options::ESP::RadarEnemyColor[1] * 255.f),
+                static_cast<int>(Options::ESP::RadarEnemyColor[2] * 255.f), 60));
+            drawList->AddCircleFilled(dotPos, dotRadius, enemyColor);
+        }
+        else if (theme == 1) // Minimal: small squares
+        {
+            drawList->AddRectFilled(ImVec2(dotPos.x - dotRadius, dotPos.y - dotRadius),
+                ImVec2(dotPos.x + dotRadius, dotPos.y + dotRadius), enemyColor);
+        }
+        else
+        {
+            drawList->AddCircleFilled(dotPos, dotRadius, enemyColor);
+        }
+    }
 }

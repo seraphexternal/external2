@@ -56,6 +56,9 @@ inline void TPHandler()
 
 			// Re-read actual Place ID from the newly loaded DataModel to avoid double-triggering
 			Globals::Roblox::lastPlaceID = Memory->read<int>(Globals::Roblox::DataModel.address + Offsets::DataModel::PlaceId);
+			Globals::Roblox::isPhantomForces = (Globals::Roblox::lastPlaceID == Globals::Roblox::PHANTOM_FORCES_ID);
+			Globals::Roblox::isRivals = (Globals::Roblox::lastPlaceID == Globals::Roblox::RIVALS_ID);
+			Globals::Roblox::isOverkill = (Globals::Roblox::lastPlaceID == Globals::Roblox::OVERKILL_ID);
 
 			Globals::Caches::CachedPlayers.clear();
 			Globals::Caches::CachedPlayerObjects.clear();

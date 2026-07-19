@@ -252,17 +252,19 @@ inline json BuildConfigJson()
         { "Head Circles", Options::ESP::HeadCircle },
         { "Remove Borders", Options::ESP::RemoveBorders },
         { "Headless", Options::ESP::Headless },
+        { "Show Weapon", Options::ESP::ShowWeapon },
         { "Head Dot", Options::ESP::HeadDot },
         { "Corner ESP", Options::ESP::CornerESP },
         { "Health Text", Options::ESP::HealthText },
         { "Enemy Health Indicator", Options::ESP::EnemyHealthIndicator },
         { "ESP Preview", Options::ESP::ESPPreview },
+        { "Preview Auto Rotate", Options::ESP::PreviewAutoRotate },
+        { "Preview Rotation Speed", Options::ESP::PreviewRotationSpeed },
         { "Box Thickness", Options::ESP::BoxThickness },
         { "Skeleton Thickness", Options::ESP::SkeletonThickness },
         { "3D ESP Thickness", Options::ESP::ESP3DThickness },
         { "Head Circle Thickness", Options::ESP::HeadCircleThickness },
         { "Head Circle Scale", Options::ESP::HeadCircleScale },
-        { "Head Circle Max Scale", Options::ESP::HeadCircleMaxScale },
         { "Visibility Check", Options::ESP::VisibilityCheck },
         { "Visibility Chams", Options::ESP::VisibilityChams },
         { "Visibility Max Distance", Options::ESP::VisibilityMaxDistance },
@@ -277,7 +279,37 @@ inline json BuildConfigJson()
         { "3D ESP Color", ToJsonColor(Options::ESP::ESP3DColor, 3) },
         { "Head Circles Color", ToJsonColor(Options::ESP::HeadCircleColor, 3) },
         { "Head Dot Color", ToJsonColor(Options::ESP::HeadDotColor, 3) },
-        { "Chams Color", ToJsonColor(Options::ESP::ChamsColor, 3) }
+        { "LodLine", Options::ESP::LodLine },
+        { "LodLine Length", Options::ESP::LodLineLength },
+        { "LodLine Thickness", Options::ESP::LodLineThickness },
+        { "LodLine Color", ToJsonColor(Options::ESP::LodLineColor, 3) },
+        { "Arrows", Options::ESP::Arrows },
+        { "Arrow Size", Options::ESP::ArrowSize },
+        { "Arrow Radius", Options::ESP::ArrowRadius },
+        { "Arrow Thickness", Options::ESP::ArrowThickness },
+        { "Arrow Color", ToJsonColor(Options::ESP::ArrowColor, 3) },
+        { "Radar", Options::ESP::Radar },
+        { "Radar Size", Options::ESP::RadarSize },
+        { "Radar Range", Options::ESP::RadarRange },
+        { "Radar X", Options::ESP::RadarX },
+        { "Radar Y", Options::ESP::RadarY },
+        { "Radar BG Color", ToJsonColor(Options::ESP::RadarBgColor, 3) },
+        { "Radar Enemy Color", ToJsonColor(Options::ESP::RadarEnemyColor, 3) },
+        { "Radar Local Color", ToJsonColor(Options::ESP::RadarLocalColor, 3) },
+        { "Radar Theme", Options::ESP::RadarTheme },
+        { "ESP Glow", Options::ESP::Glow },
+        { "ESP Pulse", Options::ESP::Pulse },
+        { "ESP Pulse Speed", Options::ESP::PulseSpeed },
+        { "ESP Rings", Options::ESP::Rings },
+        { "ESP Ring Radius", Options::ESP::RingRadius },
+        { "ESP Trails", Options::ESP::Trails },
+        { "ESP Trail Length", Options::ESP::TrailLength },
+        { "ESP Local Only", Options::ESP::LocalOnly },
+        { "ESP Avatar Icon", Options::ESP::AvatarIcon },
+        { "ESP Name Mode", Options::ESP::NameMode },
+        { "ESP Custom Image", Options::ESP::CustomImage },
+        { "ESP Custom Image Path", std::string(Options::ESP::CustomImagePath) },
+        { "ESP Custom Image Scale", Options::ESP::CustomImageScale }
     };
 
     j["Aimbot"] = {
@@ -287,31 +319,65 @@ inline json BuildConfigJson()
         { "Aimbot", Options::Aimbot::Aimbot },
         { "Team Check", Options::Aimbot::TeamCheck },
         { "Downed Check", Options::Aimbot::DownedCheck },
+        { "Wall Check", Options::Aimbot::WallCheck },
         { "Sticky Aim", Options::Aimbot::StickyAim },
         { "Target Bone", Options::Aimbot::TargetBone },
         { "Air Target Bone", Options::Aimbot::AirTargetBone },
+        { "Closest Part", Options::Aimbot::ClosestPart },
+        { "Hitbox Mode", Options::Aimbot::HitboxMode },
+        { "Target Priority", Options::Aimbot::TargetPriority },
+        { "FOV Shape", Options::Aimbot::FOVShape },
+        { "Only Visible", Options::Aimbot::OnlyVisible },
+        { "Target Switch Delay", Options::Aimbot::TargetSwitchDelay },
+        { "Show FOV Text", Options::Aimbot::ShowFOVText },
         { "FOV", Options::Aimbot::FOV },
         { "Show FOV", Options::Aimbot::ShowFOV },
         { "Show FOV Fill", Options::Aimbot::ShowFOVFill },
         { "FOV Position Mode", Options::Aimbot::FOVPositionMode },
         { "Silent Aim", Options::Aimbot::SilentAim },
         { "Silent Aim Mode", Options::Aimbot::SilentAimMode },
+        { "Silent Aim Real Cursor", Options::Aimbot::SilentAimRealCursor },
+        { "Silent Aim Teleport", Options::Aimbot::SilentAimTeleport },
+        { "Silent Lock", Options::Aimbot::SilentLock },
+        { "Silent Lock Key", Options::Aimbot::SilentLockKey },
+        { "Silent Lock Mode", Options::Aimbot::SilentLockMode },
+        { "Aim Info", Options::Aimbot::AimInfo },
+        { "Aim Info Name", Options::Aimbot::AimInfoName },
+        { "Aim Info Distance", Options::Aimbot::AimInfoDistance },
+        { "Aim Info Health", Options::Aimbot::AimInfoHealth },
+        { "Aim Info Part", Options::Aimbot::AimInfoPart },
+        { "Flickbot", Options::Aimbot::Flickbot },
+        { "Flickbot Key", Options::Aimbot::FlickbotKey },
+        { "Flickbot FOV", Options::Aimbot::FlickbotFOV },
+        { "Flickbot Smoothing", Options::Aimbot::FlickbotSmoothing },
+        { "Flickbot Team Check", Options::Aimbot::FlickbotTeamCheck },
         { "FOV Color", ToJsonColor(Options::Aimbot::FOVColor, 3) },
         { "FOV Fill Color", ToJsonColor(Options::Aimbot::FOVFillColor, 4) },
         { "FOV Thickness", Options::Aimbot::FOVThickness },
+        { "FOV Color Mode", Options::Aimbot::FOVColorMode },
+        { "FOV Gradient Speed", Options::Aimbot::FOVGradientSpeed },
+        { "FOV Glow", Options::Aimbot::FOVGlow },
+        { "FOV Breathing", Options::Aimbot::FOVBreathing },
+        { "FOV Spin", Options::Aimbot::FOVSpin },
+        { "FOV Spin Speed", Options::Aimbot::FOVSpinSpeed },
         { "Smoothness", Options::Aimbot::Smoothness },
         { "Smoothness Curve", Options::Aimbot::SmoothnessCurve },
         { "Range", Options::Aimbot::Range },
         { "Prediction", Options::Aimbot::Prediction },
         { "Prediction X", Options::Aimbot::PredictionX },
         { "Prediction Y", Options::Aimbot::PredictionY },
+        { "Target Line", Options::Aimbot::TargetLine },
+        { "Target Line Color", ToJsonColor(Options::Aimbot::TargetLineColor, 3) },
+        { "Target Line Thickness", Options::Aimbot::TargetLineThickness },
         { "Shake", Options::Aimbot::Shake },
         { "Shake Intensity", Options::Aimbot::ShakeIntensity },
         { "Stutter", Options::Aimbot::Stutter },
         { "Stutter Ticks", Options::Aimbot::StutterTicks },
         { "Custom Curve Enabled", Options::Aimbot::CustomCurveEnabled },
         { "Custom Curve P1", ToJsonColor(Options::Aimbot::CustomCurveP1, 2) },
-        { "Custom Curve P2", ToJsonColor(Options::Aimbot::CustomCurveP2, 2) }
+        { "Custom Curve P2", ToJsonColor(Options::Aimbot::CustomCurveP2, 2) },
+        { "Ignore Jump", Options::Aimbot::IgnoreJump },
+        { "Jump Threshold", Options::Aimbot::JumpThreshold }
     };
 
     j["Triggerbot"] = {
@@ -320,11 +386,15 @@ inline json BuildConfigJson()
         { "Enabled", Options::Triggerbot::Enabled },
         { "Team Check", Options::Triggerbot::TeamCheck },
         { "Downed Check", Options::Triggerbot::DownedCheck },
+        { "Wall Check", Options::Triggerbot::WallCheck },
         { "Radius", Options::Triggerbot::Radius },
         { "Range", Options::Triggerbot::Range },
         { "Delay", Options::Triggerbot::Delay },
         { "Advanced FOV", Options::Triggerbot::AdvancedFOV },
         { "Show Advanced FOV", Options::Triggerbot::ShowAdvancedFOV },
+        { "Dynamic FOV", Options::Triggerbot::DynamicFOV },
+        { "Dynamic FOV Scale", Options::Triggerbot::DynamicFOVScale },
+        { "Dynamic FOV Base Dist", Options::Triggerbot::DynamicFOVBaseDist },
         { "HeadFOV_X", Options::Triggerbot::HeadFOV_X },
         { "HeadFOV_Y", Options::Triggerbot::HeadFOV_Y },
         { "TorsoFOV_X", Options::Triggerbot::TorsoFOV_X },
@@ -376,11 +446,21 @@ inline json BuildConfigJson()
         { "Gap Speed", Options::Crosshair::GapSpeed },
         { "Gap Tween", Options::Crosshair::GapTween },
         { "Show Text", Options::Crosshair::ShowText },
-        { "Color", ToJsonColor(Options::Crosshair::Color, 4) }
+        { "Color", ToJsonColor(Options::Crosshair::Color, 4) },
+        { "Show Dot", Options::Crosshair::ShowDot },
+        { "Dot Size", Options::Crosshair::DotSize },
+        { "Outline", Options::Crosshair::Outline },
+        { "Outline Thickness", Options::Crosshair::OutlineThickness },
+        { "Outline Color", ToJsonColor(Options::Crosshair::OutlineColor, 4) },
+        { "T Style", Options::Crosshair::TStyle },
+        { "Color Mode", Options::Crosshair::ColorMode },
+        { "Rainbow Speed", Options::Crosshair::RainbowSpeed },
+        { "Opacity", Options::Crosshair::Opacity },
+        { "Length Mode", Options::Crosshair::LengthMode },
+        { "V Length", Options::Crosshair::VLength }
     };
 
     j["Misc"] = {
-        { "Bypass", Options::Misc::Bypass },
         { "FOV Enabled", Options::Misc::FOVEnabled },
         { "FOV", Options::Misc::FOV },
         { "Cache NPCs", Options::Misc::CacheNPCs },
@@ -388,8 +468,24 @@ inline json BuildConfigJson()
         { "Keybind List X", Options::Misc::KeybindListX },
         { "Keybind List Y", Options::Misc::KeybindListY },
         { "Stream Proof", Options::Misc::StreamProof },
+        { "Third Person", Options::Misc::ThirdPerson },
         { "Menu Key", Options::Misc::MenuKey },
-        { "Menu Accent Color", ToJsonColor(Options::Misc::MenuAccentColor, 3) }
+        { "Menu Accent Color", ToJsonColor(Options::Misc::MenuAccentColor, 3) },
+        { "Menu Accent Color 2", ToJsonColor(Options::Misc::MenuAccentColor2, 3) },
+        { "Menu Gradient", Options::Misc::MenuGradient },
+        { "Menu Theme", Options::Misc::MenuTheme },
+        { "Menu Bg Color", ToJsonColor(Options::Misc::MenuBgColor, 3) },
+        { "Menu Panel Color", ToJsonColor(Options::Misc::MenuPanelColor, 3) },
+        { "Rainbow Accent", Options::Misc::RainbowAccent },
+        { "Rainbow Speed", Options::Misc::RainbowSpeed },
+        { "Target Player", std::string(Options::Misc::TargetPlayer) },
+        { "Explorer Enabled", Options::Misc::ExplorerEnabled },
+        { "Menu Scale", Options::Misc::MenuScale },
+        { "Hide From Tabs", Options::Misc::HideFromTabs },
+        { "Hide Process", Options::Misc::HideProcess },
+        { "Process Name", std::string(Options::Misc::ProcessName) },
+        { "Exclusion Path", std::string(Options::Misc::ExclusionPath) },
+        { "Show Certified", Options::Misc::ShowCertified }
     };
 
     j["HitboxExpander"] = {
@@ -425,13 +521,25 @@ inline json BuildConfigJson()
         { "Hit Effect Duration", Options::Combat::HitEffectDuration },
         { "Min Damage", Options::Combat::MinDamage },
         { "Hit Chams Color", ToJsonColor(Options::Combat::HitChamsColor, 3) },
-        { "Hit Effect Color", ToJsonColor(Options::Combat::HitEffectColor, 3) }
+        { "Hit Effect Color", ToJsonColor(Options::Combat::HitEffectColor, 3) },
+        { "Bullet Tracers", Options::Combat::BulletTracers },
+        { "Bullet Tracers Always", Options::Combat::BulletTracersAlways },
+        { "Bullet Tracer Color", ToJsonColor(Options::Combat::BulletTracerColor, 3) },
+        { "Bullet Tracer Duration", Options::Combat::BulletTracerDuration },
+        { "Bullet Tracer Thickness", Options::Combat::BulletTracerThickness },
+        { "Bullet Tracer Style", Options::Combat::BulletTracerStyle },
+        { "Hitmarker Style", Options::Combat::HitmarkerStyle },
+        { "Hitmarker Size", Options::Combat::HitmarkerSize },
+        { "Hitmarker On Crosshair", Options::Combat::HitmarkerOnCrosshair },
+        { "Hitmarker Thickness", Options::Combat::HitmarkerThickness }
     };
 
     j["World"] = {
         { "Enabled", Options::World::Enabled },
         { "Fullbright", Options::World::Fullbright },
         { "No Fog", Options::World::NoFog },
+        { "No Shadows", Options::World::NoShadows },
+        { "Auto Sun Position", Options::World::AutoSunPosition },
         { "Fog Start", Options::World::FogStart },
         { "Fog End", Options::World::FogEnd },
         { "Clock Time", Options::World::ClockTime },
@@ -443,8 +551,20 @@ inline json BuildConfigJson()
         { "Skybox Preset", Options::World::SkyboxPreset }
     };
 
+    j["Chams"] = {
+        { "Enabled", Options::Chams::Enabled },
+        { "Mode", Options::Chams::Mode },
+        { "Engine Chams", Options::Chams::EngineChams },
+        { "Material", Options::Chams::Material },
+        { "Visible Color", ToJsonColor(Options::Chams::VisibleColor, 4) },
+        { "Occluded Color", ToJsonColor(Options::Chams::OccludedColor, 4) },
+        { "Outline Thickness", Options::Chams::OutlineThickness },
+        { "Team Check", Options::Chams::TeamCheck }
+    };
+
     j["AntiAim"] = {
         { "Enabled", Options::AntiAim::Enabled },
+        { "Method", Options::AntiAim::Method },
         { "Mode", Options::AntiAim::Mode },
         { "Speed", Options::AntiAim::Speed },
         { "Strength", Options::AntiAim::Strength }
@@ -459,6 +579,136 @@ inline json BuildConfigJson()
         { "Color",          ToJsonColor(Options::Weather::Color, 3) },
         { "SnowSize",       Options::Weather::SnowSize },
         { "RainThickness",  Options::Weather::RainThickness }
+    };
+
+    j["Noclip"] = {
+        { "Enabled",    Options::Noclip::Enabled },
+        { "NoclipKey", Options::Noclip::NoclipKey },
+        { "ToggleType", Options::Noclip::ToggleType }
+    };
+
+    j["VoidHide"] = {
+        { "Enabled", Options::VoidHide::Enabled },
+        { "VoidHideKey", Options::VoidHide::VoidHideKey },
+        { "ToggleType", Options::VoidHide::ToggleType }
+    };
+
+    j["Bhop"] = {
+        { "Enabled", Options::Bhop::Enabled },
+        { "BhopKey", Options::Bhop::BhopKey }
+    };
+
+    j["Orbit"] = {
+        { "Enabled",     Options::Orbit::Enabled },
+        { "Speed",       Options::Orbit::Speed },
+        { "Radius",      Options::Orbit::Radius },
+        { "OrbitKey",    Options::Orbit::OrbitKey },
+        { "ToggleType",  Options::Orbit::ToggleType },
+        { "TargetMode",  Options::Orbit::TargetMode },
+        { "TargetPlayer", std::string(Options::Orbit::TargetPlayer) }
+    };
+
+    j["Rage"] = {
+        { "Enabled",      Options::Rage::Enabled },
+        { "RageKey",      Options::Rage::RageKey },
+        { "ToggleType",   Options::Rage::ToggleType },
+        { "OrbitRadius",  Options::Rage::OrbitRadius },
+        { "OrbitSpeed",   Options::Rage::OrbitSpeed },
+        { "KillOnOrbit",  Options::Rage::KillOnOrbit },
+        { "AutoKillAim",  Options::Rage::AutoKillAim },
+        { "TargetMode",   Options::Rage::TargetMode },
+        { "TargetPlayer", std::string(Options::Rage::TargetPlayer) },
+        { "ShowGhost",    Options::Rage::ShowGhost },
+        { "ShowGhostLine", Options::Rage::ShowGhostLine },
+        { "GhostColor",   ToJsonColor(Options::Rage::GhostColor, 3) },
+        { "GhostAlpha",   Options::Rage::GhostAlpha }
+    };
+
+    j["Waypoints"] = {
+        { "Enabled", Options::Waypoints::Enabled },
+        { "ShowOnESP", Options::Waypoints::ShowOnESP },
+        { "Color", ToJsonColor(Options::Waypoints::Color, 3) },
+        { "TeleportKey", Options::Waypoints::TeleportKey }
+    };
+
+    j["ArsenalGunmods"] = {
+        { "FastFireRate", Options::ArsenalGunmods::FastFireRate },
+        { "NoRecoil", Options::ArsenalGunmods::NoRecoil },
+        { "AllAuto", Options::ArsenalGunmods::AllAuto },
+        { "InfiniteAmmo", Options::ArsenalGunmods::InfiniteAmmo }
+    };
+
+    j["Rivals"] = {
+        { "Ignore Smoke", Options::Rivals::IgnoreSmoke },
+        { "Ignore Flash", Options::Rivals::IgnoreFlash }
+    };
+
+    j["Desync"] = {
+        { "Enabled", Options::Desync::Enabled },
+        { "DesyncKey", Options::Desync::DesyncKey },
+        { "ToggleType", Options::Desync::ToggleType },
+        { "Method", Options::Desync::Method },
+        { "BoostSpeed", Options::Desync::BoostSpeed },
+        { "BoostAxis", Options::Desync::BoostAxis },
+        { "ShowVisual", Options::Desync::ShowVisual },
+        { "VisualAlpha", Options::Desync::VisualAlpha },
+        { "ShowLine", Options::Desync::ShowLine },
+        { "VisualColor", ToJsonColor(Options::Desync::VisualColor, 3) },
+        { "LineColor", ToJsonColor(Options::Desync::LineColor, 3) }
+    };
+
+    j["MovementExtra"] = {
+        { "ClickTP Enabled", Options::ClickTP::Enabled },
+        { "ClickTP Key", Options::ClickTP::Key },
+        { "ClickTP MaxDistance", Options::ClickTP::MaxDistance },
+        { "HipHeight Enabled", Options::HipHeight::Enabled },
+        { "HipHeight Value", Options::HipHeight::Value },
+        { "HipHeight Key", Options::HipHeight::Key },
+        { "HipHeight ToggleType", Options::HipHeight::ToggleType },
+        { "FreeCam Enabled", Options::FreeCam::Enabled },
+        { "FreeCam Key", Options::FreeCam::Key },
+        { "FreeCam ToggleType", Options::FreeCam::ToggleType },
+        { "FreeCam Speed", Options::FreeCam::Speed },
+        { "StretchRes Enabled", Options::StretchRes::Enabled },
+        { "StretchRes ScaleX", Options::StretchRes::ScaleX },
+        { "StretchRes ScaleY", Options::StretchRes::ScaleY }
+    };
+
+    j["RampFling"] = {
+        { "Enabled", Options::RampFling::Enabled },
+        { "FlingKey", Options::RampFling::FlingKey },
+        { "ToggleType", Options::RampFling::ToggleType },
+        { "FlingForce", Options::RampFling::FlingForce },
+        { "MinAngle", Options::RampFling::MinAngle },
+        { "MaxAngle", Options::RampFling::MaxAngle },
+        { "Cooldown", Options::RampFling::Cooldown },
+        { "HorizontalBoost", Options::RampFling::HorizontalBoost }
+    };
+
+    j["Ragebot"] = {
+        { "Enabled", Options::Ragebot::Enabled },
+        { "RagebotKey", Options::Ragebot::RagebotKey },
+        { "ToggleType", Options::Ragebot::ToggleType },
+        { "TeamCheck", Options::Ragebot::TeamCheck },
+        { "DownedCheck", Options::Ragebot::DownedCheck },
+        { "WallCheck", Options::Ragebot::WallCheck },
+        { "Range", Options::Ragebot::Range },
+        { "FOV", Options::Ragebot::FOV },
+        { "Smoothness", Options::Ragebot::Smoothness },
+        { "TargetBone", Options::Ragebot::TargetBone },
+        { "Prediction", Options::Ragebot::Prediction },
+        { "PredictionX", Options::Ragebot::PredictionX },
+        { "PredictionY", Options::Ragebot::PredictionY },
+        { "AutoFire", Options::Ragebot::AutoFire },
+        { "FireRate", Options::Ragebot::FireRate }
+    };
+
+    j["SoundVisualizer"] = {
+        { "Enabled", Options::SoundVisualizer::Enabled },
+        { "Duration", Options::SoundVisualizer::Duration },
+        { "Radius", Options::SoundVisualizer::Radius },
+        { "MaxSteps", Options::SoundVisualizer::MaxSteps },
+        { "Color", ToJsonColor(Options::SoundVisualizer::Color, 3) }
     };
 
     return j;
@@ -490,17 +740,19 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(esp, "Head Circles", Options::ESP::HeadCircle);
         LoadVal(esp, "Remove Borders", Options::ESP::RemoveBorders);
         LoadVal(esp, "Headless", Options::ESP::Headless);
+        LoadVal(esp, "Show Weapon", Options::ESP::ShowWeapon);
         LoadVal(esp, "Head Dot", Options::ESP::HeadDot);
         LoadVal(esp, "Corner ESP", Options::ESP::CornerESP);
         LoadVal(esp, "Health Text", Options::ESP::HealthText);
         LoadVal(esp, "Enemy Health Indicator", Options::ESP::EnemyHealthIndicator);
         LoadVal(esp, "ESP Preview", Options::ESP::ESPPreview);
+        LoadVal(esp, "Preview Auto Rotate", Options::ESP::PreviewAutoRotate);
+        LoadVal(esp, "Preview Rotation Speed", Options::ESP::PreviewRotationSpeed);
         LoadVal(esp, "Box Thickness", Options::ESP::BoxThickness);
         LoadVal(esp, "Skeleton Thickness", Options::ESP::SkeletonThickness);
         LoadVal(esp, "3D ESP Thickness", Options::ESP::ESP3DThickness);
         LoadVal(esp, "Head Circle Thickness", Options::ESP::HeadCircleThickness);
         LoadVal(esp, "Head Circle Scale", Options::ESP::HeadCircleScale);
-        LoadVal(esp, "Head Circle Max Scale", Options::ESP::HeadCircleMaxScale);
         LoadVal(esp, "Visibility Check", Options::ESP::VisibilityCheck);
         LoadVal(esp, "Visibility Chams", Options::ESP::VisibilityChams);
         LoadVal(esp, "Visibility Max Distance", Options::ESP::VisibilityMaxDistance);
@@ -515,7 +767,41 @@ inline void ApplyConfigJson(const json& data)
         LoadFloatArray(esp, "3D ESP Color", Options::ESP::ESP3DColor);
         LoadFloatArray(esp, "Head Circles Color", Options::ESP::HeadCircleColor);
         LoadFloatArray(esp, "Head Dot Color", Options::ESP::HeadDotColor);
-        LoadFloatArray(esp, "Chams Color", Options::ESP::ChamsColor);
+        LoadVal(esp, "LodLine", Options::ESP::LodLine);
+        LoadVal(esp, "LodLine Length", Options::ESP::LodLineLength);
+        LoadVal(esp, "LodLine Thickness", Options::ESP::LodLineThickness);
+        LoadFloatArray(esp, "LodLine Color", Options::ESP::LodLineColor);
+        LoadVal(esp, "Arrows", Options::ESP::Arrows);
+        LoadVal(esp, "Arrow Size", Options::ESP::ArrowSize);
+        LoadVal(esp, "Arrow Radius", Options::ESP::ArrowRadius);
+        LoadVal(esp, "Arrow Thickness", Options::ESP::ArrowThickness);
+        LoadFloatArray(esp, "Arrow Color", Options::ESP::ArrowColor);
+        LoadVal(esp, "Radar", Options::ESP::Radar);
+        LoadVal(esp, "Radar Size", Options::ESP::RadarSize);
+        LoadVal(esp, "Radar Range", Options::ESP::RadarRange);
+        LoadVal(esp, "Radar X", Options::ESP::RadarX);
+        LoadVal(esp, "Radar Y", Options::ESP::RadarY);
+        LoadFloatArray(esp, "Radar BG Color", Options::ESP::RadarBgColor);
+        LoadFloatArray(esp, "Radar Enemy Color", Options::ESP::RadarEnemyColor);
+        LoadFloatArray(esp, "Radar Local Color", Options::ESP::RadarLocalColor);
+        LoadVal(esp, "Radar Theme", Options::ESP::RadarTheme);
+        LoadVal(esp, "ESP Glow", Options::ESP::Glow);
+        LoadVal(esp, "ESP Pulse", Options::ESP::Pulse);
+        LoadVal(esp, "ESP Pulse Speed", Options::ESP::PulseSpeed);
+        LoadVal(esp, "ESP Rings", Options::ESP::Rings);
+        LoadVal(esp, "ESP Ring Radius", Options::ESP::RingRadius);
+        LoadVal(esp, "ESP Trails", Options::ESP::Trails);
+        LoadVal(esp, "ESP Trail Length", Options::ESP::TrailLength);
+        LoadVal(esp, "ESP Local Only", Options::ESP::LocalOnly);
+        LoadVal(esp, "ESP Avatar Icon", Options::ESP::AvatarIcon);
+        LoadVal(esp, "ESP Name Mode", Options::ESP::NameMode);
+        LoadVal(esp, "ESP Custom Image", Options::ESP::CustomImage);
+        if (esp.contains("ESP Custom Image Path"))
+        {
+            std::string p = esp["ESP Custom Image Path"].get<std::string>();
+            strncpy_s(Options::ESP::CustomImagePath, p.c_str(), sizeof(Options::ESP::CustomImagePath) - 1);
+        }
+        LoadVal(esp, "ESP Custom Image Scale", Options::ESP::CustomImageScale);
     }
 
     if (data.is_object() && data.contains("Aimbot"))
@@ -527,15 +813,44 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(aim, "Aimbot", Options::Aimbot::Aimbot);
         LoadVal(aim, "Team Check", Options::Aimbot::TeamCheck);
         LoadVal(aim, "Downed Check", Options::Aimbot::DownedCheck);
+        LoadVal(aim, "Wall Check", Options::Aimbot::WallCheck);
         LoadVal(aim, "Sticky Aim", Options::Aimbot::StickyAim);
         LoadVal(aim, "Target Bone", Options::Aimbot::TargetBone);
         LoadVal(aim, "Air Target Bone", Options::Aimbot::AirTargetBone);
+        LoadVal(aim, "Closest Part", Options::Aimbot::ClosestPart);
+        LoadVal(aim, "Hitbox Mode", Options::Aimbot::HitboxMode);
+        LoadVal(aim, "Target Priority", Options::Aimbot::TargetPriority);
+        LoadVal(aim, "FOV Shape", Options::Aimbot::FOVShape);
+        LoadVal(aim, "Only Visible", Options::Aimbot::OnlyVisible);
+        LoadVal(aim, "Target Switch Delay", Options::Aimbot::TargetSwitchDelay);
+        LoadVal(aim, "Show FOV Text", Options::Aimbot::ShowFOVText);
         LoadVal(aim, "FOV", Options::Aimbot::FOV);
         LoadVal(aim, "Show FOV", Options::Aimbot::ShowFOV);
         LoadVal(aim, "Show FOV Fill", Options::Aimbot::ShowFOVFill);
         LoadVal(aim, "FOV Position Mode", Options::Aimbot::FOVPositionMode);
+        LoadVal(aim, "FOV Color Mode", Options::Aimbot::FOVColorMode);
+        LoadVal(aim, "FOV Gradient Speed", Options::Aimbot::FOVGradientSpeed);
+        LoadVal(aim, "FOV Glow", Options::Aimbot::FOVGlow);
+        LoadVal(aim, "FOV Breathing", Options::Aimbot::FOVBreathing);
+        LoadVal(aim, "FOV Spin", Options::Aimbot::FOVSpin);
+        LoadVal(aim, "FOV Spin Speed", Options::Aimbot::FOVSpinSpeed);
         LoadVal(aim, "Silent Aim", Options::Aimbot::SilentAim);
         LoadVal(aim, "Silent Aim Mode", Options::Aimbot::SilentAimMode);
+        LoadVal(aim, "Silent Aim Real Cursor", Options::Aimbot::SilentAimRealCursor);
+        LoadVal(aim, "Silent Aim Teleport", Options::Aimbot::SilentAimTeleport);
+        LoadVal(aim, "Silent Lock", Options::Aimbot::SilentLock);
+        LoadVal(aim, "Silent Lock Key", Options::Aimbot::SilentLockKey);
+        LoadVal(aim, "Silent Lock Mode", Options::Aimbot::SilentLockMode);
+        LoadVal(aim, "Aim Info", Options::Aimbot::AimInfo);
+        LoadVal(aim, "Aim Info Name", Options::Aimbot::AimInfoName);
+        LoadVal(aim, "Aim Info Distance", Options::Aimbot::AimInfoDistance);
+        LoadVal(aim, "Aim Info Health", Options::Aimbot::AimInfoHealth);
+        LoadVal(aim, "Aim Info Part", Options::Aimbot::AimInfoPart);
+        LoadVal(aim, "Flickbot", Options::Aimbot::Flickbot);
+        LoadVal(aim, "Flickbot Key", Options::Aimbot::FlickbotKey);
+        LoadVal(aim, "Flickbot FOV", Options::Aimbot::FlickbotFOV);
+        LoadVal(aim, "Flickbot Smoothing", Options::Aimbot::FlickbotSmoothing);
+        LoadVal(aim, "Flickbot Team Check", Options::Aimbot::FlickbotTeamCheck);
         LoadVal(aim, "FOV Thickness", Options::Aimbot::FOVThickness);
         LoadVal(aim, "Smoothness", Options::Aimbot::Smoothness);
         LoadVal(aim, "Smoothness Curve", Options::Aimbot::SmoothnessCurve);
@@ -543,6 +858,9 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(aim, "Prediction", Options::Aimbot::Prediction);
         LoadVal(aim, "Prediction X", Options::Aimbot::PredictionX);
         LoadVal(aim, "Prediction Y", Options::Aimbot::PredictionY);
+        LoadVal(aim, "Target Line", Options::Aimbot::TargetLine);
+        LoadFloatArray(aim, "Target Line Color", Options::Aimbot::TargetLineColor);
+        LoadVal(aim, "Target Line Thickness", Options::Aimbot::TargetLineThickness);
         LoadVal(aim, "Shake", Options::Aimbot::Shake);
         LoadVal(aim, "Shake Intensity", Options::Aimbot::ShakeIntensity);
         LoadVal(aim, "Stutter", Options::Aimbot::Stutter);
@@ -552,6 +870,8 @@ inline void ApplyConfigJson(const json& data)
         LoadFloatArray(aim, "FOV Fill Color", Options::Aimbot::FOVFillColor);
         LoadFloatArray(aim, "Custom Curve P1", Options::Aimbot::CustomCurveP1);
         LoadFloatArray(aim, "Custom Curve P2", Options::Aimbot::CustomCurveP2);
+        LoadVal(aim, "Ignore Jump", Options::Aimbot::IgnoreJump);
+        LoadVal(aim, "Jump Threshold", Options::Aimbot::JumpThreshold);
     }
 
     if (data.is_object() && data.contains("Triggerbot"))
@@ -562,11 +882,15 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(tb, "Enabled", Options::Triggerbot::Enabled);
         LoadVal(tb, "Team Check", Options::Triggerbot::TeamCheck);
         LoadVal(tb, "Downed Check", Options::Triggerbot::DownedCheck);
+        LoadVal(tb, "Wall Check", Options::Triggerbot::WallCheck);
         LoadVal(tb, "Radius", Options::Triggerbot::Radius);
         LoadVal(tb, "Range", Options::Triggerbot::Range);
         LoadVal(tb, "Delay", Options::Triggerbot::Delay);
         LoadVal(tb, "Advanced FOV", Options::Triggerbot::AdvancedFOV);
         LoadVal(tb, "Show Advanced FOV", Options::Triggerbot::ShowAdvancedFOV);
+        LoadVal(tb, "Dynamic FOV", Options::Triggerbot::DynamicFOV);
+        LoadVal(tb, "Dynamic FOV Scale", Options::Triggerbot::DynamicFOVScale);
+        LoadVal(tb, "Dynamic FOV Base Dist", Options::Triggerbot::DynamicFOVBaseDist);
         LoadVal(tb, "HeadFOV_X", Options::Triggerbot::HeadFOV_X);
         LoadVal(tb, "HeadFOV_Y", Options::Triggerbot::HeadFOV_Y);
         LoadVal(tb, "TorsoFOV_X", Options::Triggerbot::TorsoFOV_X);
@@ -623,12 +947,22 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(ch, "Gap Tween", Options::Crosshair::GapTween);
         LoadVal(ch, "Show Text", Options::Crosshair::ShowText);
         LoadFloatArray(ch, "Color", Options::Crosshair::Color);
+        LoadVal(ch, "Show Dot", Options::Crosshair::ShowDot);
+        LoadVal(ch, "Dot Size", Options::Crosshair::DotSize);
+        LoadVal(ch, "Outline", Options::Crosshair::Outline);
+        LoadVal(ch, "Outline Thickness", Options::Crosshair::OutlineThickness);
+        LoadFloatArray(ch, "Outline Color", Options::Crosshair::OutlineColor);
+        LoadVal(ch, "T Style", Options::Crosshair::TStyle);
+        LoadVal(ch, "Color Mode", Options::Crosshair::ColorMode);
+        LoadVal(ch, "Rainbow Speed", Options::Crosshair::RainbowSpeed);
+        LoadVal(ch, "Opacity", Options::Crosshair::Opacity);
+        LoadVal(ch, "Length Mode", Options::Crosshair::LengthMode);
+        LoadVal(ch, "V Length", Options::Crosshair::VLength);
     }
 
     if (data.is_object() && data.contains("Misc"))
     {
         const auto& ms = data["Misc"];
-        LoadVal(ms, "Bypass", Options::Misc::Bypass);
         LoadVal(ms, "FOV Enabled", Options::Misc::FOVEnabled);
         LoadVal(ms, "FOV", Options::Misc::FOV);
         LoadVal(ms, "Cache NPCs", Options::Misc::CacheNPCs);
@@ -636,8 +970,36 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(ms, "Keybind List X", Options::Misc::KeybindListX);
         LoadVal(ms, "Keybind List Y", Options::Misc::KeybindListY);
         LoadVal(ms, "Stream Proof", Options::Misc::StreamProof);
+        LoadVal(ms, "Third Person", Options::Misc::ThirdPerson);
         LoadVal(ms, "Menu Key", Options::Misc::MenuKey);
         LoadFloatArray(ms, "Menu Accent Color", Options::Misc::MenuAccentColor);
+        LoadFloatArray(ms, "Menu Accent Color 2", Options::Misc::MenuAccentColor2);
+        LoadVal(ms, "Menu Gradient", Options::Misc::MenuGradient);
+        LoadVal(ms, "Menu Theme", Options::Misc::MenuTheme);
+        LoadFloatArray(ms, "Menu Bg Color", Options::Misc::MenuBgColor);
+        LoadFloatArray(ms, "Menu Panel Color", Options::Misc::MenuPanelColor);
+        LoadVal(ms, "Rainbow Accent", Options::Misc::RainbowAccent);
+        LoadVal(ms, "Rainbow Speed", Options::Misc::RainbowSpeed);
+        if (ms.contains("Target Player"))
+        {
+            std::string tp = ms["Target Player"].get<std::string>();
+            strncpy_s(Options::Misc::TargetPlayer, tp.c_str(), sizeof(Options::Misc::TargetPlayer) - 1);
+        }
+        LoadVal(ms, "Explorer Enabled", Options::Misc::ExplorerEnabled);
+        LoadVal(ms, "Menu Scale", Options::Misc::MenuScale);
+        LoadVal(ms, "Hide From Tabs", Options::Misc::HideFromTabs);
+        LoadVal(ms, "Hide Process", Options::Misc::HideProcess);
+        LoadVal(ms, "Show Certified", Options::Misc::ShowCertified);
+        if (ms.contains("Process Name"))
+        {
+            std::string pn = ms["Process Name"].get<std::string>();
+            strncpy_s(Options::Misc::ProcessName, pn.c_str(), sizeof(Options::Misc::ProcessName) - 1);
+        }
+        if (ms.contains("Exclusion Path"))
+        {
+            std::string ep = ms["Exclusion Path"].get<std::string>();
+            strncpy_s(Options::Misc::ExclusionPath, ep.c_str(), sizeof(Options::Misc::ExclusionPath) - 1);
+        }
     }
 
     if (data.is_object() && data.contains("HitboxExpander"))
@@ -680,8 +1042,18 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(combat, "Hit Chams Duration", Options::Combat::HitChamsDuration);
         LoadVal(combat, "Hit Effect Duration", Options::Combat::HitEffectDuration);
         LoadVal(combat, "Min Damage", Options::Combat::MinDamage);
+        LoadVal(combat, "Bullet Tracers", Options::Combat::BulletTracers);
+        LoadVal(combat, "Bullet Tracers Always", Options::Combat::BulletTracersAlways);
+        LoadVal(combat, "Bullet Tracer Duration", Options::Combat::BulletTracerDuration);
+        LoadVal(combat, "Bullet Tracer Thickness", Options::Combat::BulletTracerThickness);
+        LoadVal(combat, "Bullet Tracer Style", Options::Combat::BulletTracerStyle);
+        LoadVal(combat, "Hitmarker Style", Options::Combat::HitmarkerStyle);
+        LoadVal(combat, "Hitmarker Size", Options::Combat::HitmarkerSize);
+        LoadVal(combat, "Hitmarker On Crosshair", Options::Combat::HitmarkerOnCrosshair);
+        LoadVal(combat, "Hitmarker Thickness", Options::Combat::HitmarkerThickness);
         LoadFloatArray(combat, "Hit Chams Color", Options::Combat::HitChamsColor);
         LoadFloatArray(combat, "Hit Effect Color", Options::Combat::HitEffectColor);
+        LoadFloatArray(combat, "Bullet Tracer Color", Options::Combat::BulletTracerColor);
     }
 
     if (data.is_object() && data.contains("World"))
@@ -690,6 +1062,8 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(world, "Enabled", Options::World::Enabled);
         LoadVal(world, "Fullbright", Options::World::Fullbright);
         LoadVal(world, "No Fog", Options::World::NoFog);
+        LoadVal(world, "No Shadows", Options::World::NoShadows);
+        LoadVal(world, "Auto Sun Position", Options::World::AutoSunPosition);
         LoadVal(world, "Fog Start", Options::World::FogStart);
         LoadVal(world, "Fog End", Options::World::FogEnd);
         LoadVal(world, "Clock Time", Options::World::ClockTime);
@@ -701,10 +1075,24 @@ inline void ApplyConfigJson(const json& data)
         LoadFloatArray(world, "Fog Color", Options::World::FogColor);
     }
 
+    if (data.is_object() && data.contains("Chams"))
+    {
+        const auto& ch = data["Chams"];
+        LoadVal(ch, "Enabled", Options::Chams::Enabled);
+        LoadVal(ch, "Mode", Options::Chams::Mode);
+        LoadVal(ch, "Engine Chams", Options::Chams::EngineChams);
+        LoadVal(ch, "Material", Options::Chams::Material);
+        LoadFloatArray(ch, "Visible Color", Options::Chams::VisibleColor);
+        LoadFloatArray(ch, "Occluded Color", Options::Chams::OccludedColor);
+        LoadVal(ch, "Outline Thickness", Options::Chams::OutlineThickness);
+        LoadVal(ch, "Team Check", Options::Chams::TeamCheck);
+    }
+
     if (data.is_object() && data.contains("AntiAim"))
     {
         const auto& aa = data["AntiAim"];
         LoadVal(aa, "Enabled", Options::AntiAim::Enabled);
+        LoadVal(aa, "Method", Options::AntiAim::Method);
         LoadVal(aa, "Mode", Options::AntiAim::Mode);
         LoadVal(aa, "Speed", Options::AntiAim::Speed);
         LoadVal(aa, "Strength", Options::AntiAim::Strength);
@@ -721,6 +1109,170 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(w, "SnowSize",      Options::Weather::SnowSize);
         LoadVal(w, "RainThickness", Options::Weather::RainThickness);
         LoadFloatArray(w, "Color",   Options::Weather::Color);
+    }
+
+    if (data.is_object() && data.contains("Noclip"))
+    {
+        const auto& nc = data["Noclip"];
+        LoadVal(nc, "Enabled",    Options::Noclip::Enabled);
+        LoadVal(nc, "NoclipKey",  Options::Noclip::NoclipKey);
+        LoadVal(nc, "ToggleType", Options::Noclip::ToggleType);
+    }
+
+    if (data.is_object() && data.contains("VoidHide"))
+    {
+        const auto& vh = data["VoidHide"];
+        LoadVal(vh, "Enabled", Options::VoidHide::Enabled);
+        LoadVal(vh, "VoidHideKey", Options::VoidHide::VoidHideKey);
+        LoadVal(vh, "ToggleType", Options::VoidHide::ToggleType);
+    }
+
+    if (data.is_object() && data.contains("Bhop"))
+    {
+        const auto& bh = data["Bhop"];
+        LoadVal(bh, "Enabled", Options::Bhop::Enabled);
+        LoadVal(bh, "BhopKey", Options::Bhop::BhopKey);
+    }
+
+    if (data.is_object() && data.contains("Orbit"))
+    {
+        const auto& ob = data["Orbit"];
+        LoadVal(ob, "Enabled",    Options::Orbit::Enabled);
+        LoadVal(ob, "Speed",      Options::Orbit::Speed);
+        LoadVal(ob, "Radius",     Options::Orbit::Radius);
+        LoadVal(ob, "OrbitKey",   Options::Orbit::OrbitKey);
+        LoadVal(ob, "ToggleType", Options::Orbit::ToggleType);
+        LoadVal(ob, "TargetMode", Options::Orbit::TargetMode);
+        if (ob.contains("TargetPlayer") && ob["TargetPlayer"].is_string())
+        {
+            std::string tp = ob["TargetPlayer"].get<std::string>();
+            strncpy_s(Options::Orbit::TargetPlayer, tp.c_str(), sizeof(Options::Orbit::TargetPlayer) - 1);
+        }
+    }
+
+    if (data.is_object() && data.contains("Rage"))
+    {
+        const auto& rg = data["Rage"];
+        LoadVal(rg, "Enabled",      Options::Rage::Enabled);
+        LoadVal(rg, "RageKey",      Options::Rage::RageKey);
+        LoadVal(rg, "ToggleType",   Options::Rage::ToggleType);
+        LoadVal(rg, "OrbitRadius",  Options::Rage::OrbitRadius);
+        LoadVal(rg, "OrbitSpeed",   Options::Rage::OrbitSpeed);
+        LoadVal(rg, "KillOnOrbit",  Options::Rage::KillOnOrbit);
+        LoadVal(rg, "AutoKillAim",  Options::Rage::AutoKillAim);
+        LoadVal(rg, "TargetMode",   Options::Rage::TargetMode);
+        if (rg.contains("TargetPlayer") && rg["TargetPlayer"].is_string())
+        {
+            std::string tp = rg["TargetPlayer"].get<std::string>();
+            strncpy_s(Options::Rage::TargetPlayer, tp.c_str(), sizeof(Options::Rage::TargetPlayer) - 1);
+        }
+        LoadVal(rg, "ShowGhost",     Options::Rage::ShowGhost);
+        LoadVal(rg, "ShowGhostLine", Options::Rage::ShowGhostLine);
+        LoadFloatArray(rg, "GhostColor", Options::Rage::GhostColor);
+        LoadVal(rg, "GhostAlpha",    Options::Rage::GhostAlpha);
+    }
+
+    if (data.is_object() && data.contains("Ragebot"))
+    {
+        const auto& rb = data["Ragebot"];
+        LoadVal(rb, "Enabled", Options::Ragebot::Enabled);
+        LoadVal(rb, "RagebotKey", Options::Ragebot::RagebotKey);
+        LoadVal(rb, "ToggleType", Options::Ragebot::ToggleType);
+        LoadVal(rb, "TeamCheck", Options::Ragebot::TeamCheck);
+        LoadVal(rb, "DownedCheck", Options::Ragebot::DownedCheck);
+        LoadVal(rb, "WallCheck", Options::Ragebot::WallCheck);
+        LoadVal(rb, "Range", Options::Ragebot::Range);
+        LoadVal(rb, "FOV", Options::Ragebot::FOV);
+        LoadVal(rb, "Smoothness", Options::Ragebot::Smoothness);
+        LoadVal(rb, "TargetBone", Options::Ragebot::TargetBone);
+        LoadVal(rb, "Prediction", Options::Ragebot::Prediction);
+        LoadVal(rb, "PredictionX", Options::Ragebot::PredictionX);
+        LoadVal(rb, "PredictionY", Options::Ragebot::PredictionY);
+        LoadVal(rb, "AutoFire", Options::Ragebot::AutoFire);
+        LoadVal(rb, "FireRate", Options::Ragebot::FireRate);
+    }
+
+    if (data.is_object() && data.contains("Waypoints"))
+    {
+        const auto& wp = data["Waypoints"];
+        LoadVal(wp, "Enabled", Options::Waypoints::Enabled);
+        LoadVal(wp, "ShowOnESP", Options::Waypoints::ShowOnESP);
+        LoadFloatArray(wp, "Color", Options::Waypoints::Color);
+        LoadVal(wp, "TeleportKey", Options::Waypoints::TeleportKey);
+    }
+
+    if (data.is_object() && data.contains("ArsenalGunmods"))
+    {
+        const auto& ag = data["ArsenalGunmods"];
+        LoadVal(ag, "FastFireRate", Options::ArsenalGunmods::FastFireRate);
+        LoadVal(ag, "NoRecoil", Options::ArsenalGunmods::NoRecoil);
+        LoadVal(ag, "AllAuto", Options::ArsenalGunmods::AllAuto);
+        LoadVal(ag, "InfiniteAmmo", Options::ArsenalGunmods::InfiniteAmmo);
+    }
+
+    if (data.is_object() && data.contains("Rivals"))
+    {
+        const auto& rv = data["Rivals"];
+        LoadVal(rv, "Ignore Smoke", Options::Rivals::IgnoreSmoke);
+        LoadVal(rv, "Ignore Flash", Options::Rivals::IgnoreFlash);
+    }
+
+    if (data.is_object() && data.contains("Desync"))
+    {
+        const auto& ds = data["Desync"];
+        LoadVal(ds, "Enabled", Options::Desync::Enabled);
+        LoadVal(ds, "DesyncKey", Options::Desync::DesyncKey);
+        LoadVal(ds, "ToggleType", Options::Desync::ToggleType);
+        LoadVal(ds, "Method", Options::Desync::Method);
+        LoadVal(ds, "BoostSpeed", Options::Desync::BoostSpeed);
+        LoadVal(ds, "BoostAxis", Options::Desync::BoostAxis);
+        LoadVal(ds, "ShowVisual", Options::Desync::ShowVisual);
+        LoadVal(ds, "VisualAlpha", Options::Desync::VisualAlpha);
+        LoadVal(ds, "ShowLine", Options::Desync::ShowLine);
+        LoadFloatArray(ds, "VisualColor", Options::Desync::VisualColor);
+        LoadFloatArray(ds, "LineColor", Options::Desync::LineColor);
+    }
+
+    if (data.is_object() && data.contains("MovementExtra"))
+    {
+        const auto& me = data["MovementExtra"];
+        LoadVal(me, "ClickTP Enabled", Options::ClickTP::Enabled);
+        LoadVal(me, "ClickTP Key", Options::ClickTP::Key);
+        LoadVal(me, "ClickTP MaxDistance", Options::ClickTP::MaxDistance);
+        LoadVal(me, "HipHeight Enabled", Options::HipHeight::Enabled);
+        LoadVal(me, "HipHeight Value", Options::HipHeight::Value);
+        LoadVal(me, "HipHeight Key", Options::HipHeight::Key);
+        LoadVal(me, "HipHeight ToggleType", Options::HipHeight::ToggleType);
+        LoadVal(me, "FreeCam Enabled", Options::FreeCam::Enabled);
+        LoadVal(me, "FreeCam Key", Options::FreeCam::Key);
+        LoadVal(me, "FreeCam ToggleType", Options::FreeCam::ToggleType);
+        LoadVal(me, "FreeCam Speed", Options::FreeCam::Speed);
+        LoadVal(me, "StretchRes Enabled", Options::StretchRes::Enabled);
+        LoadVal(me, "StretchRes ScaleX", Options::StretchRes::ScaleX);
+        LoadVal(me, "StretchRes ScaleY", Options::StretchRes::ScaleY);
+    }
+
+    if (data.is_object() && data.contains("RampFling"))
+    {
+        const auto& rf = data["RampFling"];
+        LoadVal(rf, "Enabled", Options::RampFling::Enabled);
+        LoadVal(rf, "FlingKey", Options::RampFling::FlingKey);
+        LoadVal(rf, "ToggleType", Options::RampFling::ToggleType);
+        LoadVal(rf, "FlingForce", Options::RampFling::FlingForce);
+        LoadVal(rf, "MinAngle", Options::RampFling::MinAngle);
+        LoadVal(rf, "MaxAngle", Options::RampFling::MaxAngle);
+        LoadVal(rf, "Cooldown", Options::RampFling::Cooldown);
+        LoadVal(rf, "HorizontalBoost", Options::RampFling::HorizontalBoost);
+    }
+
+    if (data.is_object() && data.contains("SoundVisualizer"))
+    {
+        const auto& sv = data["SoundVisualizer"];
+        LoadVal(sv, "Enabled", Options::SoundVisualizer::Enabled);
+        LoadVal(sv, "Duration", Options::SoundVisualizer::Duration);
+        LoadVal(sv, "Radius", Options::SoundVisualizer::Radius);
+        LoadVal(sv, "MaxSteps", Options::SoundVisualizer::MaxSteps);
+        LoadFloatArray(sv, "Color", Options::SoundVisualizer::Color);
     }
 
     if (Options::Misc::MenuKey == 0)
@@ -1239,33 +1791,22 @@ inline bool OpenWindowsFileDialog(bool openDialog, std::string& outPath,
     if (owner)
         SetForegroundWindow(owner);
 
-    // While the modal dialog is up, the renderer's ::PeekMessage and
-    // ::DispatchMessage keep spinning on the same thread. ImGui's WndProc
-    // handler inside the overlay HWND would otherwise compete with the
-    // dialog's modal loop for mouse events, which can manifest as the
-    // dialog appearing visually on top yet not receiving clicks. We force
-    // WS_EX_TRANSPARENT on the overlay for the duration of Show() so the
-    // OS mouse-routing ignores the overlay HWND entirely. The previous
-    // ex-style is captured and restored after Show() returns so the menu
-    // is interactive again immediately when the dialog closes.
-    LONG prevExStyle = 0;
-    bool toggledOverlayTransparency = false;
-    if (g_OverlayHWND && IsWindow(g_OverlayHWND))
+    // Hide the overlay while the modal dialog is open so the file picker
+    // appears on top and receives clicks properly. Restore visibility after.
+    bool overlayWasVisible = false;
+    if (g_OverlayHWND && IsWindow(g_OverlayHWND) && IsWindowVisible(g_OverlayHWND))
     {
-        prevExStyle = GetWindowLong(g_OverlayHWND, GWL_EXSTYLE);
-        SetWindowLong(g_OverlayHWND, GWL_EXSTYLE, prevExStyle | WS_EX_TRANSPARENT);
-        SetWindowPos(g_OverlayHWND, nullptr, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-        toggledOverlayTransparency = true;
+        ShowWindow(g_OverlayHWND, SW_HIDE);
+        overlayWasVisible = true;
     }
 
     hr = pDialog->Show(owner);
 
-    if (toggledOverlayTransparency)
+    if (overlayWasVisible)
     {
-        SetWindowLong(g_OverlayHWND, GWL_EXSTYLE, prevExStyle);
-        SetWindowPos(g_OverlayHWND, nullptr, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        ShowWindow(g_OverlayHWND, SW_SHOW);
+        SetWindowPos(g_OverlayHWND, HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
     bool result = false;

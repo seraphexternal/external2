@@ -16,7 +16,11 @@ void FlyLoop()
             static bool wasKeyPressed = false;
             bool isKeyPressed = (GetAsyncKeyState(Options::Fly::FlyKey) & 0x8000) != 0;
 
-            if (Options::Fly::ToggleType == 1) // Toggle mode
+            if (Options::Fly::ToggleType == 2) // Always On
+            {
+                Options::Fly::Toggled = true;
+            }
+            else if (Options::Fly::ToggleType == 1) // Toggle mode
             {
                 if (isKeyPressed && !wasKeyPressed)
                 {
@@ -28,6 +32,11 @@ void FlyLoop()
             {
                 Options::Fly::Toggled = isKeyPressed;
             }
+        }
+        else
+        {
+            if (Options::Fly::ToggleType == 2)
+                Options::Fly::Toggled = true;
         }
 
         if (!Options::Fly::Enabled || !Options::Fly::Toggled)

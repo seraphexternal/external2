@@ -1099,235 +1099,128 @@ struct tab_anim {
 };
 
 bool ImGui::tab(const char* label, bool selected) {
-    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    ImGuiWindow* window = GetCurrentWindow();
     if (window->SkipItems)
         return false;
 
     ImGuiContext& g = *GImGui;
     const ImGuiStyle& style = g.Style;
     const ImGuiID id = window->GetID(label);
-    const ImVec2 label_size = ImGui::CalcTextSize(label, NULL, true);
+    const ImVec2 label_size = CalcTextSize(label, NULL, true);
     ImVec2 pos = window->DC.CursorPos;
 
-    const float tab_padding_x = 5.0f; // Reduced horizontal padding
-    const float tab_padding_y = 5.0f;
-    const float rounding_radius = 5.0f;
-    const float rect_bottom_extension = 10.0f; // Extend the rectangle downward by 10 pixels
+    const float tab_padding_x = 6.0f;
+    const float tab_padding_y = 4.0f;
+    const float rounding = 6.0f;
     const ImRect rect(pos, ImVec2(pos.x + label_size.x + tab_padding_x * 2, pos.y + label_size.y + tab_padding_y * 2));
-    ImGui::ItemSize(ImVec4(rect.Min.x, rect.Min.y, rect.Max.x + 2.f, rect.Max.y), style.FramePadding.y);
-    if (!ImGui::ItemAdd(rect, id))
+    ItemSize(ImVec4(rect.Min.x, rect.Min.y, rect.Max.x + 2.f, rect.Max.y), style.FramePadding.y);
+    if (!ItemAdd(rect, id))
         return false;
 
     bool hovered, held;
-    bool pressed = ImGui::ButtonBehavior(rect, id, &hovered, &held, NULL);
+    bool pressed = ButtonBehavior(rect, id, &hovered, &held, NULL);
 
+    // Smooth animation
     static std::map<ImGuiID, float> fade_alpha;
-    auto it_alpha = fade_alpha.find(id);
-    if (it_alpha == fade_alpha.end()) {
-        fade_alpha[id] = 0.0f;
-        it_alpha = fade_alpha.find(id);
+    float& anim = fade_alpha[id];
+    float target = selected ? 1.0f : (hovered ? 0.3f : 0.0f);
+    anim += (target - anim) * ImMin(12.0f * ImGui::GetIO().DeltaTime, 1.0f);
+    if (anim < 0.01f && target == 0.0f) anim = 0.0f;
+
+    ImDrawList* dl = window->DrawList;
+
+    // Background highlight (subtle)
+    if (anim > 0.01f) {
+        ImU32 bg = IM_COL32(
+            (int)(main_color.x * 255), (int)(main_color.y * 255), (int)(main_color.z * 255),
+            (int)(anim * 18));
+        dl->AddRectFilled(rect.Min, rect.Max, bg, rounding);
     }
 
-    // Update fade effect based on tab selection
-    const float fade_speed = 3.0f;  // Speed of the fade effect
-    if (selected) {
-        it_alpha->second += fade_speed * ImGui::GetIO().DeltaTime;
-        if (it_alpha->second > 1.0f) it_alpha->second = 1.0f;
-    }
-    else {
-        it_alpha->second -= fade_speed * ImGui::GetIO().DeltaTime;
-        if (it_alpha->second < 0.0f) it_alpha->second = 0.0f;
-    }
-
-    // Calculate current alpha for the fade effect
-    int current_alpha = static_cast<int>(ImLerp(0.0f, 255.0f, it_alpha->second));
-
-    // Animation state for text color
-    static std::map<ImGuiID, ImColor> color_anim;
-    ImColor& current_color = color_anim[id];
-    ImColor target_color = ImColor(105, 105, 105, 255); // Default color for non-selected tabs
-
-    if (selected) {
-        // Use main_color from utils.h for selected tabs
-        target_color = ImColor(
-            static_cast<int>(main_color.x * 255.0f),
-            static_cast<int>(main_color.y * 255.0f),
-            static_cast<int>(main_color.z * 255.0f),
-            255
-        );
+    // Accent bar on left when selected
+    if (selected || anim > 0.01f) {
+        float bar_alpha = anim;
+        ImU32 bar_col = IM_COL32(
+            (int)(main_color.x * 255), (int)(main_color.y * 255), (int)(main_color.z * 255),
+            (int)(bar_alpha * 255));
+        dl->AddRectFilled(
+            ImVec2(rect.Min.x, rect.Min.y + rounding),
+            ImVec2(rect.Min.x + 2.5f, rect.Max.y - rounding),
+            bar_col, 1.5f);
     }
 
-    // Interpolate color towards the target
-    float speed = 2.5f * ImGui::GetIO().DeltaTime;
-    current_color = ImColor(
-        ImLerp(current_color.Value.x * 255.0f, target_color.Value.x * 255.0f, speed) / 255.0f,
-        ImLerp(current_color.Value.y * 255.0f, target_color.Value.y * 255.0f, speed) / 255.0f,
-        ImLerp(current_color.Value.z * 255.0f, target_color.Value.z * 255.0f, speed) / 255.0f,
-        ImLerp(current_color.Value.w * 255.0f, target_color.Value.w * 255.0f, speed) / 255.0f
-    );
+    // Text color
+    float text_r = ImLerp(0.40f, main_color.x, anim);
+    float text_g = ImLerp(0.40f, main_color.y, anim);
+    float text_b = ImLerp(0.40f, main_color.z, anim);
+    float text_a = ImLerp(0.60f, 1.0f, anim);
+    ImU32 text_col = IM_COL32((int)(text_r * 255), (int)(text_g * 255), (int)(text_b * 255), (int)(text_a * 255));
 
-    // Calculate text position with padding
     ImVec2 text_pos = ImVec2(rect.Min.x + tab_padding_x, rect.Min.y + tab_padding_y);
-
-    // Only render the "box" and background when the tab is selected (active)
-    if (selected || current_alpha > 0) {
-        // Draw the background rectangle, extended downward and without rounding
-        ImVec2 rect_filled_max = ImVec2(rect.Max.x, rect.Max.y + rect_bottom_extension);
-        window->DrawList->AddRectFilled(rect.Min, rect_filled_max, ImColor(8, 8, 8, current_alpha));
-
-        if (selected || current_alpha > 0) {
-            // Define colors with the applied fade alpha
-            ImColor line_color = ImColor(27, 27, 27, current_alpha); // Left and right line color with fade
-            
-            // Use main_color for the top line
-            ImColor top_line_color = ImColor(
-                static_cast<int>(main_color.x * 255.0f),
-                static_cast<int>(main_color.y * 255.0f),
-                static_cast<int>(main_color.z * 255.0f),
-                current_alpha
-            );
-
-            // Draw the left line with rounding
-            window->DrawList->AddLine(ImVec2(rect.Min.x, rect.Max.y), ImVec2(rect.Min.x, rect.Min.y + rounding_radius), line_color, 1.0f); // Thinner line
-            window->DrawList->AddBezierCurve(ImVec2(rect.Min.x, rect.Min.y + rounding_radius),
-                ImVec2(rect.Min.x, rect.Min.y),
-                ImVec2(rect.Min.x + rounding_radius, rect.Min.y),
-                ImVec2(rect.Min.x + rounding_radius, rect.Min.y), line_color, 1.0f); // Thinner curve
-
-            // Draw the right line with rounding
-            window->DrawList->AddLine(ImVec2(rect.Max.x, rect.Max.y), ImVec2(rect.Max.x, rect.Min.y + rounding_radius), line_color, 1.0f); // Thinner line
-            window->DrawList->AddBezierCurve(ImVec2(rect.Max.x, rect.Min.y + rounding_radius),
-                ImVec2(rect.Max.x, rect.Min.y),
-                ImVec2(rect.Max.x - rounding_radius, rect.Min.y),
-                ImVec2(rect.Max.x - rounding_radius, rect.Min.y), line_color, 1.0f); // Thinner curve
-
-            // Draw the flat pink line on top
-            window->DrawList->AddLine(ImVec2(rect.Min.x + rounding_radius, rect.Min.y), ImVec2(rect.Max.x - rounding_radius, rect.Min.y), top_line_color, 1.0f); // Straight top line
-
-            // Draw the left curved pink segment
-            window->DrawList->AddBezierCurve(ImVec2(rect.Min.x, rect.Min.y + rounding_radius),
-                ImVec2(rect.Min.x, rect.Min.y),
-                ImVec2(rect.Min.x + rounding_radius, rect.Min.y),
-                ImVec2(rect.Min.x + rounding_radius, rect.Min.y), top_line_color, 1.0f); // Left curve
-
-            // Draw the right curved pink segment
-            window->DrawList->AddBezierCurve(ImVec2(rect.Max.x, rect.Min.y + rounding_radius),
-                ImVec2(rect.Max.x, rect.Min.y),
-                ImVec2(rect.Max.x - rounding_radius, rect.Min.y),
-                ImVec2(rect.Max.x - rounding_radius, rect.Min.y), top_line_color, 1.0f); // Right curve
-        }
-    }
-
-    // Draw the text with the animated color
-    window->DrawList->AddText(text_pos, current_color, label);
+    dl->AddText(text_pos, text_col, label);
 
     return pressed;
 }
 
-bool ImGui::subtab(const char* label, bool selected) { // subtab color
-    ImGuiWindow* window = ImGui::GetCurrentWindow();
+bool ImGui::subtab(const char* label, bool selected) {
+    ImGuiWindow* window = GetCurrentWindow();
     if (window->SkipItems)
         return false;
 
     ImGuiContext& g = *GImGui;
     const ImGuiStyle& style = g.Style;
     const ImGuiID id = window->GetID(label);
-    const ImVec2 label_size = ImGui::CalcTextSize(label, NULL, true);
+    const ImVec2 label_size = CalcTextSize(label, NULL, true);
     ImVec2 pos = window->DC.CursorPos;
 
     const float tab_padding_x = 10.0f;
-    const float tab_padding_y = 4.5f;
-    const float text_padding_left = 10.0f; // Padding from the left for the text
+    const float tab_padding_y = 4.0f;
+    const float text_padding_left = 12.0f;
     const ImRect rect(pos, ImVec2(pos.x + label_size.x + tab_padding_x * 2, pos.y + label_size.y + tab_padding_y * 2));
-    ImGui::ItemSize(ImVec4(rect.Min.x, rect.Min.y, rect.Max.x + 2.f, rect.Max.y), style.FramePadding.y);
-    if (!ImGui::ItemAdd(rect, id))
+    ItemSize(ImVec4(rect.Min.x, rect.Min.y, rect.Max.x + 2.f, rect.Max.y), style.FramePadding.y);
+    if (!ItemAdd(rect, id))
         return false;
 
     bool hovered, held;
-    bool pressed = ImGui::ButtonBehavior(rect, id, &hovered, &held, NULL);
+    bool pressed = ButtonBehavior(rect, id, &hovered, &held, NULL);
 
-    static std::map<ImGuiID, tab_anim> anim;
-    auto it_anim = anim.find(id);
-    if (it_anim == anim.end()) {
-        anim.insert(std::make_pair(id, tab_anim{ 0, 0 }));
-        it_anim = anim.find(id);
+    // Smooth animation
+    static std::map<ImGuiID, float> fade;
+    float& anim = fade[id];
+    float target = selected ? 1.0f : (hovered ? 0.4f : 0.0f);
+    anim += (target - anim) * ImMin(14.0f * ImGui::GetIO().DeltaTime, 1.0f);
+    if (anim < 0.01f && target == 0.0f) anim = 0.0f;
+
+    ImDrawList* dl = window->DrawList;
+
+    // Subtle background on hover/select
+    if (anim > 0.01f) {
+        ImU32 bg = IM_COL32(
+            (int)(main_color.x * 255), (int)(main_color.y * 255), (int)(main_color.z * 255),
+            (int)(anim * 12));
+        dl->AddRectFilled(rect.Min, rect.Max, bg, 4.0f);
     }
 
-    // Update hover animation
-    if (hovered)
-        it_anim->second.hovered_text_anim += 8 * (1.f - ImGui::GetIO().DeltaTime);
-    else
-        it_anim->second.hovered_text_anim -= 8 * (1.f - ImGui::GetIO().DeltaTime);
+    // Accent dot indicator on left
+    float dot_alpha = anim;
+    ImU32 dot_col = IM_COL32(
+        (int)(main_color.x * 255), (int)(main_color.y * 255), (int)(main_color.z * 255),
+        (int)(dot_alpha * 255));
+    float dot_center_y = (rect.Min.y + rect.Max.y) * 0.5f;
+    dl->AddCircleFilled(ImVec2(rect.Min.x + 4.0f, dot_center_y), 2.0f, dot_col, 8);
 
-    // Update active animation
-    if (selected) {
-        it_anim->second.active_text_anim += 16 * (1.f - ImGui::GetIO().DeltaTime);
-    }
-    else {
-        it_anim->second.active_text_anim -= 16 * (1.f - ImGui::GetIO().DeltaTime);
-    }
+    // Text
+    float text_r = ImLerp(0.40f, main_color.x, anim);
+    float text_g = ImLerp(0.40f, main_color.y, anim);
+    float text_b = ImLerp(0.40f, main_color.z, anim);
+    float text_a = ImLerp(0.50f, 1.0f, anim);
+    ImU32 text_col = IM_COL32((int)(text_r * 255), (int)(text_g * 255), (int)(text_b * 255), (int)(text_a * 255));
 
-    // Calculate text position with left padding
     ImVec2 text_pos = ImVec2(rect.Min.x + text_padding_left, rect.Min.y + tab_padding_y);
+    dl->AddText(text_pos, text_col, label);
 
-    // Animation state for text color
-    static std::map<ImGuiID, ImColor> color_anim;
-    ImColor& current_color = color_anim[id];
-    ImColor target_color = ImColor(105, 105, 105, 255); // Default color for non-selected tabs
-
-    if (selected) {
-        // Use main_color from utils.h for selected subtabs
-        target_color = ImColor(
-            static_cast<int>(main_color.x * 255.0f),
-            static_cast<int>(main_color.y * 255.0f),
-            static_cast<int>(main_color.z * 255.0f),
-            255
-        );
-    }
-
-    // Interpolate color towards the target
-    float speed = 3.5f * ImGui::GetIO().DeltaTime;
-    current_color = ImColor(
-        ImLerp(current_color.Value.x * 255.0f, target_color.Value.x * 255.0f, speed) / 255.0f,
-        ImLerp(current_color.Value.y * 255.0f, target_color.Value.y * 255.0f, speed) / 255.0f,
-        ImLerp(current_color.Value.z * 255.0f, target_color.Value.z * 255.0f, speed) / 255.0f,
-        ImLerp(current_color.Value.w * 255.0f, target_color.Value.w * 255.0f, speed) / 255.0f
-    );
-
-    // Animation state for line color
-    static std::map<ImGuiID, float> line_alpha_anim;
-    float& current_line_alpha = line_alpha_anim[id];
-    float target_line_alpha = selected ? 255.0f : 100.0f;
-
-    // Interpolate alpha towards the target
-    current_line_alpha = ImLerp(current_line_alpha, target_line_alpha, speed);
-
-    // Use main_color for the line
-    ImColor line_color = ImColor(
-        static_cast<int>(main_color.x * 255.0f),
-        static_cast<int>(main_color.y * 255.0f),
-        static_cast<int>(main_color.z * 255.0f),
-        static_cast<int>(current_line_alpha)
-    );
-
-    // Draw pink vertical line at the left start
-    ImVec2 line_start = ImVec2(rect.Min.x, rect.Min.y);
-    ImVec2 line_end = ImVec2(rect.Min.x, rect.Max.y);
-    window->DrawList->AddLine(line_start, line_end, line_color, 1.0f);  // Thinner line with thickness of 1.0f
-
-    // Draw multiple white lines with decreasing alphas
-    const int num_white_lines = 75; // Increased number of lines for a smoother gradient
-    for (int i = 0; i < num_white_lines; ++i) {
-        float alpha = 12 - (i * (12.0f / num_white_lines));  // Decreasing alpha
-        ImColor white_line_color = ImColor(255, 255, 255, static_cast<int>(alpha));
-        window->DrawList->AddLine(ImVec2(rect.Min.x + 1 + i, rect.Min.y), ImVec2(rect.Min.x + 1 + i, rect.Max.y), white_line_color, 1.0f);
-    }
-
-    // Draw the text
-    window->DrawList->AddText(text_pos, current_color, label);
-
-    // Adjust cursor position for the next subtab to be underneath
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + rect.GetHeight() + style.ItemSpacing.y);
+    // Auto-position for stacking
+    SetCursorPosY(GetCursorPosY() + rect.GetHeight() + style.ItemSpacing.y);
 
     return pressed;
 }
@@ -1346,7 +1239,6 @@ bool ImGui::Checkbox(const char* label, bool* v)
     const float square_sz = GetFrameHeight();
     const ImVec2 pos = window->DC.CursorPos + ImVec2(10, 0);
     const ImRect total_bb(pos, pos + ImVec2(GetWindowSize().x - 5, 14));
-    static int alpha = 60;
 
     ItemSize(total_bb, style.FramePadding.y);
     if (!ItemAdd(total_bb, id))
@@ -1363,53 +1255,58 @@ bool ImGui::Checkbox(const char* label, bool* v)
         MarkItemEdited(id);
     }
 
-    // Animation state for checkbox
+    // Smooth animation
     static std::map<ImGuiID, float> check_anim;
-    float& check_t = check_anim[id];
-    float target_check_t = *v ? 1.0f : 0.0f;
-    float check_speed = 5.0f * ImGui::GetIO().DeltaTime;
-    check_t = ImLerp(check_t, target_check_t, check_speed);
+    float& anim = check_anim[id];
+    float target = *v ? 1.0f : 0.0f;
+    anim += (target - anim) * ImMin(12.0f * ImGui::GetIO().DeltaTime, 1.0f);
 
     const ImRect check_bb(pos, pos + ImVec2(square_sz, square_sz));
     RenderNavHighlight(total_bb, id);
-    ImVec2 label_pos = ImVec2(check_bb.Max.x + style.ItemInnerSpacing.x, check_bb.Min.y + style.FramePadding.y);
-    ImU32 check_col = GetColorU32(ImGuiCol_CheckMark);
-    bool mixed_value = (window->DC.ItemFlags & ImGuiItemFlags_MixedValue) != 0;
     const float pad = ImMax(1.0f, IM_FLOOR(square_sz / 4.5f));
 
-    // checkbox color
-    window->DrawList->AddRectFilled(ImVec2(check_bb.Min.x + pad + 2.5, check_bb.Min.y + pad + 2.5), ImVec2(check_bb.Max.x - pad - 2.5, check_bb.Max.y - pad - 2.5), ImColor(30, 30, 30));
-    window->DrawList->AddRect(ImVec2(check_bb.Min.x + pad + 1, check_bb.Min.y + pad + 1), ImVec2(check_bb.Max.x - pad - 1, check_bb.Max.y - pad - 1), ImColor(0, 0, 0, alpha), 0);
-    if (check_t > 0.0f)
-    {
-        window->DrawList->AddRectFilled(ImVec2(check_bb.Min.x + pad + 2.5, check_bb.Min.y + pad + 2.5), ImVec2(check_bb.Max.x - pad - 2.5, check_bb.Max.y - pad - 2.5), ImColor(
-            static_cast<int>(main_color.x * 255.0f),
-            static_cast<int>(main_color.y * 255.0f),
-            static_cast<int>(main_color.z * 255.0f),
-            int(check_t * 255)
-        ), 0);
+    ImDrawList* dl = window->DrawList;
+
+    // Rounded checkbox box
+    ImVec2 box_min(check_bb.Min.x + pad + 2.5f, check_bb.Min.y + pad + 2.5f);
+    ImVec2 box_max(check_bb.Max.x - pad - 2.5f, check_bb.Max.y - pad - 2.5f);
+
+    // Background
+    ImU32 bg_col = IM_COL32(30, 30, 30, 200);
+    if (hovered && !*v)
+        bg_col = IM_COL32(40, 40, 40, 220);
+    dl->AddRectFilled(box_min, box_max, bg_col, 4.0f);
+
+    // Border
+    ImU32 border_col = IM_COL32(60, 60, 60, 180);
+    if (*v)
+        border_col = IM_COL32(
+            (int)(main_color.x * 255), (int)(main_color.y * 255), (int)(main_color.z * 255), 200);
+    dl->AddRect(box_min, box_max, border_col, 4.0f, 0, 1.0f);
+
+    // Accent fill when checked
+    if (anim > 0.01f) {
+        ImU32 fill_col = IM_COL32(
+            (int)(main_color.x * 255), (int)(main_color.y * 255), (int)(main_color.z * 255),
+            (int)(anim * 240));
+        dl->AddRectFilled(box_min, box_max, fill_col, 4.0f);
+
+        // Checkmark
+        if (anim > 0.5f) {
+            float mark_alpha = (anim - 0.5f) * 2.0f;
+            ImU32 mark_col = IM_COL32(255, 255, 255, (int)(mark_alpha * 255));
+            float cx = (box_min.x + box_max.x) * 0.5f;
+            float cy = (box_min.y + box_max.y) * 0.5f;
+            float sz = (box_max.x - box_min.x) * 0.35f;
+            dl->AddLine(ImVec2(cx - sz, cy), ImVec2(cx - sz * 0.2f, cy + sz * 0.7f), mark_col, 1.5f);
+            dl->AddLine(ImVec2(cx - sz * 0.2f, cy + sz * 0.7f), ImVec2(cx + sz, cy - sz * 0.6f), mark_col, 1.5f);
+        }
     }
 
-    // Animation state for text alpha
-    static std::map<ImGuiID, float> alpha_anim;
-    float& current_alpha = alpha_anim[id];
-    float target_alpha = 100.0f;
-
-    if (hovered) {
-        target_alpha = 130.0f; // Hovered
-    }
-    if (*v) {
-        target_alpha = 255.0f; // Checked
-    }
-
-    // Interpolate alpha towards the target
-    float speed = 5.0f * ImGui::GetIO().DeltaTime;
-    current_alpha = ImLerp(current_alpha, target_alpha, speed);
-
-    if (g.LogEnabled)
-        LogRenderedText(&label_pos, mixed_value ? "[~]" : *v ? "[x]" : "[ ]");
-    if (label_size.x > 0.0f)
-        window->DrawList->AddText(check_bb.Min + ImVec2(pad, pad) + ImVec2(18, -1.001), ImColor(250, 250, 250, static_cast<int>(current_alpha)), label);
+    // Text
+    float text_alpha = *v ? 0.92f : (hovered ? 0.60f : 0.50f);
+    ImVec2 label_pos = ImVec2(check_bb.Min.x + pad + 18, check_bb.Min.y + style.FramePadding.y);
+    dl->AddText(label_pos, IM_COL32(255, 255, 255, (int)(text_alpha * 255)), label);
 
     IMGUI_TEST_ENGINE_ITEM_INFO(id, label, window->DC.ItemFlags | ImGuiItemStatusFlags_Checkable | (*v ? ImGuiItemStatusFlags_Checked : 0));
     return pressed;

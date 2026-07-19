@@ -5,6 +5,24 @@
 #include "../rbx/globals/globals.h"
 #include <windows.h>
 #include <chrono>
+#include "visibility.h"
+
+// Dynamic FOV: keep a constant angular hit zone so enemies at any distance
+// are equally easy to hit. Screen-space radius must grow proportional to the
+// target's distance; we never shrink below 1.0 so close enemies stay at full
+// base radius. distance3D is the 3D range to the target.
+inline float DynamicFOVScaleFor(float distance3D)
+{
+    if (!Options::Triggerbot::DynamicFOV)
+        return 1.0f;
+
+    float base = (Options::Triggerbot::DynamicFOVBaseDist > 0.1f)
+        ? Options::Triggerbot::DynamicFOVBaseDist : 50.f;
+
+    float scale = (distance3D / base) * Options::Triggerbot::DynamicFOVScale;
+    if (scale < 1.0f) scale = 1.0f;
+    return scale;
+}
 
 inline void RenderAdvancedFOV(ImDrawList* drawList)
 {
@@ -12,7 +30,8 @@ inline void RenderAdvancedFOV(ImDrawList* drawList)
         return;
 
     auto localTeam = Globals::Roblox::LocalPlayer.Team();
-    
+    auto localHRP = Globals::Roblox::LocalPlayer.Character().FindFirstChild("HumanoidRootPart");
+
     for (auto& player : Globals::Caches::CachedPlayerObjects)
     {
         if (player.address == Globals::Roblox::LocalPlayer.address)
@@ -20,6 +39,13 @@ inline void RenderAdvancedFOV(ImDrawList* drawList)
 
         if (player.Health <= 0)
             continue;
+
+        float dist3D = 0.f;
+        if (localHRP.address && player.HumanoidRootPart.address)
+        {
+            Vectors::Vector3 diff = player.HumanoidRootPart.Position() - localHRP.Position();
+            dist3D = diff.Magnitude();
+        }
 
         if (Options::Triggerbot::TeamCheck && IsTeammate(player))
         {
@@ -32,6 +58,13 @@ inline void RenderAdvancedFOV(ImDrawList* drawList)
                 return;
 
             Vectors::Vector3 partPos = part.Position();
+
+            if (Options::Triggerbot::DynamicFOV)
+            {
+                float distScale = DynamicFOVScaleFor(dist3D);
+                fovX *= distScale;
+                fovY *= distScale;
+            }
             
             if (Options::Triggerbot::Prediction)
             {
@@ -91,16 +124,16 @@ inline void RenderAdvancedFOV(ImDrawList* drawList)
             {
                 // Draw filled translucent box faces
                 ImU32 fillColor = IM_COL32(
-                    static_cast<int>(Options::ESP::ChamsColor[0] * 255.f),
-                    static_cast<int>(Options::ESP::ChamsColor[1] * 255.f),
-                    static_cast<int>(Options::ESP::ChamsColor[2] * 255.f),
+                    static_cast<int>(Options::ESP::VisibleColor[0] * 255.f),
+                    static_cast<int>(Options::ESP::VisibleColor[1] * 255.f),
+                    static_cast<int>(Options::ESP::VisibleColor[2] * 255.f),
                     30
                 );
                 
                 ImU32 outlineColor = IM_COL32(
-                    static_cast<int>(Options::ESP::ChamsColor[0] * 255.f),
-                    static_cast<int>(Options::ESP::ChamsColor[1] * 255.f),
-                    static_cast<int>(Options::ESP::ChamsColor[2] * 255.f),
+                    static_cast<int>(Options::ESP::VisibleColor[0] * 255.f),
+                    static_cast<int>(Options::ESP::VisibleColor[1] * 255.f),
+                    static_cast<int>(Options::ESP::VisibleColor[2] * 255.f),
                     150
                 );
                 drawList->AddQuadFilled(corners2D[0], corners2D[1], corners2D[3], corners2D[2], fillColor);
@@ -187,7 +220,12 @@ inline void RunTriggerbot()
     static bool wasKeyPressed = false;
     bool isKeyPressed = KeyBind::IsPressed(Options::Triggerbot::TriggerbotKey);
     
-    if (Options::Triggerbot::ToggleType == 1)
+    if (Options::Triggerbot::ToggleType == 2)
+    {
+        // Always On
+        Options::Triggerbot::Toggled = true;
+    }
+    else if (Options::Triggerbot::ToggleType == 1)
     {
         // Toggle mode
         if (isKeyPressed && !wasKeyPressed)
@@ -220,8 +258,8 @@ inline void RunTriggerbot()
     POINT p;
     GetCursorPos(&p);
     
-    HWND robloxWindow = FindWindowA("Roblox", nullptr);
-    if (robloxWindow)
+    HWND robloxWindow = Globals::Viewport::RobloxHWND;
+    if (robloxWindow && IsWindow(robloxWindow))
     {
         ScreenToClient(robloxWindow, &p);
     }
@@ -246,11 +284,15 @@ inline void RunTriggerbot()
         if (Options::Triggerbot::DownedCheck && player.Health > 0 && player.Health <= 5.0f)
             continue;
 
+        if (Options::Triggerbot::WallCheck && Visibility::IsPlayerOccluded(player))
+            continue;
+
         // Check 3D distance range
         Vectors::Vector3 targetPos = player.HumanoidRootPart.Position();
+        if (!localHRP.address)
+            continue;
         Vectors::Vector3 diff = targetPos - localHRP.Position();
         float distance3D = diff.Magnitude();
-        
         if (distance3D > Options::Triggerbot::Range)
             continue;
 
@@ -261,6 +303,14 @@ inline void RunTriggerbot()
         auto checkPartFOV = [&](const RobloxInstance& part, float fovX, float fovY) -> bool {
             if (part.address == 0)
                 return false;
+
+            // Dynamic FOV: scale based on distance so close/far enemies are handled equally
+            if (Options::Triggerbot::DynamicFOV)
+            {
+                float distScale = DynamicFOVScaleFor(distance3D);
+                fovX *= distScale;
+                fovY *= distScale;
+            }
 
             if (Options::Triggerbot::AdvancedFOV && (fovX == 0.0f && fovY == 0.0f))
                 return false;
@@ -293,7 +343,13 @@ inline void RunTriggerbot()
                     return false;
                     
                 float distance = screenPos.Distance(cursorPos);
-                return (distance <= Options::Triggerbot::Radius);
+                float effectiveRadius = Options::Triggerbot::Radius;
+                if (Options::Triggerbot::DynamicFOV)
+                {
+                    float distScale = DynamicFOVScaleFor(distance3D);
+                    effectiveRadius *= distScale;
+                }
+                return (distance <= effectiveRadius);
             }
             
             // Advanced FOV mode: check if cursor is inside the 3D box projection

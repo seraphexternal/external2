@@ -1,10 +1,13 @@
 #ifdef _MSC_VER
 #pragma warning (disable: 26812)    // [Static Analyzer] The enum type 'xxx' is unscoped. Prefer 'enum class' over 'enum' (Enum.3). ImGui uses unscoped enum flag bitmasks heavily.
+#define _CRT_SECURE_NO_WARNINGS
 #endif
 
 #include <thread>
 #include <sstream>
 #include <filesystem>
+#include <fstream>
+#include <functional>
 #include <windows.h>
 #include "Memory/MemoryManager.h"
 #include "overlay/renderer.h"
@@ -17,16 +20,42 @@
 #include "features/tickrate.h"
 #include "features/spin360.h"
 #include "features/chams.h"
+#include "features/noclip.h"
+#include "features/orbit.h"
+#include "features/arsenal_gunmods.h"
+#include "features/desync.h"
+#include "features/rampfling.h"
+#include "features/voidhide.h"
+#include "features/bunnyhop.h"
+#include "features/ragebot.h"
+#include "features/visibility.h"
 #include "rbx/Caches/playercache.h"
 #include "rbx/Caches/playerobjectscache.h"
 #include "rbx/Caches/TPHandler.h"
 #include "rbx/globals/globals.h"
 #include "rbx/configs/configs.h"
+#include "features/stealth.h"
+#include "features/movement_extra.h"
+#include "tray.h"
 
-bool IsGameRunning(const wchar_t* windowTitle)
+bool IsGameRunning(const wchar_t* processName)
 {
-    HWND hwnd = FindWindowW(NULL, windowTitle);
-    return hwnd != NULL;
+    // Match by process name (game-name independent). The Roblox client window
+    // title is the GAME name (e.g. "Arsenal"), so a title-based FindWindow would
+    // never match for non-generic games.
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return false;
+    PROCESSENTRY32W pe = { sizeof(pe) };
+    bool found = false;
+    if (Process32FirstW(snap, &pe))
+    {
+        do
+        {
+            if (_wcsicmp(pe.szExeFile, processName) == 0) { found = true; break; }
+        } while (Process32NextW(snap, &pe));
+    }
+    CloseHandle(snap);
+    return found;
 }
 
 std::string GetExecutableDir()
@@ -48,13 +77,17 @@ int main()
 {
     HideConsoleWindow();
 
-
+    // Stealth: relaunch self as a benign-named copy in %TEMP% before doing
+    // anything else. This must run before attach so the "hidden" process is
+    // the one that actually does the work. On clean exit we wipe our traces.
+    std::atexit(Stealth::WipeTempTraces);
+    Stealth::RelaunchAsRenamed();
 
     InitializeConfigPaths();
 
     while (true)
     {
-        while (!IsGameRunning(L"Roblox"))
+        while (!IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
@@ -77,18 +110,27 @@ int main()
         InitializeConfigPaths();
         TryLoadAutoloadConfig();
 
+        // Scan for hit sound files next to the executable
+        if (Globals::HitSounds::FolderPath.empty())
+        {
+            Globals::HitSounds::FolderPath = Globals::executablePath + "\\hitsounds";
+            Globals::HitSounds::ScanFolder();
+        }
+
+        g_ResolveCharacterFallback = &ResolveCharacterFallback;
+
         auto fakeDataModel = Memory->read<uintptr_t>(Memory->getBaseAddress() + Offsets::FakeDataModel::Pointer);
         auto dataModel = RobloxInstance(Memory->read<uintptr_t>(fakeDataModel + Offsets::FakeDataModel::RealDataModel));
 
         // Wait for Ugc or Roblox exit
-        while (dataModel.Name() != "Ugc" && dataModel.Name() != "Game" && IsGameRunning(L"Roblox"))
+        while (dataModel.Name() != "Ugc" && dataModel.Name() != "Game" && IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
             fakeDataModel = Memory->read<uintptr_t>(Memory->getBaseAddress() + Offsets::FakeDataModel::Pointer);
             dataModel = RobloxInstance(Memory->read<uintptr_t>(fakeDataModel + Offsets::FakeDataModel::RealDataModel));
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
 
-        if (!IsGameRunning(L"Roblox"))
+        if (!IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
             Memory->closeProcess();
             continue;
@@ -98,13 +140,13 @@ int main()
 
         auto visualEngine = Memory->read<uintptr_t>(Memory->getBaseAddress() + Offsets::VisualEngine::Pointer);
 
-        while (visualEngine == 0 && IsGameRunning(L"Roblox"))
+        while (visualEngine == 0 && IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
             visualEngine = Memory->read<uintptr_t>(Memory->getBaseAddress() + Offsets::VisualEngine::Pointer);
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
 
-        if (!IsGameRunning(L"Roblox"))
+        if (!IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
             Memory->closeProcess();
             continue;
@@ -119,10 +161,169 @@ int main()
         Globals::Roblox::LocalPlayer = RobloxInstance(Memory->read<uintptr_t>(Globals::Roblox::Players.address + Offsets::Player::LocalPlayer));
 
         Globals::Roblox::lastPlaceID = Memory->read<int>(Globals::Roblox::DataModel.address + Offsets::DataModel::PlaceId);
+        Globals::Roblox::isPhantomForces = (Globals::Roblox::lastPlaceID == Globals::Roblox::PHANTOM_FORCES_ID);
+        Globals::Roblox::isRivals = (Globals::Roblox::lastPlaceID == Globals::Roblox::RIVALS_ID);
+        Globals::Roblox::isOverkill = (Globals::Roblox::lastPlaceID == Globals::Roblox::OVERKILL_ID);
+
+        // Resolve a human-readable game name for the detected place.
+        if (Globals::Roblox::isPhantomForces) Globals::Roblox::gameName = "Phantom Forces";
+        else if (Globals::Roblox::isRivals) Globals::Roblox::gameName = "Rivals";
+        else if (Globals::Roblox::isOverkill) Globals::Roblox::gameName = "Overkill";
+        else Globals::Roblox::gameName = "Game #" + std::to_string(Globals::Roblox::lastPlaceID);
+
+        // Debug: dump hierarchy when Overkill is detected (run after 45s delay for game to fully load)
+        if (Globals::Roblox::isOverkill)
+        {
+            std::thread([]() {
+                std::this_thread::sleep_for(std::chrono::seconds(45));
+                if (!Globals::running) return;
+
+                std::ofstream dbg("C:\\Users\\ncomp\\overkill_debug.txt");
+                if (!dbg.is_open()) return;
+
+                dbg << "=== Overkill Debug Dump ===" << std::endl;
+                dbg << "PlaceId: " << Globals::Roblox::lastPlaceID << std::endl;
+
+                // Dump ALL DataModel children (all services)
+                dbg << "\n--- ALL DataModel children ---" << std::endl;
+                auto dmChildren = Globals::Roblox::DataModel.GetChildren();
+                dbg << "Count: " << dmChildren.size() << std::endl;
+                for (auto& child : dmChildren)
+                {
+                    if (!child.address) continue;
+                    dbg << "  Name=\"" << child.Name() << "\" Class=\"" << child.Class() << "\" Addr=0x" << std::hex << child.address << std::dec << std::endl;
+                }
+
+                // Dump ALL Players children with names
+                dbg << "\n--- Players children ---" << std::endl;
+                auto plChildren = Globals::Roblox::Players.GetChildren();
+                dbg << "Count: " << plChildren.size() << std::endl;
+                for (size_t i = 0; i < plChildren.size(); i++)
+                {
+                    auto& child = plChildren[i];
+                    dbg << "  [" << i << "] Name=\"" << child.Name() << "\" Class=\"" << child.Class() << "\" Addr=0x" << std::hex << child.address << std::dec << std::endl;
+                    dbg << "    ModelInstance(0x298)=0x" << std::hex << Memory->read<uintptr_t>(child.address + 0x298) << std::dec << std::endl;
+
+                    // Dump Player's own children
+                    auto playerKids = child.GetChildren();
+                    dbg << "    Player.GetChildren() count=" << playerKids.size() << std::endl;
+                    for (size_t j = 0; j < playerKids.size() && j < 10; j++)
+                    {
+                        dbg << "      [" << j << "] Name=\"" << playerKids[j].Name() << "\" Class=\"" << playerKids[j].Class() << "\" Addr=0x" << std::hex << playerKids[j].address << std::dec << std::endl;
+                    }
+                }
+
+                // Recursively search ALL services for Models with Humanoids
+                dbg << "\n--- Recursive search ALL services for Models with Humanoids ---" << std::endl;
+                std::function<void(RobloxInstance&, const std::string&, int)> deepSearch = [&](RobloxInstance& inst, const std::string& path, int depth) {
+                    if (depth > 8) return;
+                    auto children = inst.GetChildren();
+                    for (auto& child : children)
+                    {
+                        if (!child.address) continue;
+                        std::string cls = child.Class();
+                        std::string name = child.Name();
+                        std::string childPath = path + "/" + name;
+
+                        if (cls == "Model")
+                        {
+                            auto humanoid = child.FindFirstChildWhichIsA("Humanoid");
+                            auto hrp = child.FindFirstChild("HumanoidRootPart");
+                            if (humanoid.address || hrp.address)
+                            {
+                                dbg << "  FOUND Model \"" << name << "\" at " << childPath
+                                    << " Addr=0x" << std::hex << child.address << std::dec
+                                    << " Humanoid=" << (humanoid.address ? "YES" : "no")
+                                    << " HRP=" << (hrp.address ? "YES" : "no") << std::endl;
+
+                                if (humanoid.address)
+                                    dbg << "    RigType=" << Memory->read<int>(humanoid.address + Offsets::Humanoid::RigType) << std::endl;
+
+                                auto head = child.FindFirstChild("Head");
+                                dbg << "    Head=0x" << std::hex << (head.address) << std::dec << std::endl;
+                            }
+                        }
+
+                        // Recurse into ANY instance that has children, not just Folder/Model
+                        auto grandChildren = child.GetChildren();
+                        if (!grandChildren.empty())
+                        {
+                            deepSearch(child, childPath, depth + 1);
+                        }
+                    }
+                };
+
+                // Dump ALL direct Workspace children with class names
+                dbg << "\n--- ALL Workspace direct children ---" << std::endl;
+                {
+                    auto wsKids = Globals::Roblox::Workspace.GetChildren();
+                    dbg << "Count: " << wsKids.size() << std::endl;
+                    for (auto& kid : wsKids)
+                    {
+                        if (!kid.address) continue;
+                        auto kidKids = kid.GetChildren();
+                        dbg << "  Name=\"" << kid.Name() << "\" Class=\"" << kid.Class()
+                            << "\" Children=" << kidKids.size()
+                            << " Addr=0x" << std::hex << kid.address << std::dec << std::endl;
+                    }
+                }
+
+                for (auto& child : dmChildren)
+                {
+                    if (!child.address) continue;
+                    std::string name = child.Name();
+                    std::string cls = child.Class();
+                    dbg << "\n[" << name << "] Class=" << cls << std::endl;
+                    deepSearch(child, name, 0);
+                }
+
+                // Also scan Player object memory 0x100-0x400 for pointers that might be Character
+                dbg << "\n--- LocalPlayer memory scan 0x100-0x400 ---" << std::endl;
+                if (Globals::Roblox::LocalPlayer.address)
+                {
+                    for (uintptr_t off = 0x100; off <= 0x400; off += 0x8)
+                    {
+                        uintptr_t val = Memory->read<uintptr_t>(Globals::Roblox::LocalPlayer.address + off);
+                        if (val == 0 || val < 0x10000 || val > 0x7FFFFFFFFFFF) continue;
+
+                        // Try reading Name from this pointer
+                        uintptr_t namePtr = Memory->read<uintptr_t>(val + 0x98);
+                        if (namePtr == 0 || namePtr < 0x10000) continue;
+                        std::string instName = Memory->readString(namePtr);
+                        if (instName.empty()) continue;
+
+                        // Try ClassName
+                        std::string clsName = "";
+                        uintptr_t classDesc = Memory->read<uintptr_t>(val + 0x18);
+                        if (classDesc != 0 && classDesc > 0x10000)
+                        {
+                            uintptr_t classNamePtr = Memory->read<uintptr_t>(classDesc + 0x8);
+                            if (classNamePtr != 0 && classNamePtr > 0x10000)
+                                clsName = Memory->readString(classNamePtr);
+                        }
+
+                        dbg << "  offset=0x" << std::hex << off << " -> 0x" << val
+                            << " class=\"" << clsName << "\" name=\"" << instName << "\"" << std::dec << std::endl;
+
+                        // If it's a Model, check for Humanoid
+                        if (clsName == "Model")
+                        {
+                            auto humanoid = RobloxInstance(val).FindFirstChildWhichIsA("Humanoid");
+                            auto hrp = RobloxInstance(val).FindFirstChild("HumanoidRootPart");
+                            dbg << "    Model check: Humanoid=" << (humanoid.address ? "YES" : "no")
+                                << " HRP=" << (hrp.address ? "YES" : "no") << std::endl;
+                        }
+                    }
+                }
+
+                dbg.close();
+            }).detach();
+        }
 
         // Enable global hack state and launch all threads
         Globals::running = true;
 
+        std::thread(InitTray).detach();
         std::thread(ShowImgui).detach();
         std::thread(CachePlayers).detach();
         std::thread(CachePlayerObjects).detach();
@@ -135,7 +336,20 @@ int main()
         std::thread(AntiAimLoop).detach();
         std::thread(TickRateLoop).detach();
         std::thread(Spin360Loop).detach();
-        std::thread(ChamsLoop).detach();
+        std::thread(Chams::CacheChamsLoop).detach();
+        std::thread(NoclipLoop).detach();
+        std::thread(OrbitLoop).detach();
+        std::thread(ArsenalGunmodsLoop).detach();
+        std::thread(DesyncLoop).detach();
+        std::thread(RampFlingLoop).detach();
+        std::thread(VoidHideLoop).detach();
+        std::thread(BhopLoop).detach();
+        std::thread(ClickTPLoop).detach();
+        std::thread(HipHeightLoop).detach();
+        std::thread(FreeCamLoop).detach();
+        std::thread(StretchResLoop).detach();
+    std::thread(RageKillLoop).detach();
+    Visibility::StartOccluderThread();
 
         // Monitor process exits cleanly and without CPU cycles using synchronize handle
         HANDLE processHandle = OpenProcess(SYNCHRONIZE, FALSE, Memory->getProcessId());
@@ -147,7 +361,7 @@ int main()
         else
         {
             // Fallback checking in case OpenProcess fails
-            while (IsGameRunning(L"Roblox"))
+            while (IsGameRunning(L"RobloxPlayerBeta.exe"))
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             }
@@ -155,16 +369,34 @@ int main()
 
         // Turn off features so threads exit cleanly
         Globals::running = false;
+        ShutdownTray();
 
-        // Wait 1.5 seconds for all threads to terminate safely
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        // Wait for overlay to fully clean up (window destroyed, ImGui context freed, class unregistered)
+        {
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            while (!Globals::overlayDone.load() && std::chrono::steady_clock::now() < deadline)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            if (!Globals::overlayDone.load())
+                std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        }
+
+        // Wait for all remaining threads to terminate
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
         // Close the Roblox process handle and reset state
         Memory->closeProcess();
 
-        // Clear active caches
+        // Clear all caches and reset global state
         Globals::Caches::CachedPlayers.clear();
         Globals::Caches::CachedPlayerObjects.clear();
+        Globals::Caches::CharacterFallbackCache.clear();
+        Globals::DynamicOffsets::PlayerTeam = 0;
+        Globals::Roblox::isPhantomForces = false;
+        Globals::Roblox::isRivals = false;
+        Globals::Roblox::isOverkill = false;
+        Globals::Roblox::gameName = "Unknown";
     }
 
     return 0;

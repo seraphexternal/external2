@@ -5032,9 +5032,8 @@ bool ImGui::beginchildex(const char* name, ImGuiID id, const ImVec2& size_arg, b
     ImGuiWindow* parent_window = g.CurrentWindow;
 
     flags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_ChildWindow;
-    flags |= (parent_window->Flags & ImGuiWindowFlags_NoMove);  // Inherit the NoMove flag
+    flags |= (parent_window->Flags & ImGuiWindowFlags_NoMove);
 
-    // Size calculation
     const ImVec2 content_avail = GetContentRegionAvail();
     ImVec2 child_size = ImFloor(size_arg);
     const int auto_fit_axises = ((child_size.x == 0.0f) ? (1 << ImGuiAxis_X) : 0x00) | ((child_size.y == 0.0f) ? (1 << ImGuiAxis_Y) : 0x00);
@@ -5044,7 +5043,6 @@ bool ImGui::beginchildex(const char* name, ImGuiID id, const ImVec2& size_arg, b
         child_size.y = ImMax(content_avail.y + child_size.y, 4.0f);
     SetNextWindowSize(child_size);
 
-    // Build up name
     char title[256];
     if (name)
         ImFormatString(title, IM_ARRAYSIZE(title), "%s/%s_%08X", parent_window->Name, name, id);
@@ -5061,66 +5059,59 @@ bool ImGui::beginchildex(const char* name, ImGuiID id, const ImVec2& size_arg, b
     child_window->ChildId = id;
     child_window->AutoFitChildAxises = (ImS8)auto_fit_axises;
 
-    // Set cursor position
     if (child_window->BeginCount == 1)
         parent_window->DC.CursorPos = child_window->Pos;
 
-    // Process navigation
     if (g.NavActivateId == id && !(flags & ImGuiWindowFlags_NavFlattened) && (child_window->DC.NavLayerActiveMask != 0 || child_window->DC.NavHasScroll))
     {
         FocusWindow(child_window);
         NavInitWindow(child_window, false);
-        SetActiveID(id + 1, child_window); // Steal ActiveId with another arbitrary id so that key-press won't activate child item
+        SetActiveID(id + 1, child_window);
         g.ActiveIdSource = ImGuiInputSource_Nav;
     }
 
-    // Drawing custom top section
     ImVec2 pos = ImGui::GetWindowPos();
     ImVec2 render_size = child_window->Size;
     ImDrawList* draw_list = parent_window->DrawList;
 
-    // Ensure clipping
     ImRect clip_rect(pos, pos + render_size);
     draw_list->PushClipRect(clip_rect.Min, clip_rect.Max);
 
-    // Draw top background
-    draw_list->AddRectFilled(pos + ImVec2(0, border ? 20 : 5), pos + ImVec2(render_size.x, 25), ImColor(11, 11, 11), 0);
+    const float rounding = 8.0f;
 
-    // Draw gradient effect
-    int fade_line_count = 150;
-    float fade_stop = render_size.x;
-    float gradient_length = fade_stop / 4.0f;
-    for (int i = 0; i < fade_line_count; i++)
+    // Soft drop shadow (faked with a few stacked offset rects)
+    for (int i = 3; i >= 1; i--)
     {
-        float alpha = 0.075f - (i * (0.075f / fade_line_count));
-        ImVec2 start_left = pos + ImVec2(i * (gradient_length / fade_line_count), 25);
-        ImVec2 end_left = pos + ImVec2((i + 1) * (gradient_length / fade_line_count), 25);
-        ImVec2 start_right = pos + ImVec2(fade_stop - i * (gradient_length / fade_line_count), 25);
-        ImVec2 end_right = pos + ImVec2(fade_stop - (i + 1) * (gradient_length / fade_line_count), 25);
-
-        ImColor fade_color(255.0f / 255.0f, 255.0f / 255.0f, 255.0f / 255.0f, alpha);
-        draw_list->AddLine(start_left, end_left, fade_color);
-        draw_list->AddLine(start_right, end_right, fade_color);
+        float o = (float)i * 1.5f;
+        draw_list->AddRectFilled(pos + ImVec2(-o, -o + 2.0f), pos + render_size + ImVec2(o, o + 2.0f),
+            IM_COL32(0, 0, 0, 10), rounding + o);
     }
 
-    // Draw outline
-    const float opacity = 0.50f;
-    const ImU32 color = ImColor(255, 255, 255, static_cast<int>(opacity * 23));
-    draw_list->AddRect(
-        pos + ImVec2(0, border ? 25 : 5),
-        pos + render_size,
-        color,
-        0
-    );
+    // Panel background - subtle transparent dark (layered above window)
+    draw_list->AddRectFilled(pos, pos + render_size,
+        IM_COL32(22, 23, 28, 220), rounding);
 
-    // Draw title
-    draw_list->AddText(pos + ImVec2(5, border ? 22 : 7), ImColor(255, 255, 255, 100), name);
+    // Thin hairline border
+    draw_list->AddRect(pos, pos + render_size,
+        IM_COL32(255, 255, 255, 20), rounding, 0, 1.0f);
 
-    // Restore clipping
+    // Subtle inner top highlight
+    draw_list->AddLine(pos + ImVec2(2, 1.5f), pos + ImVec2(render_size.x - 2, 1.5f),
+        IM_COL32(255, 255, 255, 12), 1.0f);
+
+    // Title text (brighter, near-white)
+    draw_list->AddText(pos + ImVec2(10, 8),
+        IM_COL32(232, 234, 240, 235), name);
+
+    // Thin separator under header
+    draw_list->AddLine(pos + ImVec2(8, 24), pos + ImVec2(render_size.x - 8, 24),
+        IM_COL32(255, 255, 255, 14), 1.0f);
+
     draw_list->PopClipRect();
 
-    // Ensure the child window has a placeholder for interactions
-    InvisibleButton("SpacingYEAH", ImVec2(render_size.x, 30));
+    // Spacing for header content (scaled with font)
+    const float spH = 32.0f * (ImGui::GetFontSize() / g.Font->FontSize);
+    InvisibleButton("SpacingYEAH", ImVec2(render_size.x, spH));
 
     return ret;
 }

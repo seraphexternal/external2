@@ -13,7 +13,12 @@ inline void RunMacro()
     static bool wasKeyPressed = false;
     bool isKeyPressed = KeyBind::IsPressed(Options::Macro::MacroKey);
     
-    if (Options::Macro::ToggleType == 1)
+    if (Options::Macro::ToggleType == 2)
+    {
+        // Always On
+        Options::Macro::Toggled = true;
+    }
+    else if (Options::Macro::ToggleType == 1)
     {
         // Toggle mode
         if (isKeyPressed && !wasKeyPressed)

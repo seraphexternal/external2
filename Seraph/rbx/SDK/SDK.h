@@ -14,6 +14,13 @@ namespace Globals {
     }
 }
 
+class RobloxInstance;
+
+// Character fallback: when Player::ModelInstance offset is wrong (e.g. new Roblox versions),
+// this function pointer resolves the character by searching Workspace for matching Models.
+using CharacterFallbackFn = RobloxInstance(*)(uintptr_t playerAddress);
+inline CharacterFallbackFn g_ResolveCharacterFallback = nullptr;
+
 class RobloxInstance
 {
 public:
@@ -23,6 +30,8 @@ public:
 	{
 		address = addy;
 	}
+
+	RobloxInstance() : address(0) {}
 
 	operator bool() const
 	{
@@ -147,7 +156,10 @@ public:
 
 	inline RobloxInstance Character() const
 	{
-		return RobloxInstance(Memory->read<uintptr_t>(address + Offsets::Player::ModelInstance));
+		uintptr_t addr = Memory->read<uintptr_t>(address + Offsets::Player::ModelInstance);
+		if (addr) return RobloxInstance(addr);
+		if (g_ResolveCharacterFallback) return g_ResolveCharacterFallback(address);
+		return RobloxInstance(0);
 	}
 
 	inline float Health() const
