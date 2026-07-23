@@ -4981,48 +4981,7 @@ bool ImGui::BeginChildEx(const char* name, ImGuiID id, const ImVec2& size_arg, b
         g.ActiveIdSource = ImGuiInputSource_Nav;
     }
 
-    // Start custom drawing
-    ImVec2 pos = ImGui::GetWindowPos();
-    ImVec2 render_size = child_window->Size;
-    ImDrawList* draw_list = parent_window->DrawList;
-
-    // Push clipping rectangle to restrict drawing area
-    draw_list->PushClipRect(pos, pos + render_size);
-
-    // Draw top background
-    draw_list->AddRectFilled(pos + ImVec2(0, border ? 20 : 5), pos + ImVec2(render_size.x, 25), ImColor(11, 11, 11), 0);
-
-    // Draw gradient effect
-    int fade_line_count = 150;
-    float fade_stop = render_size.x;
-    float gradient_length = fade_stop / 4.0f;
-    for (int i = 0; i < fade_line_count; i++)
-    {
-        float alpha = 0.075f - (i * (0.075f / fade_line_count));
-        ImVec2 start_left = pos + ImVec2(i * (gradient_length / fade_line_count), 25);
-        ImVec2 end_left = pos + ImVec2((i + 1) * (gradient_length / fade_line_count), 25);
-        ImVec2 start_right = pos + ImVec2(fade_stop - i * (gradient_length / fade_line_count), 25);
-        ImVec2 end_right = pos + ImVec2(fade_stop - (i + 1) * (gradient_length / fade_line_count), 25);
-
-        ImColor fade_color(255.0f, 255.0f, 255.0f, alpha);
-        draw_list->AddLine(start_left, end_left, fade_color);
-        draw_list->AddLine(start_right, end_right, fade_color);
-    }
-
-    // Draw outline
-    const float opacity = 0.50f;
-    const ImU32 color = ImColor(255, 255, 255, static_cast<int>(opacity * 23));
-    draw_list->AddRect(pos + ImVec2(0, border ? 25 : 5), pos + render_size, color, 0);
-
-    // Draw title text
-    draw_list->AddText(pos + ImVec2(5, border ? 22 : 7), ImColor(255, 255, 255, 100), name);
-
-    // Pop clipping rectangle to end custom drawing
-    draw_list->PopClipRect();
-
-    // Ensure placeholder for interactions
-    InvisibleButton("SpacingYEAH", ImVec2(render_size.x, 30));
-
+    // BeginChildEx: no decorations (plain scrollable child window)
     return ret;
 }
 
@@ -5087,25 +5046,31 @@ bool ImGui::beginchildex(const char* name, ImGuiID id, const ImVec2& size_arg, b
             IM_COL32(0, 0, 0, 10), rounding + o);
     }
 
-    // Panel background - subtle transparent dark (layered above window)
+    // Panel background - fully opaque autopsy-style deep blue card
     draw_list->AddRectFilled(pos, pos + render_size,
-        IM_COL32(22, 23, 28, 220), rounding);
+        IM_COL32(5, 7, 11, 255), rounding);
 
-    // Thin hairline border
+    // Thin accent-aware hairline border
     draw_list->AddRect(pos, pos + render_size,
-        IM_COL32(255, 255, 255, 20), rounding, 0, 1.0f);
+        IM_COL32(18, 22, 30, 255), rounding, 0, 1.0f);
 
     // Subtle inner top highlight
     draw_list->AddLine(pos + ImVec2(2, 1.5f), pos + ImVec2(render_size.x - 2, 1.5f),
-        IM_COL32(255, 255, 255, 12), 1.0f);
+        IM_COL32(18, 22, 30, 255), 1.0f);
 
     // Title text (brighter, near-white)
-    draw_list->AddText(pos + ImVec2(10, 8),
-        IM_COL32(232, 234, 240, 235), name);
+    if (name) {
+        const char* disp = (name[0] == '#' && name[1] == '#') ? nullptr : name;
+        const char* dsep = disp ? strstr(disp, "##") : nullptr;
+        if (dsep) { static char _dbuf[256]; int len = (int)(dsep - disp); memcpy(_dbuf, disp, len); _dbuf[len] = 0; disp = _dbuf; }
+        if (disp && disp[0])
+            draw_list->AddText(pos + ImVec2(10, 8),
+                IM_COL32(232, 242, 249, 235), disp);
+    }
 
     // Thin separator under header
     draw_list->AddLine(pos + ImVec2(8, 24), pos + ImVec2(render_size.x - 8, 24),
-        IM_COL32(255, 255, 255, 14), 1.0f);
+        IM_COL32(14, 18, 24, 255), 1.0f);
 
     draw_list->PopClipRect();
 

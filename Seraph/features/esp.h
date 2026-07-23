@@ -1100,26 +1100,13 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
     static bool  s_WasDrag = false;
     static ImVec2 s_LastM = {};
     {
-        if (Options::ESP::PreviewAutoRotate)
-        {
-            s_RotAngle += Options::ESP::PreviewRotationSpeed * ImGui::GetIO().DeltaTime;
-            if (s_RotAngle > 360.0f) s_RotAngle -= 360.0f;
-        }
+        // Rotation disabled — preview stays at 0°
 
         const ImVec2 pMin(origin.x, origin.y);
         const ImVec2 pMax(origin.x + size.x, origin.y + size.y);
         const bool hover = ImGui::IsMouseHoveringRect(pMin, pMax);
 
-        // Left-drag = rotate
-        if (hover && ImGui::IsMouseDown(0))
-        {
-            ImVec2 m = ImGui::GetIO().MousePos;
-            if (!s_WasDrag) { s_LastM = m; s_WasDrag = true; }
-            else { s_RotAngle += (m.x - s_LastM.x) * 0.8f; s_LastM = m; }
-            if (s_RotAngle > 360.0f) s_RotAngle -= 360.0f;
-            if (s_RotAngle < 0.0f) s_RotAngle += 360.0f;
-        }
-        else s_WasDrag = false;
+        // Rotation disabled
 
         // Middle-drag = move
         {

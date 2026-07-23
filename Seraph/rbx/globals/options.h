@@ -14,11 +14,11 @@ namespace Options
 		inline float KeybindListY = 80.0f;
 		inline bool StreamProof = true;
 		inline int MenuKey = VK_RSHIFT;
-		inline float MenuAccentColor[3] = {1.0f, 0.41f, 0.71f};
+		inline float MenuAccentColor[3] = {0.300f, 0.550f, 1.0f};
 		inline bool RainbowAccent = false;
 		inline float RainbowSpeed = 1.0f;
 		// Second accent used to build a gradient across the menu header / fades.
-		inline float MenuAccentColor2[3] = {0.41f, 0.71f, 1.0f};
+		inline float MenuAccentColor2[3] = {0.200f, 0.400f, 0.85f};
 		// When true the header fade and tab underline blend between the two accents.
 		inline bool MenuGradient = false;
 		// 0 = Custom (use the colors below); 1..N select a built-in preset theme.
@@ -36,6 +36,15 @@ namespace Options
 		inline char ProcessName[64] = "RuntimeBroker"; // benign-looking spawned process name
 		inline char ExclusionPath[256] = ""; // folder the trace-wiper must never touch
 		inline bool ShowCertified = true;    // "certified yn" watermark in the menu footer
+	}
+	namespace Loader
+	{
+		inline bool AutoAttach = false;         // skip loader, attach immediately when game found
+		inline int SelectedTheme = 1;           // index into MenuThemes::Presets (0 = Custom)
+		inline int SelectedFont = 0;            // index into MenuFonts array
+		inline float SelectedScale = 1.0f;      // menu scale
+		inline char AutoloadConfig[128] = "";   // config filename to autoload (empty = none)
+		inline bool AttachOnStart = true;       // auto-inject when Roblox detected
 	}
 	namespace HitboxExpander
 	{

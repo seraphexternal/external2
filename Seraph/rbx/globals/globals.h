@@ -65,7 +65,7 @@ namespace Globals
         inline int lastPlaceID;
         inline std::string gameName = "Unknown";
         inline bool isPhantomForces = false;
-        inline constexpr int PHANTOM_FORCES_ID = 113491250;
+        inline constexpr int PHANTOM_FORCES_ID = 292439477;
 		inline bool isRivals = false;
 		inline constexpr int RIVALS_ID = (int)17625359962;
 		inline bool isOverkill = false;

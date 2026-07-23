@@ -37,6 +37,7 @@
 #include "features/stealth.h"
 #include "features/movement_extra.h"
 #include "tray.h"
+#include "overlay/loader.h"
 
 bool IsGameRunning(const wchar_t* processName)
 {
@@ -75,6 +76,7 @@ static void HideConsoleWindow()
 
 int main()
 {
+    OutputDebugStringA("[Seraph] main: START\n");
     HideConsoleWindow();
 
     // Stealth: relaunch self as a benign-named copy in %TEMP% before doing
@@ -85,27 +87,47 @@ int main()
 
     InitializeConfigPaths();
 
+    // ── Loader UI ──────────────────────────────────────────────────────
+    // Show the loader window for stealth/theme/font/config selection.
+    // If AutoAttach is enabled or user clicks Inject, proceed to injection.
+    if (!Options::Loader::AutoAttach)
+    {
+        bool injected = Loader::Run();
+if (!injected)
+    {
+        OutputDebugStringA("[Seraph] main: loader returned false, exiting\n");
+        return 0; // user closed the loader without injecting
+    }
+OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n");
+    OutputDebugStringA("[Seraph] main: waiting for Roblox...\n");
+    }
+
     while (true)
     {
+        OutputDebugStringA("[Seraph] main: checking for Roblox...\n");
         while (!IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
+        OutputDebugStringA("[Seraph] main: Roblox found, attaching...\n");
 
         // Wait 1.5 seconds to let Roblox fully spin up before attaching
         std::this_thread::sleep_for(std::chrono::milliseconds(1500));
 
         if (!Memory->attachToProcess("RobloxPlayerBeta.exe"))
         {
+            OutputDebugStringA("[Seraph] main: attachToProcess FAILED\n");
             std::this_thread::sleep_for(std::chrono::milliseconds(3000));
             continue;
         }
+        OutputDebugStringA("[Seraph] main: attachToProcess OK\n");
 
         if (Memory->getProcessId("RobloxPlayerBeta.exe") == 0)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(2000));
             continue;
         }
+        OutputDebugStringA("[Seraph] main: got PID, launching threads...\n");
 
         InitializeConfigPaths();
         TryLoadAutoloadConfig();
@@ -119,13 +141,89 @@ int main()
 
         g_ResolveCharacterFallback = &ResolveCharacterFallback;
 
-        auto fakeDataModel = Memory->read<uintptr_t>(Memory->getBaseAddress() + Offsets::FakeDataModel::Pointer);
-        auto dataModel = RobloxInstance(Memory->read<uintptr_t>(fakeDataModel + Offsets::FakeDataModel::RealDataModel));
+        OutputDebugStringA("[Seraph] main: reading FakeDataModel...\n");
+        uintptr_t base = Memory->getBaseAddress();
+        auto fakeDataModel = Memory->read<uintptr_t>(base + Offsets::FakeDataModel::Pointer);
+        char dbg[256];
+        sprintf_s(dbg, "[Seraph] main: FakeDataModel pointer = 0x%llx\n", fakeDataModel);
+        OutputDebugStringA(dbg);
+        
+        if (fakeDataModel == 0) {
+            OutputDebugStringA("[Seraph] main: FakeDataModel is 0, trying VisualEngine path...\n");
+            auto visualEngine = Memory->read<uintptr_t>(base + Offsets::VisualEngine::Pointer);
+            sprintf_s(dbg, "[Seraph] main: VisualEngine = 0x%llx\n", visualEngine);
+            OutputDebugStringA(dbg);
+            if (visualEngine != 0) {
+                fakeDataModel = Memory->read<uintptr_t>(visualEngine + Offsets::VisualEngine::FakeDataModel);
+                sprintf_s(dbg, "[Seraph] main: FakeDataModel from VisualEngine = 0x%llx\n", fakeDataModel);
+                OutputDebugStringA(dbg);
+            }
+        }
+        
+        if (fakeDataModel == 0) {
+            OutputDebugStringA("[Seraph] main: trying TaskScheduler path...\n");
+            auto taskScheduler = Memory->read<uintptr_t>(base + Offsets::TaskScheduler::Pointer);
+            sprintf_s(dbg, "[Seraph] main: TaskScheduler = 0x%llx\n", taskScheduler);
+            OutputDebugStringA(dbg);
+            if (taskScheduler != 0) {
+                auto renderJob = Memory->read<uintptr_t>(taskScheduler + 0x38); // RenderJob from TaskScheduler
+                if (renderJob != 0) {
+                    fakeDataModel = Memory->read<uintptr_t>(renderJob + Offsets::RenderJob::FakeDataModel);
+                    sprintf_s(dbg, "[Seraph] main: FakeDataModel from RenderJob = 0x%llx\n", fakeDataModel);
+                    OutputDebugStringA(dbg);
+                }
+            }
+        }
+        
+        if (fakeDataModel == 0) {
+            OutputDebugStringA("[Seraph] main: waiting for pointers to populate...\n");
+            int waitCount = 0;
+            while (fakeDataModel == 0 && IsGameRunning(L"RobloxPlayerBeta.exe") && waitCount < 60) {
+                fakeDataModel = Memory->read<uintptr_t>(base + Offsets::FakeDataModel::Pointer);
+                if (fakeDataModel == 0) {
+                    auto ve = Memory->read<uintptr_t>(base + Offsets::VisualEngine::Pointer);
+                    if (ve != 0) {
+                        fakeDataModel = Memory->read<uintptr_t>(ve + Offsets::VisualEngine::FakeDataModel);
+                    }
+                }
+                if (fakeDataModel == 0) {
+                    auto ts = Memory->read<uintptr_t>(base + Offsets::TaskScheduler::Pointer);
+                    if (ts != 0) {
+                        auto rj = Memory->read<uintptr_t>(ts + 0x38);
+                        if (rj != 0) {
+                            fakeDataModel = Memory->read<uintptr_t>(rj + Offsets::RenderJob::FakeDataModel);
+                        }
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                waitCount++;
+            }
+            sprintf_s(dbg, "[Seraph] main: after wait, FakeDataModel = 0x%llx\n", fakeDataModel);
+            OutputDebugStringA(dbg);
+        }
+        
+        if (fakeDataModel == 0) {
+            OutputDebugStringA("[Seraph] main: Failed to get FakeDataModel, continuing...\n");
+        }
+        
+        auto realDataModelPtr = Memory->read<uintptr_t>(fakeDataModel + Offsets::FakeDataModel::RealDataModel);
+        sprintf_s(dbg, "[Seraph] main: RealDataModel = 0x%llx\n", realDataModelPtr);
+        OutputDebugStringA(dbg);
+        
+        auto dataModel = RobloxInstance(realDataModelPtr);
 
         // Wait for Ugc or Roblox exit
+        OutputDebugStringA("[Seraph] main: waiting for DataModel (Ugc/Game)...\n");
+        int dmWait = 0;
         while (dataModel.Name() != "Ugc" && dataModel.Name() != "Game" && IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
-            fakeDataModel = Memory->read<uintptr_t>(Memory->getBaseAddress() + Offsets::FakeDataModel::Pointer);
+            if (dmWait % 5 == 0) {
+                char dbg[256];
+                sprintf_s(dbg, "[Seraph] main: dataModel.addr=0x%llx, Name()=\"%s\"\n", dataModel.address, dataModel.Name().c_str());
+                OutputDebugStringA(dbg);
+            }
+            dmWait++;
+            fakeDataModel = Memory->read<uintptr_t>(Offsets::FakeDataModel::Pointer);
             dataModel = RobloxInstance(Memory->read<uintptr_t>(fakeDataModel + Offsets::FakeDataModel::RealDataModel));
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
@@ -138,11 +236,15 @@ int main()
 
         Globals::Roblox::DataModel = dataModel;
 
-        auto visualEngine = Memory->read<uintptr_t>(Memory->getBaseAddress() + Offsets::VisualEngine::Pointer);
-
+        OutputDebugStringA("[Seraph] main: reading VisualEngine...\n");
+        auto visualEngine = Memory->read<uintptr_t>(base + Offsets::VisualEngine::Pointer);
+        OutputDebugStringA("[Seraph] main: waiting for VisualEngine\n");
+        int veWait = 0;
         while (visualEngine == 0 && IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
-            visualEngine = Memory->read<uintptr_t>(Memory->getBaseAddress() + Offsets::VisualEngine::Pointer);
+            if (veWait % 5 == 0) OutputDebugStringA("[Seraph] main: still waiting for VisualEngine...\n");
+            veWait++;
+            visualEngine = Memory->read<uintptr_t>(base + Offsets::VisualEngine::Pointer);
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
 
@@ -153,12 +255,17 @@ int main()
         }
 
         Globals::Roblox::VisualEngine = visualEngine;
+        OutputDebugStringA("[Seraph] main: got VisualEngine\n");
 
         Globals::Roblox::Workspace = Globals::Roblox::DataModel.FindFirstChildWhichIsA("Workspace");
+        OutputDebugStringA("[Seraph] main: got Workspace\n");
         Globals::Roblox::Players = Globals::Roblox::DataModel.FindFirstChildWhichIsA("Players");
+        OutputDebugStringA("[Seraph] main: got Players\n");
         Globals::Roblox::Camera = Globals::Roblox::Workspace.FindFirstChildWhichIsA("Camera");
+        OutputDebugStringA("[Seraph] main: got Camera\n");
 
         Globals::Roblox::LocalPlayer = RobloxInstance(Memory->read<uintptr_t>(Globals::Roblox::Players.address + Offsets::Player::LocalPlayer));
+        OutputDebugStringA("[Seraph] main: got LocalPlayer\n");
 
         Globals::Roblox::lastPlaceID = Memory->read<int>(Globals::Roblox::DataModel.address + Offsets::DataModel::PlaceId);
         Globals::Roblox::isPhantomForces = (Globals::Roblox::lastPlaceID == Globals::Roblox::PHANTOM_FORCES_ID);
@@ -320,11 +427,15 @@ int main()
             }).detach();
         }
 
+        OutputDebugStringA("[Seraph] main: about to launch threads\n");
         // Enable global hack state and launch all threads
         Globals::running = true;
+        OutputDebugStringA("[Seraph] main: launching threads\n");
 
         std::thread(InitTray).detach();
+        OutputDebugStringA("[Seraph] main: InitTray launched\n");
         std::thread(ShowImgui).detach();
+        OutputDebugStringA("[Seraph] main: ShowImgui launched\n");
         std::thread(CachePlayers).detach();
         std::thread(CachePlayerObjects).detach();
         std::thread(TPHandler).detach();

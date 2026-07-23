@@ -9,7 +9,8 @@ inline void TPHandler()
 {
 	while (Globals::running)
 	{
-		auto fakeDataModel = Memory->read<uintptr_t>(Memory->getBaseAddress() + Offsets::FakeDataModel::Pointer);
+		uintptr_t base = Memory->getBaseAddress();
+		auto fakeDataModel = Memory->read<uintptr_t>(base + Offsets::FakeDataModel::Pointer);
 		auto dataModel = RobloxInstance(Memory->read<uintptr_t>(fakeDataModel + Offsets::FakeDataModel::RealDataModel));
 		auto placeId = Memory->read<int>(dataModel.address + Offsets::DataModel::PlaceId);
 		uintptr_t visualEngine;
@@ -27,22 +28,23 @@ inline void TPHandler()
 
 			while (dataModel.Name() != "Ugc" && dataModel.Name() != "Game" && Globals::running)
 			{
-				fakeDataModel = Memory->read<uintptr_t>(Memory->getBaseAddress() + Offsets::FakeDataModel::Pointer);
+				fakeDataModel = Memory->read<uintptr_t>(base + Offsets::FakeDataModel::Pointer);
 				dataModel = RobloxInstance(Memory->read<uintptr_t>(fakeDataModel + Offsets::FakeDataModel::RealDataModel));
 				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 			}
 
 			if (!Globals::running) break;
 
-			Globals::Roblox::DataModel = dataModel;
+Globals::Roblox::DataModel = dataModel;
 
-			visualEngine = Memory->read<uintptr_t>(Memory->getBaseAddress() + Offsets::VisualEngine::Pointer);
+		uintptr_t base = Memory->getBaseAddress();
+		visualEngine = Memory->read<uintptr_t>(base + Offsets::VisualEngine::Pointer);
 
-			while (visualEngine == 0 && Globals::running)
-			{
-				visualEngine = Memory->read<uintptr_t>(Memory->getBaseAddress() + Offsets::VisualEngine::Pointer);
-				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-			}
+		while (visualEngine == 0 && Globals::running)
+		{
+			visualEngine = Memory->read<uintptr_t>(base + Offsets::VisualEngine::Pointer);
+			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+		}
 
 			if (!Globals::running) break;
 
