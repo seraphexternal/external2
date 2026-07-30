@@ -182,11 +182,11 @@ namespace UI
         s.WindowBorderSize  = 0.0f;
         s.FrameBorderSize   = 0.0f;
         s.WindowPadding     = ImVec2(0.0f, 0.0f);
-        s.FramePadding      = ImVec2(8.0f, 5.0f);
-        s.ItemSpacing       = ImVec2(8.0f, 7.0f);
-        s.CellPadding       = ImVec2(8.0f, 7.0f);
-        s.ItemInnerSpacing  = ImVec2(6, 4);
-        s.ScrollbarSize     = 4.0f;
+        s.FramePadding      = ImVec2(10.0f, 6.0f);
+        s.ItemSpacing       = ImVec2(10.0f, 8.0f);
+        s.CellPadding       = ImVec2(10.0f, 8.0f);
+        s.ItemInnerSpacing  = ImVec2(8, 5);
+        s.ScrollbarSize     = 6.0f;
         s.PopupBorderSize   = 1.0f;
 
         // ImGui colors — derived from the theme palette
@@ -400,7 +400,7 @@ namespace UI
             ImGui::PushStyleColor(ImGuiCol_Border, P.line);
             ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 12.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(13.0f, 12.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 14.0f));
             const bool open = ImGui::BeginChild(id, size, true, ImGuiWindowFlags_AlwaysVerticalScrollbar);
             if (open && title)
             {
@@ -813,6 +813,24 @@ namespace UI
 
         ImGui::PopID();
         return false;
+    }
+
+    inline void Tooltip(const char* text)
+    {
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::PushStyleColor(ImGuiCol_PopupBg, P.card);
+            ImGui::PushStyleColor(ImGuiCol_Border, P.line);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 8.0f));
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(280.0f);
+            ImGui::TextColored(P.text, "%s", text);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+            ImGui::PopStyleVar(2);
+            ImGui::PopStyleColor(2);
+        }
     }
 
     inline bool CheckboxWithColorPicker(const char* label, bool* v, float col[3])

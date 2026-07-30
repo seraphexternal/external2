@@ -74,7 +74,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(SolutionDir)build</OutDir>
     <IntDir>$(SolutionDir)build\shit</IntDir>
-    <TargetName>Fleasion</TargetName>
+    <TargetName>Seraph</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -211,7 +211,7 @@
   </ItemGroup>
   <!-- Resource Files -->
   <ItemGroup>
-    <ResourceCompile Include="fleasion.rc" />
+    <ResourceCompile Include="seraph.rc" />
   </ItemGroup>
   <!-- Assembly Files -->
   <ItemGroup>

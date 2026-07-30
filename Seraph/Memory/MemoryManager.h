@@ -56,6 +56,7 @@ public:
 	void setBaseAddress(uintptr_t newBaseAddress);
 
 	void closeProcess();
+	HANDLE getHandle() { return processHandle; }
 };
 
 template <typename T>

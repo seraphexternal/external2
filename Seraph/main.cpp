@@ -38,6 +38,7 @@
 #include "features/movement_extra.h"
 #include "tray.h"
 #include "overlay/loader.h"
+#include "features/rivals_skinchanger.h"
 
 bool IsGameRunning(const wchar_t* processName)
 {
@@ -457,10 +458,11 @@ OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n"
         std::thread(BhopLoop).detach();
         std::thread(ClickTPLoop).detach();
         std::thread(HipHeightLoop).detach();
-        std::thread(FreeCamLoop).detach();
-        std::thread(StretchResLoop).detach();
-    std::thread(RageKillLoop).detach();
-    Visibility::StartOccluderThread();
+		std::thread(FreeCamLoop).detach();
+		std::thread(StretchResLoop).detach();
+		std::thread(RageKillLoop).detach();
+		std::thread(RivalsSkinChangerLoop).detach();
+		Visibility::StartOccluderThread();
 
         // Monitor process exits cleanly and without CPU cycles using synchronize handle
         HANDLE processHandle = OpenProcess(SYNCHRONIZE, FALSE, Memory->getProcessId());

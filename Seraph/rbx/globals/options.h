@@ -566,6 +566,13 @@ namespace Options
 		inline bool IgnoreFlash = false;
 	}
 
+	namespace RivalsSkinChanger
+	{
+		inline bool Enabled = false;
+		inline char SkinName[64] = "AKEY-47";
+		inline char WeaponName[64] = "AssaultRifle";
+	}
+
 	namespace Desync
 	{
 		inline bool Enabled = false;

@@ -933,13 +933,13 @@ return nullptr;
 return io.Fonts->AddFontFromFileTTF(path, size, &config, io.Fonts->GetGlyphRangesJapanese());
 };
 
-if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\verdana.ttf", 13.0f), "C:\\Windows\\Fonts\\verdana.ttf", "Verdana" };
-if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\segoeui.ttf", 13.0f), "C:\\Windows\\Fonts\\segoeui.ttf", "Segoe UI" };
-if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\tahoma.ttf", 13.0f),  "C:\\Windows\\Fonts\\tahoma.ttf",  "Tahoma" };
-if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\arial.ttf",   13.0f), "C:\\Windows\\Fonts\\arial.ttf",   "Arial" };
-if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\georgia.ttf",  13.0f), "C:\\Windows\\Fonts\\georgia.ttf",  "Georgia" };
-if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\calibri.ttf",  13.0f), "C:\\Windows\\Fonts\\calibri.ttf",  "Calibri" };
-if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\consola.ttf",  13.0f), "C:\\Windows\\Fonts\\consola.ttf",  "Consolas" };
+if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\verdana.ttf", 14.0f), "C:\\Windows\\Fonts\\verdana.ttf", "Verdana" };
+if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\segoeui.ttf", 14.0f), "C:\\Windows\\Fonts\\segoeui.ttf", "Segoe UI" };
+if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\tahoma.ttf", 14.0f),  "C:\\Windows\\Fonts\\tahoma.ttf",  "Tahoma" };
+if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\arial.ttf",   14.0f), "C:\\Windows\\Fonts\\arial.ttf",   "Arial" };
+if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\georgia.ttf",  14.0f), "C:\\Windows\\Fonts\\georgia.ttf",  "Georgia" };
+if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\calibri.ttf",  14.0f), "C:\\Windows\\Fonts\\calibri.ttf",  "Calibri" };
+if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\consola.ttf",  14.0f), "C:\\Windows\\Fonts\\consola.ttf",  "Consolas" };
 
 // Mirror the loaded fonts into the file-scope MenuFonts namespace so
 // ShowImgui can switch between them at runtime via PushFont/PopFont
@@ -968,6 +968,7 @@ ImGui_ImplWin32_Init(hwnd);
 
     bool done = false;
     bool menu_open = false;
+    static bool gMenuWasEverOpen = false;
     int tab = 0;
     int tab2 = 0;
     int lastTab = -1;
@@ -1027,9 +1028,7 @@ if (g_MenuWeatherNeedsBootstrap)
 MenuWeather::Rebootstrap();
 g_MenuWeatherNeedsBootstrap = false;
 }
-MenuWeather::Update((float)ImGui::GetIO().DisplaySize.x, (float)ImGui::GetIO().DisplaySize.y);
-
-// Keep Roblox global instance pointers updated/valid to prevent stale-pointer crashes
+    // Keep Roblox global instance pointers updated/valid to prevent stale-pointer crashes
 if (Globals::Roblox::DataModel.address)
 {
 static DWORD lastUpdateTick = 0;
@@ -1044,33 +1043,38 @@ Globals::Roblox::LocalPlayer = RobloxInstance(Memory->read<uintptr_t>(Globals::R
 }
 }
 
-if (Options::Misc::MenuKey != 0 && (GetAsyncKeyState(Options::Misc::MenuKey) & 1))
-{
-menu_open = !menu_open;
-SetTransparency(hwnd, !menu_open);
-}
+    if (Options::Misc::MenuKey != 0 && (GetAsyncKeyState(Options::Misc::MenuKey) & 1))
+    {
+        menu_open = !menu_open;
+        gMenuWasEverOpen = true;
+        SetTransparency(hwnd, !menu_open);
+    }
 
-// Fade animation
-static float menuAlpha = 0.0f;
-static float backgroundAlpha = 0.0f;
-float fadeSpeed = 0.08f; // Adjust for faster/slower fade
+    // Fade animation
+    static float menuAlpha = 0.0f;
+    static float backgroundAlpha = 0.0f;
+    float fadeSpeed = 0.08f;
 
-if (menu_open)
-{
-if (menuAlpha < 1.0f) menuAlpha += fadeSpeed;
-if (menuAlpha > 1.0f) menuAlpha = 1.0f;
+    if (menu_open)
+    {
+        if (menuAlpha < 1.0f) menuAlpha += fadeSpeed;
+        if (menuAlpha > 1.0f) menuAlpha = 1.0f;
 
-if (backgroundAlpha < 0.7f) backgroundAlpha += fadeSpeed;
-if (backgroundAlpha > 0.7f) backgroundAlpha = 0.7f;
-}
-else
-{
-if (menuAlpha > 0.0f) menuAlpha -= fadeSpeed;
-if (menuAlpha < 0.0f) menuAlpha = 0.0f;
+        if (backgroundAlpha < 0.7f) backgroundAlpha += fadeSpeed;
+        if (backgroundAlpha > 0.7f) backgroundAlpha = 0.7f;
+    }
+    else
+    {
+        if (menuAlpha > 0.0f) menuAlpha -= fadeSpeed;
+        if (menuAlpha < 0.0f) menuAlpha = 0.0f;
 
-if (backgroundAlpha > 0.0f) backgroundAlpha -= fadeSpeed;
-if (backgroundAlpha < 0.0f) backgroundAlpha = 0.0f;
-}
+        if (backgroundAlpha > 0.0f) backgroundAlpha -= fadeSpeed;
+        if (backgroundAlpha < 0.0f) backgroundAlpha = 0.0f;
+    }
+
+    // Skip weather physics when the menu has never been opened
+    if (gMenuWasEverOpen && (menu_open || menuAlpha > 0.0f))
+        MenuWeather::Update((float)ImGui::GetIO().DisplaySize.x, (float)ImGui::GetIO().DisplaySize.y);
 
 // Dynamic streamproof toggle
 static bool lastStreamProofState = Options::Misc::StreamProof;
@@ -1158,10 +1162,10 @@ IM_COL32(0, 0, 0, static_cast<int>(backgroundAlpha * 180))
         UI::SidebarX = 0.0f;
         UI::SidebarW = 178.0f * sc;
         UI::ContentX = UI::SidebarW + 1.0f;
-        UI::ContentW = 760.0f - UI::ContentX;
-        UI::CardW = (UI::ContentW - 24.0f * sc) * 0.5f;
-        const float menuWidth = 760.0f;
-        const float menuHeight = 548.0f;
+        UI::ContentW = 960.0f - UI::ContentX;
+        UI::CardW = (UI::ContentW - 32.0f * sc) * 0.5f;
+        const float menuWidth = 960.0f;
+        const float menuHeight = 620.0f;
 // Window frame stays a fixed size so dragging the scale slider doesn't
 // resize the window under the cursor (which caused a big/small feedback loop).
 // Zoom is applied to content via SetWindowFontScale + scaled positions.
@@ -1206,7 +1210,7 @@ menuDragging = false;
 // Scale widgets/text inside the menu to match the zoom factor.
 ImGui::SetWindowFontScale(sc);
 
-// Apply the cohesive Fleasion design system: unified palette +
+// Apply the cohesive Seraph design system: unified palette +
 // global style so every widget (built-in or UI::) matches.
 UI::ApplyStyle(main_color,
 ImVec4(themeBg[0], themeBg[1], themeBg[2], 1.0f),
@@ -1287,7 +1291,7 @@ ImVec4(themePanel[0], themePanel[1], themePanel[2], 1.0f));
             ImVec2(p.x + sbW, p.y + s.y - 10.0f * sc),
             ImGui::ColorConvertFloat4ToU32(ImVec4(UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, 0.16f)), 1.0f * sc);
 
-        // Logo area: accent bar + "FLEASION" + "BETA" badge
+        // Logo area: accent bar + "SERAPH" + "BETA" badge
         {
             const float logoY = p.y + 25.0f * sc;
             const float logoX = p.x + 22.0f * sc;
@@ -1302,8 +1306,8 @@ ImVec4(themePanel[0], themePanel[1], themePanel[2], 1.0f));
                 ? MenuFonts::Fonts[Options::Misc::MenuFont] : io.FontDefault;
             draw->AddText(logoFont, 21.0f * sc,
                 ImVec2(logoX + 8.0f * sc, logoY),
-                IM_COL32(255, 255, 255, 255), "FLEASION");
-            ImVec2 textSize = logoFont->CalcTextSizeA(21.0f * sc, FLT_MAX, 0, "FLEASION");
+                IM_COL32(255, 255, 255, 255), "SERAPH");
+            ImVec2 textSize = logoFont->CalcTextSizeA(21.0f * sc, FLT_MAX, 0, "SERAPH");
             draw->AddRectFilled(
                 ImVec2(logoX + 8.0f * sc + textSize.x + 7.0f * sc, logoY + 2.0f * sc),
                 ImVec2(logoX + 8.0f * sc + textSize.x + 7.0f * sc + 36.0f * sc, logoY + 15.0f * sc),
@@ -1320,7 +1324,7 @@ ImVec4(themePanel[0], themePanel[1], themePanel[2], 1.0f));
 
         // Header panel (right of sidebar, top strip)
         const float contentX = p.x + sbW;
-        const float headerH = 58.0f * sc;
+        const float headerH = 62.0f * sc;
         draw->AddRectFilled(
             ImVec2(contentX, p.y),
             ImVec2(p.x + s.x, p.y + headerH),
@@ -1477,13 +1481,13 @@ tab2 = 0;
 lastTab = tab;
 }
 
-// ── Content area layout constants (autopsy-style) ────────
-const float ctX = UI::ContentX + 12.0f * sc;
-const float ctPad = 12.0f * sc;
-const float ctW = s.x - UI::ContentX - 24.0f * sc;
-const float halfW = (ctW - 8.0f * sc) * 0.5f;
-const float fullW = ctW;
-const float hdrY = 58.0f * sc;
+        // ── Content area layout constants (autopsy-style) ────────
+        const float ctX = UI::ContentX + 16.0f * sc;
+        const float ctPad = 16.0f * sc;
+        const float ctW = s.x - UI::ContentX - 32.0f * sc;
+        const float halfW = (ctW - 12.0f * sc) * 0.5f;
+        const float fullW = ctW;
+        const float hdrY = 58.0f * sc;
 
 if (tab == 0)
 {
@@ -1497,8 +1501,6 @@ if (tab == 0)
             if (UI::ContentSubtab("Triggerbot", tab2 == 1, sa[1])) tab2 = 1;
             ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Hitbox", tab2 == 2, sa[2])) tab2 = 2;
-            ImGui::SameLine(0, 6.0f * sc);
-            if (UI::ContentSubtab("360 Spin", tab2 == 3, sa[3])) tab2 = 3;
             ImGui::Dummy(ImVec2(0, 8 * sc));
         }
 
@@ -1703,16 +1705,14 @@ if (tab == 0)
                     static const char* silentModes[]{ "Camera Only", "Camera + Mouse Spoof" };
                     UI::Combo("Silent Mode", &Options::Aimbot::SilentAimMode, silentModes, IM_ARRAYSIZE(silentModes));
                     UI::Checkbox("Real Cursor Snap (hits on Overkill)", &Options::Aimbot::SilentAimRealCursor);
+                    UI::Tooltip("Snaps your real cursor onto the target while firing so the shot lands. Visible flick on Overkill.");
                     UI::Checkbox("Teleport (no crosshair move)", &Options::Aimbot::SilentAimTeleport);
-                    if (Options::Aimbot::SilentAimRealCursor)
-                        ImGui::TextWrapped("Snaps your real cursor onto the target while firing so the shot lands. Visible flick on Overkill.");
-                    if (Options::Aimbot::SilentAimTeleport)
-                        ImGui::TextWrapped("Briefly teleports your character next to the target so the hit registers, then restores it.");
+                    UI::Tooltip("Teleports your character next to the target so the shot registers without moving the crosshair.");
                 }
 
                 UI::labelsection("SILENT LOCK");
                 UI::Checkbox("Silent Lock", &Options::Aimbot::SilentLock);
-
+                UI::Tooltip("Silently keeps aim on the closest target. Camera Rotation writes the camera matrix; Viewport Offset shifts the hit point.");
                 UI::Bind("##silentlock_key", &Options::Aimbot::SilentLockKey, &Options::Aimbot::SilentLockMode);
 
                 if (Options::Aimbot::SilentLock)
@@ -1720,16 +1720,15 @@ if (tab == 0)
                     static const char* lockModes[]{ "Camera Rotation", "Viewport Offset" };
                     UI::Combo("Lock Mode", &Options::Aimbot::SilentLockMode, lockModes, IM_ARRAYSIZE(lockModes));
                     UI::Checkbox("Target Line", &Options::Aimbot::TargetLine);
-                    ImGui::TextWrapped("Hold the key to silently keep aim on the closest target. Camera Rotation writes the camera matrix (no view flick); Viewport Offset shifts the hit point only.");
                 }
 
                 UI::labelsection("AIM INFO");
                 UI::Checkbox("Enable", &Options::Aimbot::AimInfo);
+                UI::Tooltip("Draws a HUD with the current target's info at the top-right corner.");
                 UI::Checkbox("Name", &Options::Aimbot::AimInfoName);
                 UI::Checkbox("Distance", &Options::Aimbot::AimInfoDistance);
                 UI::Checkbox("Health", &Options::Aimbot::AimInfoHealth);
                 UI::Checkbox("Part", &Options::Aimbot::AimInfoPart);
-                ImGui::TextWrapped("Draws a HUD with the current target's info (top-right).");
 
                 ImGui::Dummy(ImVec2(0, 10));
                 ImGui::Separator();
@@ -1742,8 +1741,9 @@ if (tab == 0)
                 if (Options::Aimbot::Flickbot)
                 {
                     UI::SliderFloat("Flick FOV", &Options::Aimbot::FlickbotFOV, 10.0f, 400.0f, "%.0f");
+                    UI::Tooltip("Maximum angle to search for targets. Higher values can snap to enemies further from your crosshair.");
                     UI::SliderFloat("Smoothing", &Options::Aimbot::FlickbotSmoothing, 0.0f, 1.0f, "%.2f");
-                    ImGui::TextWrapped("On key press, snaps to the nearest enemy inside Flick FOV. 0 smoothing = instant flick.");
+                    UI::Tooltip("Higher values create a smoother, more natural flick. 0 = instant snap.");
                 }
 
                 UI::labelsection("VISUALS");
@@ -1921,42 +1921,10 @@ if (tab == 0)
             }
             UI::card::end();
 
-            // Right panel empty for now - could add preview
+            // Preview panel
             ImGui::SetCursorPosY(panelY);
             ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-            if (UI::card::begin("##hitbox_preview", ImVec2(halfW, 470 * sc), "PREVIEW"))
-            {
-                ImGui::TextWrapped("Hitbox expander increases the collision size of player hitboxes. Use Horizontal/Vertical Size to control expansion amount. 'Show Hitbox' renders the expanded boxes in-game. 'Walk Through' lets you pass through expanded hitboxes.");
-            }
-            UI::card::end();
-        }
-        else if (tab2 == 3)
-        {
-            // ── 360 Spin ──
-            const float panelY = ImGui::GetCursorPosY();
-            ImGui::SetCursorPosX(ctX);
-            if (UI::card::begin("##spin360_main", ImVec2(halfW, 470 * sc), "360 SPIN"))
-            {
-                UI::labelsection("MAIN");
-                UI::Checkbox("Enable 360 Spin", &Options::Spin360::Enabled);
-                ImGui::Dummy(ImVec2(0, 6));
-                ImGui::TextWrapped("Spins your camera in a full 360° circle while the Spin Key is held. Works in both first and third person.");
-
-                UI::labelsection("SETTINGS");
-                UI::SliderFloat("Spin Speed", &Options::Spin360::Speed, 1.0f, 45.0f, "%.1f deg/tick");
-
-                UI::labelsection("KEYBIND");
-                UI::Bind("##spin360_key", &Options::Spin360::HotKey);
-            }
-            UI::card::end();
-
-            ImGui::SetCursorPosY(panelY);
-            ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-            if (UI::card::begin("##spin360_settings", ImVec2(halfW, 470 * sc), "SETTINGS"))
-            {
-                ImGui::TextWrapped("Hold the bind key to spin. Speed controls degrees per tick.");
-            }
-            UI::card::end();
+            // (preview rendered in ESP overlay)
         }
 }
 else if (tab == 2)
@@ -2504,7 +2472,7 @@ else if (tab == 4)
         // Content header + horizontal subtab bar
         UI::ContentHeader("MOVEMENT");
         {
-            static float sa[11] = {};
+            static float sa[12] = {};
             ImGui::SetCursorPosX(ctX);
             if (UI::ContentSubtab("Fly", tab2 == 0, sa[0])) tab2 = 0;
             ImGui::SameLine(0, 4.0f * sc);
@@ -2525,6 +2493,8 @@ else if (tab == 4)
             if (UI::ContentSubtab("VoidHide", tab2 == 8, sa[8])) tab2 = 8;
             ImGui::SameLine(0, 4.0f * sc);
             if (UI::ContentSubtab("Bhop", tab2 == 9, sa[9])) tab2 = 9;
+            ImGui::SameLine(0, 4.0f * sc);
+            if (UI::ContentSubtab("360 Spin", tab2 == 11, sa[11])) tab2 = 11;
             ImGui::SameLine(0, 4.0f * sc);
             if (UI::ContentSubtab("Extra", tab2 == 10, sa[10])) tab2 = 10;
             ImGui::Dummy(ImVec2(0, 8 * sc));
@@ -2693,6 +2663,28 @@ RenderVoidHideSubtab(main_color);
 else if (tab2 == 9) {
 RenderBhopSubtab(main_color);
 }
+else if (tab2 == 11) {
+const float panelY = ImGui::GetCursorPosY();
+ImGui::SetCursorPosX(ctX);
+if (UI::card::begin("##spin360_main", ImVec2(halfW, 470 * sc), "360 SPIN"))
+{
+UI::labelsection("MAIN");
+                UI::Checkbox("Enable 360 Spin", &Options::Spin360::Enabled);
+UI::Tooltip("Spins your camera in a full 360 circle while the key is held.");
+}
+UI::card::end();
+
+ImGui::SetCursorPosY(panelY);
+ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+if (UI::card::begin("##spin360_settings", ImVec2(halfW, 470 * sc), "SETTINGS"))
+{
+UI::labelsection("CONTROLS");
+UI::SliderFloat("Spin Speed", &Options::Spin360::Speed, 1.0f, 45.0f, "%.1f deg/tick");
+UI::Bind("##spin360_key", &Options::Spin360::HotKey);
+UI::Tooltip("Hold this key to continuously spin your camera.");
+}
+UI::card::end();
+}
 else if (tab2 == 10) {
 const float panelY = ImGui::GetCursorPosY();
 ImGui::SetCursorPosX(ctX);
@@ -2700,9 +2692,9 @@ if (UI::card::begin("##clicktp", ImVec2(halfW, 470 * sc), "CLICK TP"))
 {
 UI::labelsection("MAIN");
 UI::Checkbox("Enabled", &Options::ClickTP::Enabled);
-UI::Bind("##clicktp_key", &Options::ClickTP::Key);
-UI::SliderFloat("Max Distance", &Options::ClickTP::MaxDistance, 50.0f, 5000.0f, "%.0f");
-ImGui::TextWrapped("On key press, teleports you to the point under the cursor (default LMB).");
+                UI::Bind("##clicktp_key", &Options::ClickTP::Key);
+                UI::Tooltip("Teleports you to the point under the cursor when the key is pressed.");
+                UI::SliderFloat("Max Distance", &Options::ClickTP::MaxDistance, 50.0f, 5000.0f, "%.0f");
 }
 UI::card::end();
 
@@ -2775,10 +2767,7 @@ on ? "[active]" : "[generic]");
 gameFlag("Phantom Forces (camera-rotation silent aim)", Globals::Roblox::isPhantomForces);
 gameFlag("Rivals (smoke/flash bypass)", Globals::Roblox::isRivals);
 gameFlag("Overkill / Chickynoid (cursor-snap silent aim)", Globals::Roblox::isOverkill);
-gameFlag("Generic Roblox (viewport / camera aim)", !Globals::Roblox::isPhantomForces && !Globals::Roblox::isRivals && !Globals::Roblox::isOverkill);
-
-ImGui::Spacing();
-ImGui::TextWrapped("Detection is based on the running game's PlaceId. Generic mode uses camera/viewport memory writes that work across most experiences. Game-specific tweaks improve silent-aim reliability where the engine differs.");
+                gameFlag("Generic Roblox (viewport / camera aim)", !Globals::Roblox::isPhantomForces && !Globals::Roblox::isRivals && !Globals::Roblox::isOverkill);
 
 UI::labelsection("ARSENAL GUNMODS");
 UI::Checkbox("No Recoil", &Options::ArsenalGunmods::NoRecoil);
@@ -2808,8 +2797,9 @@ if (tab == 1 && tab2 == 0 && Options::ESP::Enabled && menuAlpha > 0.0f && menuPo
 // Active binds list
 if (Options::Misc::KeybindList)
 {
-struct BindEntry { const char* name; const char* mode; };
-std::vector<BindEntry> activeBinds;
+    struct BindEntry { const char* name; const char* mode; };
+    static std::vector<BindEntry> activeBinds;
+    activeBinds.clear();
 
 if (Options::Fly::Enabled)
 {

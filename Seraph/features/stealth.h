@@ -82,7 +82,7 @@ namespace Stealth
         {
             CloseHandle(pi.hThread);
             CloseHandle(pi.hProcess);
-            ExitProcess(0); // terminate the original Fleasion.exe instance
+            ExitProcess(0); // terminate the original Seraph.exe instance
         }
         // If spawn failed, fall through and run normally.
     }
@@ -101,7 +101,7 @@ namespace Stealth
     // like our artifacts by name prefix to avoid touching unrelated data.
     inline void WipeTempTraces()
     {
-        const wchar_t* prefixes[] = { L"Seraph", L"Fleasion", L"sourcestackz" };
+        const wchar_t* prefixes[] = { L"Seraph", L"sourcestackz" };
         auto tryWipeDir = [&](const std::wstring& root)
         {
             std::error_code ec;
