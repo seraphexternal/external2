@@ -64,12 +64,24 @@ namespace Options
 		
 		inline bool TeamCheck = false;
 		inline int BoxType = 1; // 0 = None, 1 = Normal Box, 2 = 3D Box
+		inline bool BoxFill = false;
+		inline bool BoxFillGradient = false;
+		inline int BoxFillType = 0; // 0 = Vertical, 1 = Horizontal, 2 = Four-Corner
+		inline bool BoxFillGradientRotate = false;
+		inline float BoxFillSpeed = 2.0f;
+		inline float BoxFillColor[4] = { 0.0f, 0.5f, 1.0f, 0.5f };
+		inline float BoxFillTopColor[4] = { 0.96f, 0.71f, 0.96f, 0.5f };
+		inline float BoxFillBottomColor[4] = { 0.0f, 0.0f, 0.0f, 0.5f };
 		inline bool Tracers = true;
 		inline int TracersStart = 0;
 		inline bool Skeleton = true;
 		inline bool Name = true;
 		inline bool Distance = true;
 		inline bool Health = true;
+		inline bool GradientHealthbar = false;
+		inline float HealthbarTopColor[4] = { 0.0f, 1.0f, 0.0f, 1.0f };
+		inline float HealthbarMiddleColor[4] = { 1.0f, 1.0f, 0.0f, 1.0f };
+		inline float HealthbarBottomColor[4] = { 1.0f, 0.0f, 0.0f, 1.0f };
 		inline bool HeadCircle = true;
 		inline bool HeadDot = true;
 		inline bool CornerESP = true;
@@ -80,6 +92,8 @@ namespace Options
 		inline float PreviewRotationSpeed = 45.0f;
 		inline bool Headless = false;
 		inline bool ShowWeapon = true;
+		inline bool RigType = false;
+		inline float RigTypeColor[3] = { 1.0f, 1.0f, 1.0f };
 
 		inline float Color[3] = {1.0f, 1.0f, 1.0f};
 		inline float BoxColor[3] = {1.0f, 1.0f, 1.0f};
@@ -186,6 +200,23 @@ namespace Options
 		inline bool SilentLock = false;
 		inline int SilentLockKey = 0;
 		inline int SilentLockMode = 0; // 0 = camera rotation, 1 = viewport offset
+
+		// --- Raycast Silent Aim (new) ---
+		inline bool SilentAimEnabled = false;
+		inline int SilentAimKey = 0;
+		inline int SilentAimToggleType = 1; // 0=Hold, 1=Toggle, 2=Always
+		inline bool SilentAimToggled = false;
+		inline float SilentAimFOV = 100.f;
+		inline float SilentAimSmoothness = 0.f; // 0=instant, >0=lerp
+		inline bool SilentAimCamera = true; // rotate camera
+		inline bool SilentAimMouse = false; // move mouse
+		inline bool SilentAimRealCursor2 = true; // use real cursor
+		inline int SilentAimTargetBone = 0; // 0=Head, 1=Torso, 2=UpperTorso, 3=LowerTorso
+		inline bool SilentAimTeamCheck = true;
+		inline bool SilentAimPrediction = false;
+		inline float SilentAimPredictionX = 1.0f;
+		inline float SilentAimPredictionY = 1.0f;
+		inline int SilentAimMethod = 0; // 0=Camera, 1=Mouse, 2=Both
 
 		// Aim Info: draws a small HUD with the current target's name, distance,
 		// health and the body part that would be hit.
@@ -399,7 +430,9 @@ namespace Options
 	namespace Combat
 	{
 		inline bool HitSounds = false;
-		inline int HitSoundType = 0; // 0 click, 1 bell, 2 bass, 3 hvhpissy, 4 hvhks, 5 hvhtag
+		inline int HitSoundType = 0; // 0 = Custom file, 1 = click, 2 = bell, 3 = bass, 4 = skeet, 5 = neverlose, 6 = rust, 7 = quake, 8 = cod, 9 = bubble, 10 = minecraft, 11 = fatality
+		inline char HitSoundFile[256] = "";
+		inline float HitSoundVolume = 1.0f;
 		inline bool HitNotifications = false;
 		inline bool HitChams = false;
 		inline bool HitEffects = false;
@@ -438,7 +471,20 @@ namespace Options
 		inline float OutdoorAmbient[3] = { 0.5f, 0.5f, 0.5f };
 		inline float FogColor[3] = { 0.75f, 0.75f, 0.75f };
 		inline bool SkyboxChanger = false;
-		inline int SkyboxPreset = 0; // 0 default, 1 night, 2 space, 3 sunset, 4 storm
+		inline int SkyboxPreset = 0; // 0 default, 1-10 skybox presets
+		inline bool RotateSkybox = false;
+		inline float SkyboxRotateSpeed = 1.0f;
+		inline bool Exposure = false;
+		inline float ExposureValue = 0.0f;
+
+		// Fang-style separate toggles
+		inline bool Ambience = false;
+		inline float AmbienceColor[4] = { 0.960784f, 0.709804f, 0.960784f, 1.0f };
+		inline bool FogEnabled = false;
+		inline float FogDistance = 300.0f;
+		inline float FogColor2[4] = { 0.960784f, 0.709804f, 0.960784f, 1.0f };
+		inline bool BrightnessEnabled = false;
+		inline float BrightnessValue = 1.0f;
 	}
 
 	namespace AntiAim
@@ -463,19 +509,19 @@ namespace Options
 		inline float Rate = 60.0f;
 	}
 
-	namespace Chams
+namespace Chams
 	{
 		inline bool Enabled = false;
-		inline int Mode = 0; // 0 = Outline, 1 = Fill, 2 = Highlight
-		inline int ShaderStyle = 2; // 0 = Rim, 1 = Reflective, 2 = Lit, 3 = Water
-		// Engine chams: force a material (e.g. Neon / ForceField) onto every player
-		// part for the classic "engine glow" look, using the cached player list.
-		inline bool EngineChams = false;
-		inline int Material = 8; // index into Chams::materialList (8 = ForceField)
-		inline float VisibleColor[4] = { 0.0f, 0.5f, 1.0f, 0.92f };
-		inline float OccludedColor[4] = { 1.0f, 0.15f, 0.15f, 0.85f };
-		inline float OutlineThickness = 2.0f;
+		inline bool ChamsFade = false;
+		inline int ChamsFadeSpeed = 2;
 		inline bool TeamCheck = true;
+		inline bool GradientFill = false;
+		inline bool Wireframe = false;
+		inline float WireframeThickness = 1.5f;
+		inline bool IncludeAccessories = true;
+		inline float FillColor[4] = { 0.960784f, 0.709804f, 0.960784f, 0.5f };
+		inline float FillColor2[4] = { 0.0f, 0.0f, 0.0f, 0.5f };
+		inline float OutlineColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 	}
 
 	namespace Weather

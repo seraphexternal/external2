@@ -166,6 +166,7 @@ namespace ESPPreviewAvatar
 #include "../rbx/globals/globals.h"
 #include "combatfeedback.h"
 #include "visibility.h"
+#include "chams.h"
 
 inline float EspClamp(float value, float minVal, float maxVal)
 {
@@ -198,16 +199,20 @@ inline void GetPlayerHealth(const RobloxPlayer& player, float& health, float& ma
 inline bool EspAnyEnabled()
 {
     return Options::ESP::BoxType != 0
+        || Options::ESP::BoxFill
         || Options::ESP::Tracers
         || Options::ESP::Skeleton
         || Options::ESP::Name
         || Options::ESP::Distance
         || Options::ESP::Health
+        || Options::ESP::GradientHealthbar
         || Options::ESP::HeadCircle
         || Options::ESP::HeadDot
         || Options::ESP::CornerESP
         || Options::ESP::HealthText
         || Options::ESP::EnemyHealthIndicator
+        || Options::ESP::RigType
+        || Options::Chams::Enabled
         || Options::Combat::HitChams
         || Options::ESP::VisibilityCheck
         || Options::ESP::VisibilityChams
@@ -513,6 +518,62 @@ inline void RenderESP(ImDrawList* drawList)
             drawList->AddRect(ImVec2(left, top), ImVec2(right, bottom), hitOutline, 0.f, 0, 2.0f);
         }
 
+        if (Options::ESP::BoxFill && Options::ESP::BoxType == 1)
+        {
+            if (Options::ESP::BoxFillGradient)
+            {
+                float time = Options::ESP::BoxFillGradientRotate
+                    ? static_cast<float>(ImGui::GetTime()) * Options::ESP::BoxFillSpeed
+                    : 0.0f;
+
+                float s = sinf(time);
+                float c = cosf(time);
+                float t1 = (s + 1.0f) * 0.5f;
+                float t2 = (c + 1.0f) * 0.5f;
+                float t3 = (-s + 1.0f) * 0.5f;
+                float t4 = (-c + 1.0f) * 0.5f;
+
+                auto lerpCol = [](const float a[4], const float b[4], float t) -> ImU32 {
+                    return IM_COL32(
+                        static_cast<int>((a[0] + (b[0] - a[0]) * t) * 255.f),
+                        static_cast<int>((a[1] + (b[1] - a[1]) * t) * 255.f),
+                        static_cast<int>((a[2] + (b[2] - a[2]) * t) * 255.f),
+                        static_cast<int>((a[3] + (b[3] - a[3]) * t) * 255.f));
+                };
+
+                ImU32 c_tl, c_tr, c_br, c_bl;
+
+                if (Options::ESP::BoxFillType == 0)
+                {
+                    c_tl = c_bl = lerpCol(Options::ESP::BoxFillTopColor, Options::ESP::BoxFillBottomColor, t1);
+                    c_tr = c_br = lerpCol(Options::ESP::BoxFillTopColor, Options::ESP::BoxFillBottomColor, t2);
+                }
+                else if (Options::ESP::BoxFillType == 1)
+                {
+                    c_tl = c_tr = lerpCol(Options::ESP::BoxFillTopColor, Options::ESP::BoxFillBottomColor, t1);
+                    c_bl = c_br = lerpCol(Options::ESP::BoxFillTopColor, Options::ESP::BoxFillBottomColor, t2);
+                }
+                else
+                {
+                    c_tl = lerpCol(Options::ESP::BoxFillTopColor, Options::ESP::BoxFillBottomColor, t1);
+                    c_tr = lerpCol(Options::ESP::BoxFillTopColor, Options::ESP::BoxFillBottomColor, t2);
+                    c_br = lerpCol(Options::ESP::BoxFillTopColor, Options::ESP::BoxFillBottomColor, t3);
+                    c_bl = lerpCol(Options::ESP::BoxFillTopColor, Options::ESP::BoxFillBottomColor, t4);
+                }
+
+                drawList->AddRectFilledMultiColor(ImVec2(left, top), ImVec2(right, bottom), c_tl, c_tr, c_br, c_bl);
+            }
+            else
+            {
+                const ImU32 fillColor = IM_COL32(
+                    static_cast<int>(Options::ESP::BoxFillColor[0] * 255.f),
+                    static_cast<int>(Options::ESP::BoxFillColor[1] * 255.f),
+                    static_cast<int>(Options::ESP::BoxFillColor[2] * 255.f),
+                    static_cast<int>(Options::ESP::BoxFillColor[3] * 255.f));
+                drawList->AddRectFilled(ImVec2(left, top), ImVec2(right, bottom), fillColor);
+            }
+        }
+
         if (Options::ESP::BoxType == 1)
         {
             ImU32 boxCol = activeBoxColor;
@@ -710,45 +771,175 @@ inline void RenderESP(ImDrawList* drawList)
 
         if (Options::ESP::Skeleton)
         {
-            auto drawBone = [&](const RobloxInstance& a, const RobloxInstance& b)
+            const ImU32 skelCol = IM_COL32(
+                static_cast<int>(Options::ESP::SkeletonColor[0] * 255.f),
+                static_cast<int>(Options::ESP::SkeletonColor[1] * 255.f),
+                static_cast<int>(Options::ESP::SkeletonColor[2] * 255.f),
+                255);
+            const ImU32 outlineCol = IM_COL32(0, 0, 0, 255);
+            const float thickness = Options::ESP::SkeletonThickness;
+
+            auto W2S = [&](const Vectors::Vector3& worldPos, ImVec2& out) -> bool
             {
-                if (!a.address || !b.address)
-                    return;
-
-                const auto p1 = WorldToScreen(a.Position());
-                const auto p2 = WorldToScreen(b.Position());
-                if (p1.x == -1.f || p1.y == -1.f || p2.x == -1.f || p2.y == -1.f)
-                    return;
-
-                drawList->AddLine(ImVec2(p1.x, p1.y), ImVec2(p2.x, p2.y), activeSkeletonColor, Options::ESP::SkeletonThickness);
+                auto screenPos = WorldToScreen(worldPos);
+                if (screenPos.x <= 0.f || screenPos.y <= 0.f) return false;
+                out.x = std::roundf(screenPos.x);
+                out.y = std::roundf(screenPos.y);
+                return true;
             };
 
-            if (player.RigType == 0)
+            auto DrawPoly = [&](const ImVec2* points, int count)
             {
-                drawBone(player.Head, player.Torso);
-                drawBone(player.Torso, player.Left_Arm);
-                drawBone(player.Torso, player.Right_Arm);
-                drawBone(player.Torso, player.Left_Leg);
-                drawBone(player.Torso, player.Right_Leg);
+                if (count < 2) return;
+                drawList->AddPolyline(points, count, outlineCol, false, thickness + 2.f);
+                drawList->AddPolyline(points, count, skelCol, false, thickness);
+            };
+
+            auto ProcessR6Chain = [&](const RobloxInstance* instances, int count)
+            {
+                ImVec2 screenPoints[8];
+                int validCount = 0;
+                for (int i = 0; i < count; ++i)
+                {
+                    if (!instances[i].address)
+                    {
+                        DrawPoly(screenPoints, validCount);
+                        validCount = 0;
+                        continue;
+                    }
+                    ImVec2 screenPos;
+                    if (!W2S(instances[i].Position(), screenPos))
+                    {
+                        DrawPoly(screenPoints, validCount);
+                        validCount = 0;
+                        continue;
+                    }
+                    screenPoints[validCount++] = screenPos;
+                }
+                DrawPoly(screenPoints, validCount);
+            };
+
+            auto ProcessR15Chain = [&](const Vectors::Vector3* points, int count)
+            {
+                ImVec2 screenPoints[8];
+                int validCount = 0;
+                for (int i = 0; i < count; ++i)
+                {
+                    ImVec2 screenPos;
+                    if (W2S(points[i], screenPos))
+                        screenPoints[validCount++] = screenPos;
+                }
+                DrawPoly(screenPoints, validCount);
+            };
+
+            if (player.Upper_Torso.address && player.Lower_Torso.address)
+            {
+                const RobloxInstance spine[] = { player.Head, player.Upper_Torso, player.Lower_Torso };
+                ProcessR6Chain(spine, 3);
+
+                const RobloxInstance leftArm[] = { player.Upper_Torso, player.Left_Upper_Arm, player.Left_Lower_Arm, player.Left_Hand };
+                ProcessR6Chain(leftArm, 4);
+
+                const RobloxInstance rightArm[] = { player.Upper_Torso, player.Right_Upper_Arm, player.Right_Lower_Arm, player.Right_Hand };
+                ProcessR6Chain(rightArm, 4);
+
+                const RobloxInstance leftLeg[] = { player.Lower_Torso, player.Left_Upper_Leg, player.Left_Lower_Leg, player.Left_Foot };
+                ProcessR6Chain(leftLeg, 4);
+
+                const RobloxInstance rightLeg[] = { player.Lower_Torso, player.Right_Upper_Leg, player.Right_Lower_Leg, player.Right_Foot };
+                ProcessR6Chain(rightLeg, 4);
             }
-            else
+            else if (player.Torso.address && player.Head.address)
             {
-                drawBone(player.Head, player.Upper_Torso);
-                drawBone(player.Upper_Torso, player.Lower_Torso);
-                drawBone(player.Upper_Torso, player.Left_Upper_Arm);
-                drawBone(player.Left_Upper_Arm, player.Left_Lower_Arm);
-                drawBone(player.Left_Lower_Arm, player.Left_Hand);
-                drawBone(player.Upper_Torso, player.Right_Upper_Arm);
-                drawBone(player.Right_Upper_Arm, player.Right_Lower_Arm);
-                drawBone(player.Right_Lower_Arm, player.Right_Hand);
-                drawBone(player.Lower_Torso, player.Left_Upper_Leg);
-                drawBone(player.Left_Upper_Leg, player.Left_Lower_Leg);
-                drawBone(player.Left_Lower_Leg, player.Left_Foot);
-                drawBone(player.Lower_Torso, player.Right_Upper_Leg);
-                drawBone(player.Right_Upper_Leg, player.Right_Lower_Leg);
-                drawBone(player.Right_Lower_Leg, player.Right_Foot);
+                const auto torsoPos = player.Torso.Position();
+                const auto torsoSize = player.Torso.Size();
+                const auto torsoCf = player.Torso.CFrame();
+                const auto headPos = player.Head.Position();
+                const auto headSize = player.Head.Size();
+
+                const Vectors::Vector3 up = torsoCf.GetUpVector();
+                const Vectors::Vector3 right = torsoCf.GetRightVector();
+
+                const Vectors::Vector3 shoulderCenter = torsoPos + up * (torsoSize.y * 0.2f);
+                const Vectors::Vector3 hipCenter = torsoPos - up * (torsoSize.y * 0.4f);
+                const Vectors::Vector3 headBottom = headPos - Vectors::Vector3{ 0, headSize.y * 0.5f, 0 };
+                const Vectors::Vector3 shoulderLeft = shoulderCenter - right * (torsoSize.x * 0.5f);
+                const Vectors::Vector3 shoulderRight = shoulderCenter + right * (torsoSize.x * 0.5f);
+
+                {
+                    const Vectors::Vector3 spinePts[] = { headPos, headBottom, shoulderCenter, hipCenter };
+                    ProcessR15Chain(spinePts, 4);
+                }
+
+                {
+                    Vectors::Vector3 armPts[4];
+                    int count = 0;
+                    armPts[count++] = shoulderCenter;
+                    armPts[count++] = shoulderLeft;
+
+                    if (player.Left_Arm.address)
+                    {
+                        const auto armPos = player.Left_Arm.Position();
+                        const auto armSize = player.Left_Arm.Size();
+                        const auto armUp = player.Left_Arm.CFrame().GetUpVector();
+                        armPts[count++] = armPos + armUp * (armSize.y * 0.2f);
+                        armPts[count++] = armPos - armUp * (armSize.y * 0.5f);
+                    }
+                    ProcessR15Chain(armPts, count);
+                }
+
+                {
+                    Vectors::Vector3 armPts[4];
+                    int count = 0;
+                    armPts[count++] = shoulderCenter;
+                    armPts[count++] = shoulderRight;
+
+                    if (player.Right_Arm.address)
+                    {
+                        const auto armPos = player.Right_Arm.Position();
+                        const auto armSize = player.Right_Arm.Size();
+                        const auto armUp = player.Right_Arm.CFrame().GetUpVector();
+                        armPts[count++] = armPos + armUp * (armSize.y * 0.2f);
+                        armPts[count++] = armPos - armUp * (armSize.y * 0.5f);
+                    }
+                    ProcessR15Chain(armPts, count);
+                }
+
+                {
+                    Vectors::Vector3 legPts[3];
+                    int count = 0;
+                    legPts[count++] = hipCenter;
+
+                    if (player.Left_Leg.address)
+                    {
+                        const auto legPos = player.Left_Leg.Position();
+                        const auto legSize = player.Left_Leg.Size();
+                        const auto legUp = player.Left_Leg.CFrame().GetUpVector();
+                        legPts[count++] = legPos + legUp * (legSize.y * 0.5f);
+                        legPts[count++] = legPos - legUp * (legSize.y * 0.5f);
+                    }
+                    ProcessR15Chain(legPts, count);
+                }
+
+                {
+                    Vectors::Vector3 legPts[3];
+                    int count = 0;
+                    legPts[count++] = hipCenter;
+
+                    if (player.Right_Leg.address)
+                    {
+                        const auto legPos = player.Right_Leg.Position();
+                        const auto legSize = player.Right_Leg.Size();
+                        const auto legUp = player.Right_Leg.CFrame().GetUpVector();
+                        legPts[count++] = legPos + legUp * (legSize.y * 0.5f);
+                        legPts[count++] = legPos - legUp * (legSize.y * 0.5f);
+                    }
+                    ProcessR15Chain(legPts, count);
+                }
             }
         }
+
+        Chams::RenderChams(drawList, player);
 
         if (Options::ESP::HeadCircle && headScreen.x != -1.f && headScreen.y != -1.f)
         {
@@ -817,7 +1008,15 @@ inline void RenderESP(ImDrawList* drawList)
                 int w = 0, h = 0;
                 wchar_t widePath[256];
                 MultiByteToWideChar(CP_UTF8, 0, Options::ESP::CustomImagePath, -1, widePath, 256);
-                ESPPreviewAvatar::LoadTextureWithGDIPlus(g_pd3dDevice, widePath, &s_CustomImg, &w, &h);
+                if (!ESPPreviewAvatar::LoadTextureWithGDIPlus(g_pd3dDevice, widePath, &s_CustomImg, &w, &h))
+                {
+                    // Debug output
+                    OutputDebugStringA(("[Seraph] Failed to load custom image: " + s_CustomImgPath + "\n").c_str());
+                }
+                else
+                {
+                    OutputDebugStringA(("[Seraph] Loaded custom image: " + s_CustomImgPath + " (" + std::to_string(w) + "x" + std::to_string(h) + ")\n").c_str());
+                }
             }
             if (s_CustomImg)
             {
@@ -869,11 +1068,51 @@ inline void RenderESP(ImDrawList* drawList)
             const ImVec2 filledTopLeft(barTopLeft.x, barBottomRight.y - filledHeight);
             const ImVec2 filledBottomRight(barBottomRight.x, barBottomRight.y);
 
-            const int r = static_cast<int>((1.0f - healthPercent) * 255.0f);
-            const int g = static_cast<int>(healthPercent * 255.0f);
-            const ImU32 barColor = IM_COL32(r, g, 0, 230);
+            if (Options::ESP::GradientHealthbar)
+            {
+                ImU32 topCol = IM_COL32(
+                    static_cast<int>(Options::ESP::HealthbarTopColor[0] * 255.f),
+                    static_cast<int>(Options::ESP::HealthbarTopColor[1] * 255.f),
+                    static_cast<int>(Options::ESP::HealthbarTopColor[2] * 255.f),
+                    static_cast<int>(Options::ESP::HealthbarTopColor[3] * 255.f));
 
-            drawList->AddRectFilled(filledTopLeft, filledBottomRight, barColor);
+                ImU32 midCol = IM_COL32(
+                    static_cast<int>(Options::ESP::HealthbarMiddleColor[0] * 255.f),
+                    static_cast<int>(Options::ESP::HealthbarMiddleColor[1] * 255.f),
+                    static_cast<int>(Options::ESP::HealthbarMiddleColor[2] * 255.f),
+                    static_cast<int>(Options::ESP::HealthbarMiddleColor[3] * 255.f));
+
+                ImU32 botCol = IM_COL32(
+                    static_cast<int>(Options::ESP::HealthbarBottomColor[0] * 255.f),
+                    static_cast<int>(Options::ESP::HealthbarBottomColor[1] * 255.f),
+                    static_cast<int>(Options::ESP::HealthbarBottomColor[2] * 255.f),
+                    static_cast<int>(Options::ESP::HealthbarBottomColor[3] * 255.f));
+
+                float fillMinY = barBottomRight.y - filledHeight;
+                float midY = (barTopLeft.y + barBottomRight.y) * 0.5f;
+
+                if (fillMinY < midY)
+                {
+                    drawList->AddRectFilledMultiColor(
+                        ImVec2(barTopLeft.x, fillMinY),
+                        ImVec2(barBottomRight.x, midY),
+                        topCol, topCol, midCol, midCol);
+                }
+
+                drawList->AddRectFilledMultiColor(
+                    ImVec2(barTopLeft.x, fillMinY < midY ? midY : fillMinY),
+                    ImVec2(barBottomRight.x, barBottomRight.y),
+                    midCol, midCol, botCol, botCol);
+            }
+            else
+            {
+                const int r = static_cast<int>((1.0f - healthPercent) * 255.0f);
+                const int g = static_cast<int>(healthPercent * 255.0f);
+                const ImU32 barColor = IM_COL32(r, g, 0, 230);
+
+                drawList->AddRectFilled(filledTopLeft, filledBottomRight, barColor);
+            }
+
             drawList->AddRect(barTopLeft, barBottomRight, IM_COL32(0, 0, 0, 255), 0.f, 0, 1.2f);
         }
 
@@ -901,6 +1140,28 @@ inline void RenderESP(ImDrawList* drawList)
                 0,
                 255);
             drawList->AddText(font, fontSize, hpPos, hpColor, hpText);
+        }
+
+        if (Options::ESP::RigType)
+        {
+            const char* rigStr = nullptr;
+            if (player.RigType == 1)
+                rigStr = "[R15]";
+            else if (player.RigType == 0)
+                rigStr = "[R6]";
+
+            if (rigStr)
+            {
+                const float fontSize = (11.f * scale > 10.0f) ? 11.f * scale : 10.0f;
+                const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, rigStr);
+                const ImVec2 rigPos(right + 10.f, top + (bottom - top) * 0.5f - textSize.y * 0.5f);
+                const ImU32 rigColor = IM_COL32(
+                    static_cast<int>(Options::ESP::RigTypeColor[0] * 255.f),
+                    static_cast<int>(Options::ESP::RigTypeColor[1] * 255.f),
+                    static_cast<int>(Options::ESP::RigTypeColor[2] * 255.f),
+                    255);
+                drawList->AddText(font, fontSize, rigPos, rigColor, rigStr);
+            }
         }
     }
 
@@ -1228,6 +1489,33 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
         static_cast<int>(Options::ESP::BoxColor[2] * 255.f),
         255);
 
+    if (Options::ESP::BoxFill && Options::ESP::BoxType == 1)
+    {
+        if (Options::ESP::BoxFillGradient)
+        {
+            ImU32 col1 = IM_COL32(
+                static_cast<int>(Options::ESP::BoxFillTopColor[0] * 255.f),
+                static_cast<int>(Options::ESP::BoxFillTopColor[1] * 255.f),
+                static_cast<int>(Options::ESP::BoxFillTopColor[2] * 255.f),
+                static_cast<int>(Options::ESP::BoxFillTopColor[3] * 255.f));
+            ImU32 col2 = IM_COL32(
+                static_cast<int>(Options::ESP::BoxFillBottomColor[0] * 255.f),
+                static_cast<int>(Options::ESP::BoxFillBottomColor[1] * 255.f),
+                static_cast<int>(Options::ESP::BoxFillBottomColor[2] * 255.f),
+                static_cast<int>(Options::ESP::BoxFillBottomColor[3] * 255.f));
+            drawList->AddRectFilledMultiColor(ImVec2(bLeft, bTop), ImVec2(bRight, bBot), col1, col1, col2, col2);
+        }
+        else
+        {
+            const ImU32 fillCol = IM_COL32(
+                static_cast<int>(Options::ESP::BoxFillColor[0] * 255.f),
+                static_cast<int>(Options::ESP::BoxFillColor[1] * 255.f),
+                static_cast<int>(Options::ESP::BoxFillColor[2] * 255.f),
+                static_cast<int>(Options::ESP::BoxFillColor[3] * 255.f));
+            drawList->AddRectFilled(ImVec2(bLeft, bTop), ImVec2(bRight, bBot), fillCol);
+        }
+    }
+
     if (Options::ESP::BoxType == 1)
         drawList->AddRect(ImVec2(bLeft, bTop), ImVec2(bRight, bBot), boxColor, 0, 0, Options::ESP::BoxThickness);
 
@@ -1255,7 +1543,42 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
         const float healthPct = 0.65f;
         drawList->AddRectFilled(ImVec2(bRight + 3.0f, bTop), ImVec2(bRight + 3.0f + barW, bBot), IM_COL32(30, 30, 30, 200));
         const float filledTop = bBot - (bBot - bTop) * healthPct;
-        drawList->AddRectFilled(ImVec2(bRight + 3.0f, filledTop), ImVec2(bRight + 3.0f + barW, bBot), IM_COL32(80, 220, 60, 230));
+
+        if (Options::ESP::GradientHealthbar)
+        {
+            ImU32 topCol = IM_COL32(
+                static_cast<int>(Options::ESP::HealthbarTopColor[0] * 255.f),
+                static_cast<int>(Options::ESP::HealthbarTopColor[1] * 255.f),
+                static_cast<int>(Options::ESP::HealthbarTopColor[2] * 255.f),
+                static_cast<int>(Options::ESP::HealthbarTopColor[3] * 255.f));
+            ImU32 midCol = IM_COL32(
+                static_cast<int>(Options::ESP::HealthbarMiddleColor[0] * 255.f),
+                static_cast<int>(Options::ESP::HealthbarMiddleColor[1] * 255.f),
+                static_cast<int>(Options::ESP::HealthbarMiddleColor[2] * 255.f),
+                static_cast<int>(Options::ESP::HealthbarMiddleColor[3] * 255.f));
+            ImU32 botCol = IM_COL32(
+                static_cast<int>(Options::ESP::HealthbarBottomColor[0] * 255.f),
+                static_cast<int>(Options::ESP::HealthbarBottomColor[1] * 255.f),
+                static_cast<int>(Options::ESP::HealthbarBottomColor[2] * 255.f),
+                static_cast<int>(Options::ESP::HealthbarBottomColor[3] * 255.f));
+
+            float midY = (bTop + bBot) * 0.5f;
+            if (filledTop < midY)
+            {
+                drawList->AddRectFilledMultiColor(
+                    ImVec2(bRight + 3.0f, filledTop),
+                    ImVec2(bRight + 3.0f + barW, midY),
+                    topCol, topCol, midCol, midCol);
+            }
+            drawList->AddRectFilledMultiColor(
+                ImVec2(bRight + 3.0f, filledTop < midY ? midY : filledTop),
+                ImVec2(bRight + 3.0f + barW, bBot),
+                midCol, midCol, botCol, botCol);
+        }
+        else
+        {
+            drawList->AddRectFilled(ImVec2(bRight + 3.0f, filledTop), ImVec2(bRight + 3.0f + barW, bBot), IM_COL32(80, 220, 60, 230));
+        }
         drawList->AddRect(ImVec2(bRight + 3.0f, bTop), ImVec2(bRight + 3.0f + barW, bBot), IM_COL32(0, 0, 0, 255));
     }
 
@@ -1285,6 +1608,18 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
         const char* distText = "42 studs";
         const ImVec2 ts = ImGui::CalcTextSize(distText);
         drawList->AddText(ImVec2(cx - ts.x * 0.5f, bBot + 4.0f), IM_COL32(200, 200, 200, 255), distText);
+    }
+
+    if (Options::ESP::RigType)
+    {
+        const char* rigStr = "[R15]";
+        const ImVec2 ts = ImGui::CalcTextSize(rigStr);
+        const ImU32 rigCol = IM_COL32(
+            static_cast<int>(Options::ESP::RigTypeColor[0] * 255.f),
+            static_cast<int>(Options::ESP::RigTypeColor[1] * 255.f),
+            static_cast<int>(Options::ESP::RigTypeColor[2] * 255.f),
+            255);
+        drawList->AddText(ImVec2(bRight + 10.0f, bTop + (bBot - bTop) * 0.5f - ts.y * 0.5f), rigCol, rigStr);
     }
 
     // Head circle

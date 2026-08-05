@@ -39,6 +39,7 @@
 #include "tray.h"
 #include "overlay/loader.h"
 #include "features/rivals_skinchanger.h"
+#include "seraph_log.h"
 
 bool IsGameRunning(const wchar_t* processName)
 {
@@ -78,6 +79,7 @@ static void HideConsoleWindow()
 int main()
 {
     OutputDebugStringA("[Seraph] main: START\n");
+    SeraphLog("[Seraph] main: START");
     HideConsoleWindow();
 
     // Stealth: relaunch self as a benign-named copy in %TEMP% before doing
@@ -88,29 +90,40 @@ int main()
 
     InitializeConfigPaths();
 
-    // ── Loader UI ──────────────────────────────────────────────────────
-    // Show the loader window for stealth/theme/font/config selection.
-    // If AutoAttach is enabled or user clicks Inject, proceed to injection.
-    if (!Options::Loader::AutoAttach)
-    {
-        bool injected = Loader::Run();
-if (!injected)
-    {
-        OutputDebugStringA("[Seraph] main: loader returned false, exiting\n");
-        return 0; // user closed the loader without injecting
-    }
-OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n");
-    OutputDebugStringA("[Seraph] main: waiting for Roblox...\n");
-    }
-
+    // The loader UI (stealth/theme/font/config selection) is only shown on the
+    // very first launch. Reattaches afterwards are fully automatic: when Roblox
+    // closes and reopens, the overlay reappears without any user interaction.
+    bool firstLaunch = true;
+    int loopIter = 0;
     while (true)
     {
+        loopIter++;
+        SeraphLog("[Seraph] main: loop iteration " + std::to_string(loopIter));
+        // ── Loader UI ──────────────────────────────────────────────
+        if (firstLaunch && !Options::Loader::AutoAttach)
+        {
+            SeraphLog("[Seraph] main: showing loader (first launch)");
+            bool injected = Loader::Run();
+            SeraphLog(std::string("[Seraph] main: loader returned ") + (injected ? "true" : "false"));
+            if (!injected)
+            {
+                OutputDebugStringA("[Seraph] main: loader returned false, exiting\n");
+                return 0; // user closed the loader without injecting
+            }
+            OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n");
+        }
+        else
+        {
+            SeraphLog("[Seraph] main: skipping loader (auto reattach)");
+        }
+        firstLaunch = false;
         OutputDebugStringA("[Seraph] main: checking for Roblox...\n");
         while (!IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
         OutputDebugStringA("[Seraph] main: Roblox found, attaching...\n");
+        SeraphLog("[Seraph] main: Roblox found, attaching...");
 
         // Wait 1.5 seconds to let Roblox fully spin up before attaching
         std::this_thread::sleep_for(std::chrono::milliseconds(1500));
@@ -118,10 +131,12 @@ OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n"
         if (!Memory->attachToProcess("RobloxPlayerBeta.exe"))
         {
             OutputDebugStringA("[Seraph] main: attachToProcess FAILED\n");
+            SeraphLog("[Seraph] main: attachToProcess FAILED");
             std::this_thread::sleep_for(std::chrono::milliseconds(3000));
             continue;
         }
         OutputDebugStringA("[Seraph] main: attachToProcess OK\n");
+        SeraphLog("[Seraph] main: attachToProcess OK, PID=" + std::to_string(Memory->getProcessId()));
 
         if (Memory->getProcessId("RobloxPlayerBeta.exe") == 0)
         {
@@ -148,16 +163,21 @@ OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n"
         char dbg[256];
         sprintf_s(dbg, "[Seraph] main: FakeDataModel pointer = 0x%llx\n", fakeDataModel);
         OutputDebugStringA(dbg);
+        SeraphLog("[Seraph] main: base=0x" + std::to_string(base) + " FakeDataModel@0x" +
+            std::to_string(Offsets::FakeDataModel::Pointer) + " = 0x" + std::to_string(fakeDataModel));
         
         if (fakeDataModel == 0) {
             OutputDebugStringA("[Seraph] main: FakeDataModel is 0, trying VisualEngine path...\n");
             auto visualEngine = Memory->read<uintptr_t>(base + Offsets::VisualEngine::Pointer);
             sprintf_s(dbg, "[Seraph] main: VisualEngine = 0x%llx\n", visualEngine);
             OutputDebugStringA(dbg);
+            SeraphLog("[Seraph] main: VisualEngine@0x" + std::to_string(Offsets::VisualEngine::Pointer) +
+                " = 0x" + std::to_string(visualEngine));
             if (visualEngine != 0) {
                 fakeDataModel = Memory->read<uintptr_t>(visualEngine + Offsets::VisualEngine::FakeDataModel);
                 sprintf_s(dbg, "[Seraph] main: FakeDataModel from VisualEngine = 0x%llx\n", fakeDataModel);
                 OutputDebugStringA(dbg);
+                SeraphLog("[Seraph] main: FakeDataModel from VisualEngine = 0x" + std::to_string(fakeDataModel));
             }
         }
         
@@ -166,18 +186,22 @@ OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n"
             auto taskScheduler = Memory->read<uintptr_t>(base + Offsets::TaskScheduler::Pointer);
             sprintf_s(dbg, "[Seraph] main: TaskScheduler = 0x%llx\n", taskScheduler);
             OutputDebugStringA(dbg);
+            SeraphLog("[Seraph] main: TaskScheduler@0x" + std::to_string(Offsets::TaskScheduler::Pointer) +
+                " = 0x" + std::to_string(taskScheduler));
             if (taskScheduler != 0) {
                 auto renderJob = Memory->read<uintptr_t>(taskScheduler + 0x38); // RenderJob from TaskScheduler
                 if (renderJob != 0) {
                     fakeDataModel = Memory->read<uintptr_t>(renderJob + Offsets::RenderJob::FakeDataModel);
                     sprintf_s(dbg, "[Seraph] main: FakeDataModel from RenderJob = 0x%llx\n", fakeDataModel);
                     OutputDebugStringA(dbg);
+                    SeraphLog("[Seraph] main: FakeDataModel from RenderJob = 0x" + std::to_string(fakeDataModel));
                 }
             }
         }
         
         if (fakeDataModel == 0) {
             OutputDebugStringA("[Seraph] main: waiting for pointers to populate...\n");
+            SeraphLog("[Seraph] main: waiting for pointers to populate...");
             int waitCount = 0;
             while (fakeDataModel == 0 && IsGameRunning(L"RobloxPlayerBeta.exe") && waitCount < 60) {
                 fakeDataModel = Memory->read<uintptr_t>(base + Offsets::FakeDataModel::Pointer);
@@ -196,15 +220,22 @@ OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n"
                         }
                     }
                 }
+                if (waitCount % 5 == 0)
+                {
+                    sprintf_s(dbg, "[Seraph] main: pointer wait %d, FakeDataModel = 0x%llx\n", waitCount, fakeDataModel);
+                    SeraphLog(dbg);
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
                 waitCount++;
             }
             sprintf_s(dbg, "[Seraph] main: after wait, FakeDataModel = 0x%llx\n", fakeDataModel);
             OutputDebugStringA(dbg);
+            SeraphLog("[Seraph] main: after wait, FakeDataModel = 0x" + std::to_string(fakeDataModel));
         }
         
         if (fakeDataModel == 0) {
             OutputDebugStringA("[Seraph] main: Failed to get FakeDataModel, continuing...\n");
+            SeraphLog("[Seraph] main: Failed to get FakeDataModel");
         }
         
         auto realDataModelPtr = Memory->read<uintptr_t>(fakeDataModel + Offsets::FakeDataModel::RealDataModel);
@@ -215,6 +246,7 @@ OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n"
 
         // Wait for Ugc or Roblox exit
         OutputDebugStringA("[Seraph] main: waiting for DataModel (Ugc/Game)...\n");
+        SeraphLog("[Seraph] main: waiting for DataModel (Ugc/Game)... addr=0x" + std::to_string(dataModel.address));
         int dmWait = 0;
         while (dataModel.Name() != "Ugc" && dataModel.Name() != "Game" && IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
@@ -222,12 +254,15 @@ OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n"
                 char dbg[256];
                 sprintf_s(dbg, "[Seraph] main: dataModel.addr=0x%llx, Name()=\"%s\"\n", dataModel.address, dataModel.Name().c_str());
                 OutputDebugStringA(dbg);
+                SeraphLog(std::string("[Seraph] main: DataModel wait ") + std::to_string(dmWait) +
+                    " addr=0x" + std::to_string(dataModel.address) + " Name()=\"" + dataModel.Name() + "\"");
             }
             dmWait++;
-            fakeDataModel = Memory->read<uintptr_t>(Offsets::FakeDataModel::Pointer);
+            fakeDataModel = Memory->read<uintptr_t>(base + Offsets::FakeDataModel::Pointer);
             dataModel = RobloxInstance(Memory->read<uintptr_t>(fakeDataModel + Offsets::FakeDataModel::RealDataModel));
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
+        SeraphLog("[Seraph] main: DataModel resolved, Name()=\"" + dataModel.Name() + "\"");
 
         if (!IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
@@ -243,11 +278,15 @@ OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n"
         int veWait = 0;
         while (visualEngine == 0 && IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
-            if (veWait % 5 == 0) OutputDebugStringA("[Seraph] main: still waiting for VisualEngine...\n");
+            if (veWait % 5 == 0) {
+                OutputDebugStringA("[Seraph] main: still waiting for VisualEngine...\n");
+                SeraphLog("[Seraph] main: still waiting for VisualEngine, iter " + std::to_string(veWait));
+            }
             veWait++;
             visualEngine = Memory->read<uintptr_t>(base + Offsets::VisualEngine::Pointer);
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
+        SeraphLog("[Seraph] main: VisualEngine = 0x" + std::to_string(visualEngine));
 
         if (!IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
@@ -432,11 +471,22 @@ OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n"
         // Enable global hack state and launch all threads
         Globals::running = true;
         OutputDebugStringA("[Seraph] main: launching threads\n");
+        SeraphLog("[Seraph] main: running=true, launching threads");
+
+        // Scan hitsounds folder
+        {
+            char hitsoundPath[MAX_PATH];
+            GetModuleFileNameA(GetModuleHandleA(NULL), hitsoundPath, MAX_PATH);
+            std::string hitsoundDir = std::string(hitsoundPath).substr(0, std::string(hitsoundPath).find_last_of("\\/")) + "\\hitsounds";
+            Globals::HitSounds::FolderPath = hitsoundDir;
+            Globals::HitSounds::ScanFolder();
+        }
 
         std::thread(InitTray).detach();
         OutputDebugStringA("[Seraph] main: InitTray launched\n");
         std::thread(ShowImgui).detach();
         OutputDebugStringA("[Seraph] main: ShowImgui launched\n");
+        SeraphLog("[Seraph] main: ShowImgui launched");
         std::thread(CachePlayers).detach();
         std::thread(CachePlayerObjects).detach();
         std::thread(TPHandler).detach();
@@ -448,7 +498,7 @@ OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n"
         std::thread(AntiAimLoop).detach();
         std::thread(TickRateLoop).detach();
         std::thread(Spin360Loop).detach();
-        std::thread(Chams::CacheChamsLoop).detach();
+
         std::thread(NoclipLoop).detach();
         std::thread(OrbitLoop).detach();
         std::thread(ArsenalGunmodsLoop).detach();
@@ -482,7 +532,16 @@ OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n"
 
         // Turn off features so threads exit cleanly
         Globals::running = false;
+        Globals::overlayShouldShutdown = true;
         ShutdownTray();
+        SeraphLog("[Seraph] main: Roblox exited, running=false, overlayShouldShutdown=true");
+
+        // Force close overlay window if still open
+        if (Globals::Viewport::RobloxHWND)
+        {
+            DestroyWindow(Globals::Viewport::RobloxHWND);
+            Globals::Viewport::RobloxHWND = nullptr;
+        }
 
         // Wait for overlay to fully clean up (window destroyed, ImGui context freed, class unregistered)
         {
@@ -496,10 +555,11 @@ OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n"
         }
 
         // Wait for all remaining threads to terminate
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
         // Close the Roblox process handle and reset state
         Memory->closeProcess();
+        SeraphLog("[Seraph] main: cleanup complete, looping for next Roblox session");
 
         // Clear all caches and reset global state
         Globals::Caches::CachedPlayers.clear();
@@ -510,6 +570,40 @@ OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n"
         Globals::Roblox::isRivals = false;
         Globals::Roblox::isOverkill = false;
         Globals::Roblox::gameName = "Unknown";
+        Globals::Roblox::DataModel = RobloxInstance(0);
+        Globals::Roblox::VisualEngine = 0;
+        Globals::Roblox::Workspace = RobloxInstance(0);
+        Globals::Roblox::Players = RobloxInstance(0);
+        Globals::Roblox::Camera = RobloxInstance(0);
+        Globals::Roblox::LocalPlayer = RobloxInstance(0);
+        Globals::Roblox::LocalPlayerTeam = RobloxInstance(0);
+        Globals::Roblox::LocalPlayerTeamColor = 0;
+        Globals::Roblox::LocalPlayerTeamName = "";
+        Globals::Viewport::Valid = false;
+        Globals::Viewport::Dimensions = {0, 0};
+        Globals::Viewport::ScreenPos = {0, 0};
+        Globals::Viewport::RobloxHWND = nullptr;
+        Globals::Viewport::ViewMatrix = Matrixes::Matrix4{};
+        Globals::Caches::CachedPlayers.clear();
+        Globals::Caches::CachedPlayerObjects.clear();
+        Globals::Caches::CharacterFallbackCache.clear();
+        Globals::DynamicOffsets::PlayerTeam = 0;
+        Globals::Roblox::isPhantomForces = false;
+        Globals::Roblox::isRivals = false;
+        Globals::Roblox::isOverkill = false;
+        Globals::Roblox::gameName = "Unknown";
+        Chams::ClearHullCache();
+        WorldVisuals::savedOriginals = false;
+        WorldVisuals::cachedLighting = RobloxInstance(0);
+        WorldVisuals::cachedSky = RobloxInstance(0);
+        WorldVisuals::lastSkyPreset = -1;
+        CombatFeedback::hitFlashTimer.clear();
+        CombatFeedback::notifications.clear();
+        CombatFeedback::effects.clear();
+        CombatFeedback::bulletTracers.clear();
+        CombatFeedback::footsteps.clear();
+        CombatFeedback::lastHealth.clear();
+        CombatFeedback::lastPlayerPos.clear();
     }
 
     return 0;

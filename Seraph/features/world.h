@@ -15,17 +15,25 @@ namespace WorldVisuals
 
     inline bool savedOriginals = false;
     inline float origBrightness = 1.0f;
+    inline float origExposure = 0.0f;
     inline Vectors::Vector3 origAmbient = { 0.5f, 0.5f, 0.5f };
     inline Vectors::Vector3 origOutdoorAmbient = { 0.5f, 0.5f, 0.5f };
     inline bool origGlobalShadows = true;
+    inline float origFogStart = 0.0f;
+    inline float origFogEnd = 0.0f;
+    inline Vectors::Vector3 origFogColor = { 0.75f, 0.75f, 0.75f };
 
     inline void SaveOriginals(RobloxInstance& lighting)
     {
         if (savedOriginals || !lighting.address) return;
         origBrightness = Memory->read<float>(lighting.address + Offsets::Lighting::Brightness);
+        origExposure = Memory->read<float>(lighting.address + Offsets::Lighting::ExposureCompensation);
         origAmbient = Memory->read<Vectors::Vector3>(lighting.address + Offsets::Lighting::Ambient);
         origOutdoorAmbient = Memory->read<Vectors::Vector3>(lighting.address + Offsets::Lighting::OutdoorAmbient);
         origGlobalShadows = Memory->read<bool>(lighting.address + Offsets::Lighting::GlobalShadows);
+        origFogStart = Memory->read<float>(lighting.address + Offsets::Lighting::FogStart);
+        origFogEnd = Memory->read<float>(lighting.address + Offsets::Lighting::FogEnd);
+        origFogColor = Memory->read<Vectors::Vector3>(lighting.address + Offsets::Lighting::FogColor);
         savedOriginals = true;
     }
 
@@ -33,9 +41,13 @@ namespace WorldVisuals
     {
         if (!savedOriginals || !lighting.address) return;
         Memory->write<float>(lighting.address + Offsets::Lighting::Brightness, origBrightness);
+        Memory->write<float>(lighting.address + Offsets::Lighting::ExposureCompensation, origExposure);
         Memory->write<Vectors::Vector3>(lighting.address + Offsets::Lighting::Ambient, origAmbient);
         Memory->write<Vectors::Vector3>(lighting.address + Offsets::Lighting::OutdoorAmbient, origOutdoorAmbient);
         Memory->write<bool>(lighting.address + Offsets::Lighting::GlobalShadows, origGlobalShadows);
+        Memory->write<float>(lighting.address + Offsets::Lighting::FogStart, origFogStart);
+        Memory->write<float>(lighting.address + Offsets::Lighting::FogEnd, origFogEnd);
+        Memory->write<Vectors::Vector3>(lighting.address + Offsets::Lighting::FogColor, origFogColor);
         savedOriginals = false;
     }
 
@@ -67,15 +79,32 @@ namespace WorldVisuals
         outBrightness = 0.3f + 0.7f * dayFactor;
     }
 
-    inline const char* GetSkyboxAssetId(int preset)
+    struct SkyboxFaces
+    {
+        const char* bk;
+        const char* dn;
+        const char* ft;
+        const char* lf;
+        const char* rt;
+        const char* up;
+    };
+
+    inline SkyboxFaces GetSkyboxFaces(int preset)
     {
         switch (preset)
         {
-        case 1: return "rbxassetid://692809484";   // Night
-        case 2: return "rbxassetid://159454299";   // Space
-        case 3: return "rbxassetid://26431257";    // Sunset
-        case 4: return "rbxassetid://271042516";   // Storm
-        default: return "";
+        case 1:  return { "rbxassetid://12635309703", "rbxassetid://12635311686", "rbxassetid://12635312870", "rbxassetid://12635313718", "rbxassetid://12635315817", "rbxassetid://12635316856" };
+        case 2:  return { "rbxassetid://12064107",  "rbxassetid://12064152",  "rbxassetid://12064121",  "rbxassetid://12063984",  "rbxassetid://12064115",  "rbxassetid://12064131"  };
+        case 3:  return { "rbxassetid://271042516", "rbxassetid://271077243", "rbxassetid://271042556", "rbxassetid://271042310", "rbxassetid://271042467", "rbxassetid://271077958" };
+        case 4:  return { "rbxassetid://1876545003", "rbxassetid://1876544331", "rbxassetid://1876542941", "rbxassetid://1876543392", "rbxassetid://1876543764", "rbxassetid://1876544642" };
+        case 5:  return { "rbxassetid://116758234", "rbxassetid://116758314", "rbxassetid://116758367", "rbxassetid://116758446", "rbxassetid://116758478", "rbxassetid://116758496" };
+        case 6:  return { "rbxassetid://1233158420", "rbxassetid://1233158838", "rbxassetid://1233157105", "rbxassetid://1233157640", "rbxassetid://1233157995", "rbxassetid://1233159158" };
+        case 7:  return { "rbxassetid://1327358",    "rbxassetid://1327359",    "rbxassetid://1327355",    "rbxassetid://1327357",    "rbxassetid://1327356",    "rbxassetid://1327360"    };
+        case 8:  return { "rbxassetid://570555736", "rbxassetid://570555964", "rbxassetid://570555800", "rbxassetid://570555840", "rbxassetid://570555882", "rbxassetid://570555929" };
+        case 9:  return { "rbxassetid://95020137072033", "rbxassetid://92862258103959", "rbxassetid://107665368823185", "rbxassetid://126542804346203", "rbxassetid://103716549795832", "rbxassetid://131036626982613" };
+        case 10: return { "rbxassetid://169210090", "rbxassetid://169210108", "rbxassetid://169210121", "rbxassetid://169210133", "rbxassetid://169210143", "rbxassetid://169210149" };
+        case 11: return { "rbxassetid://47974894", "rbxassetid://47974690", "rbxassetid://47974821", "rbxassetid://47974776", "rbxassetid://47974859", "rbxassetid://47974909" };
+        default: return { "", "", "", "", "", "" };
         }
     }
 
@@ -94,16 +123,16 @@ namespace WorldVisuals
         if (!sky.address || preset == 0)
             return;
 
-        const char* assetId = GetSkyboxAssetId(preset);
-        if (!assetId || assetId[0] == '\0')
+        auto faces = GetSkyboxFaces(preset);
+        if (faces.bk[0] == '\0')
             return;
 
-        WriteSkyboxFace(sky.address, Offsets::Sky::SkyboxBk, assetId);
-        WriteSkyboxFace(sky.address, Offsets::Sky::SkyboxDn, assetId);
-        WriteSkyboxFace(sky.address, Offsets::Sky::SkyboxFt, assetId);
-        WriteSkyboxFace(sky.address, Offsets::Sky::SkyboxLf, assetId);
-        WriteSkyboxFace(sky.address, Offsets::Sky::SkyboxRt, assetId);
-        WriteSkyboxFace(sky.address, Offsets::Sky::SkyboxUp, assetId);
+        WriteSkyboxFace(sky.address, Offsets::Sky::SkyboxBk, faces.bk);
+        WriteSkyboxFace(sky.address, Offsets::Sky::SkyboxDn, faces.dn);
+        WriteSkyboxFace(sky.address, Offsets::Sky::SkyboxFt, faces.ft);
+        WriteSkyboxFace(sky.address, Offsets::Sky::SkyboxLf, faces.lf);
+        WriteSkyboxFace(sky.address, Offsets::Sky::SkyboxRt, faces.rt);
+        WriteSkyboxFace(sky.address, Offsets::Sky::SkyboxUp, faces.up);
     }
 
     inline void ApplyLighting()
@@ -170,6 +199,11 @@ namespace WorldVisuals
 
         Memory->write<float>(cachedLighting.address + Offsets::Lighting::ClockTime, Options::World::ClockTime);
 
+        if (Options::World::Exposure)
+        {
+            Memory->write<float>(cachedLighting.address + Offsets::Lighting::ExposureCompensation, Options::World::ExposureValue);
+        }
+
         if (Options::World::NoFog)
         {
             Memory->write<float>(cachedLighting.address + Offsets::Lighting::FogStart, 0.0f);
@@ -181,6 +215,28 @@ namespace WorldVisuals
             Memory->write<float>(cachedLighting.address + Offsets::Lighting::FogEnd, Options::World::FogEnd);
             Memory->write<Vectors::Vector3>(cachedLighting.address + Offsets::Lighting::FogColor,
                 { Options::World::FogColor[0], Options::World::FogColor[1], Options::World::FogColor[2] });
+         }
+
+        // Fang-style separate world effect toggles (override existing settings when enabled)
+        if (Options::World::BrightnessEnabled)
+        {
+            Memory->write<float>(cachedLighting.address + Offsets::Lighting::Brightness, Options::World::BrightnessValue);
+        }
+
+        if (Options::World::Ambience)
+        {
+            Memory->write<Vectors::Vector3>(cachedLighting.address + Offsets::Lighting::Ambient,
+                { Options::World::AmbienceColor[0], Options::World::AmbienceColor[1], Options::World::AmbienceColor[2] });
+            Memory->write<Vectors::Vector3>(cachedLighting.address + Offsets::Lighting::OutdoorAmbient,
+                { Options::World::AmbienceColor[0], Options::World::AmbienceColor[1], Options::World::AmbienceColor[2] });
+        }
+
+        if (Options::World::FogEnabled)
+        {
+            Memory->write<float>(cachedLighting.address + Offsets::Lighting::FogStart, 0.0f);
+            Memory->write<float>(cachedLighting.address + Offsets::Lighting::FogEnd, Options::World::FogDistance);
+            Memory->write<Vectors::Vector3>(cachedLighting.address + Offsets::Lighting::FogColor,
+                { Options::World::FogColor2[0], Options::World::FogColor2[1], Options::World::FogColor2[2] });
         }
 
         if (Options::World::SkyboxChanger)
@@ -191,6 +247,14 @@ namespace WorldVisuals
             {
                 ApplySkybox(cachedSky, Options::World::SkyboxPreset);
                 lastSkyPreset = Options::World::SkyboxPreset;
+            }
+
+            if (Options::World::RotateSkybox && cachedSky.address)
+            {
+                static float skyboxRotY = 0.0f;
+                skyboxRotY += Options::World::SkyboxRotateSpeed * 0.025f;
+                if (skyboxRotY >= 360.0f) skyboxRotY = 0.0f;
+                Memory->write<Vectors::Vector3>(cachedSky.address + Offsets::Sky::SkyboxOrientation, { 0.0f, skyboxRotY, 0.0f });
             }
         }
     }

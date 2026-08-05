@@ -190,6 +190,7 @@ namespace Globals
 
     inline bool running = true;
     inline std::atomic<bool> overlayDone = true;
+    inline std::atomic<bool> overlayShouldShutdown = false;
 
     namespace HitSounds
     {
@@ -214,7 +215,7 @@ namespace Globals
                 std::string lower = name;
                 std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
 
-                if (lower.size() >= 4 && lower.substr(lower.size() - 4) == ".wav")
+                if (lower.size() >= 4 && (lower.substr(lower.size() - 4) == ".wav" || lower.substr(lower.size() - 4) == ".mp3"))
                 {
                     Files.push_back(name);
                 }

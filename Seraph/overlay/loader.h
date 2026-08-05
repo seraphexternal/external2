@@ -202,82 +202,81 @@ namespace Loader
         dl->AddRect(mn, mx, col, r, 0, w);
     }
 
-    // Toggle pill
+    // Toggle pill — premium rounded switch
     static void DrawTogglePill(ImDrawList* dl, ImVec2 pos, float w, float h, bool on, float anim = 1.0f) {
         float radius = h * 0.5f;
         ImU32 bg = on
-            ? Pal(LerpF(0.10f, 0.0f, anim), LerpF(0.12f, 0.55f, anim), LerpF(0.15f, 0.85f, anim))
-            : Pal(0.08f, 0.10f, 0.12f);
+            ? Pal(LerpF(0.08f, 0.0f, anim), LerpF(0.10f, 0.50f, anim), LerpF(0.12f, 0.78f, anim))
+            : Pal(0.06f, 0.08f, 0.11f);
         dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), bg, radius);
+        dl->AddRect(pos, ImVec2(pos.x + w, pos.y + h),
+            Pal(0.10f, 0.14f, 0.18f, 0.3f), radius, 0, 0.5f);
         float knobR = radius - 2.5f;
         float knobX = on ? pos.x + w - knobR - 2.5f : pos.x + knobR + 2.5f;
-        dl->AddCircleFilled(ImVec2(knobX, pos.y + radius), knobR,
-            Pal(LerpF(0.5f, 1.0f, anim), LerpF(0.5f, 1.0f, anim), LerpF(0.5f, 1.0f, anim)));
+        ImU32 knobCol = Pal(LerpF(0.50f, 1.0f, anim), LerpF(0.50f, 1.0f, anim), LerpF(0.50f, 1.0f, anim));
+        dl->AddCircleFilled(ImVec2(knobX, pos.y + radius), knobR, knobCol);
+        if (on)
+            dl->AddCircleFilled(ImVec2(knobX, pos.y + radius), knobR * 1.6f,
+                Pal(0.118f, 0.655f, 1.0f, 0.06f * anim));
     }
 
-    // Animated toggle switch with smooth transition
+    // Animated toggle switch with smooth transition and #1EA7FF active state
     static float l_ToggleAnim[8] = {};
     static void DrawSwitch(ImDrawList* dl, ImVec2 pos, float w, float h, bool* v, int id) {
         float radius = h * 0.5f;
         float target = *v ? 1.0f : 0.0f;
         l_ToggleAnim[id] = LerpF(l_ToggleAnim[id], target, ImGui::GetIO().DeltaTime * 12.0f);
         float a = l_ToggleAnim[id];
-        ImU32 bg = Pal(LerpF(0.08f, 0.0f, a), LerpF(0.10f, 0.50f, a), LerpF(0.12f, 0.78f, a));
+        ImU32 bg = Pal(LerpF(0.06f, 0.0f, a), LerpF(0.08f, 0.45f, a), LerpF(0.11f, 0.72f, a));
         dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), bg, radius);
+        dl->AddRect(pos, ImVec2(pos.x + w, pos.y + h),
+            Pal(0.10f, 0.14f, 0.18f, 0.25f), radius, 0, 0.5f);
         float knobR = radius - 2.5f;
         float knobX = pos.x + knobR + 2.5f + (w - knobR * 2.0f - 5.0f) * a;
         ImU32 knobCol = Pal(LerpF(0.50f, 1.0f, a), LerpF(0.50f, 1.0f, a), LerpF(0.50f, 1.0f, a));
         dl->AddCircleFilled(ImVec2(knobX, pos.y + radius), knobR, knobCol);
-        // Subtle glow when on
         if (a > 0.01f)
-            dl->AddCircleFilled(ImVec2(knobX, pos.y + radius), knobR * 1.8f,
-                Pal(0.118f, 0.655f, 1.0f, 0.05f * a));
+            dl->AddCircleFilled(ImVec2(knobX, pos.y + radius), knobR * 1.6f,
+                Pal(0.118f, 0.655f, 1.0f, 0.04f * a));
     }
 
-    // Draw a card background with gradient fill, soft shadow, and border
+    // Draw a card background with layered gradient, soft shadow, and thin border
     static void DrawCard(ImDrawList* dl, ImVec2 mn, ImVec2 mx, float r = 10.0f, bool selected = false) {
         // Layered soft shadow
-        dl->AddRectFilled(ImVec2(mn.x + 2.0f, mn.y + 2.0f), ImVec2(mx.x + 2.0f, mx.y + 3.0f),
-            Pal(0.0f, 0.0f, 0.0f, 0.10f), r);
+        dl->AddRectFilled(ImVec2(mn.x + 2.0f, mn.y + 3.0f), ImVec2(mx.x + 2.0f, mx.y + 3.0f),
+            Pal(0.0f, 0.0f, 0.0f, 0.15f), r);
         dl->AddRectFilled(ImVec2(mn.x + 1.0f, mn.y + 1.0f), ImVec2(mx.x + 1.0f, mx.y + 2.0f),
-            Pal(0.0f, 0.0f, 0.0f, 0.06f), r);
-        // Gradient fill: top #171F2D → bottom #131A27
+            Pal(0.0f, 0.0f, 0.0f, 0.08f), r);
+        // Gradient fill
         {
-            int gSteps = 12;
-            float r1 = 0.090f, g1 = 0.122f, b1 = 0.176f; // #171F2D
-            float r2 = 0.075f, g2 = 0.102f, b2 = 0.153f; // #131A27
             float h = mx.y - mn.y;
-            for (int i = 0; i < gSteps; i++) {
-                float t = (float)i / (float)gSteps;
-                float y0 = mn.y + h * t;
-                float y1 = mn.y + h * (t + 1.0f / (float)gSteps);
-                float rr = r1 + (r2 - r1) * t;
-                float gg = g1 + (g2 - g1) * t;
-                float bb = b1 + (b2 - b1) * t;
-                dl->AddRectFilled(ImVec2(mn.x, y0), ImVec2(mx.x, y1), Pal(rr, gg, bb), r);
-                // Clip corners for all but first/last strip
-                if (i > 0 && i < gSteps - 1)
-                    dl->AddRectFilled(ImVec2(mn.x, y0), ImVec2(mx.x, y1), Pal(rr, gg, bb));
-            }
+            float r1 = 0.090f, g1 = 0.125f, b1 = 0.180f;
+            float r2 = 0.065f, g2 = 0.090f, b2 = 0.135f;
+            dl->AddRectFilled(mn, mx, Pal(r1, g1, b1), r);
+            dl->AddRectFilled(ImVec2(mn.x, mn.y + h * 0.5f), mx, Pal(r2, g2, b2));
         }
-        // Border: #2A3C55
-        dl->AddRect(mn, mx, Pal(0.165f, 0.235f, 0.333f), r, 0, 1.0f);
+        // Bottom shadow line
+        dl->AddRectFilled(ImVec2(mn.x + 4.0f, mx.y - 1.0f), ImVec2(mx.x - 4.0f, mx.y),
+            Pal(0.0f, 0.0f, 0.0f, 0.15f), 1.0f);
+        // Border
+        dl->AddRect(mn, mx, Pal(0.165f, 0.271f, 0.408f, 0.6f), r, 0, 1.0f);
         if (selected)
-            dl->AddRect(mn, mx, Pal(0.118f, 0.655f, 1.0f, 0.6f), r, 0, 1.5f);
+            dl->AddRect(mn, mx, Pal(0.118f, 0.655f, 1.0f, 0.8f), r, 0, 1.5f);
     }
 
-    // Section title with monochrome icon and section font (14px)
+    // Section title with monochrome icon — 14px SemiBold
     static void DrawSectionHeader(ImDrawList* dl, ImVec2 pos, const char* title, int icon) {
         ImU32 col = Pal(0.961f, 0.969f, 0.980f);
         float ix = pos.x, iy = pos.y + 1.0f;
-        ImU32 iconCol = Pal(0.604f, 0.659f, 0.737f);
+        ImU32 iconCol = Pal(0.600f, 0.750f, 1.0f, 0.7f);
         if (icon == 0) { // Shield
-            dl->AddRect(ImVec2(ix, iy + 2.0f), ImVec2(ix + 9.0f, iy + 9.0f), iconCol, 2.0f);
-            dl->AddTriangleFilled(ImVec2(ix - 0.5f, iy + 2.0f), ImVec2(ix + 4.5f, iy - 1.0f),
-                ImVec2(ix + 9.5f, iy + 2.0f), iconCol);
+            dl->PathArcTo(ImVec2(ix + 4.5f, iy + 5.0f), 5.0f, 3.1416f * 0.8f, 3.1416f * 2.2f, 8);
+            dl->PathStroke(iconCol, false, 1.5f);
+            dl->AddLine(ImVec2(ix + 4.5f, iy + 3.5f), ImVec2(ix + 4.5f, iy + 6.5f), iconCol, 1.5f);
+            dl->AddLine(ImVec2(ix + 4.5f, iy + 6.5f), ImVec2(ix + 7.0f, iy + 4.5f), iconCol, 1.5f);
         } else if (icon == 1) { // Eye
-            dl->AddCircle(ImVec2(ix + 4.5f, iy + 4.5f), 3.5f, iconCol, 0, 1.2f);
-            dl->AddCircleFilled(ImVec2(ix + 4.5f, iy + 4.5f), 1.2f, iconCol);
+            dl->AddCircle(ImVec2(ix + 4.5f, iy + 5.0f), 4.5f, iconCol, 0, 1.2f);
+            dl->AddCircleFilled(ImVec2(ix + 4.5f, iy + 5.0f), 2.0f, iconCol);
         } else if (icon == 2) { // Monitor
             dl->AddRect(ImVec2(ix, iy + 1.0f), ImVec2(ix + 9.0f, iy + 7.0f), iconCol, 1.0f);
             dl->AddRectFilled(ImVec2(ix + 3.0f, iy + 7.0f), ImVec2(ix + 6.0f, iy + 9.5f), iconCol);
@@ -632,7 +631,7 @@ namespace Loader
         g_EntranceSlide = LerpF(g_EntranceSlide, 0.0f, dt * 6.0f);
 
         ImGui::SetNextWindowPos(ImVec2(0, 0));
-        ImGui::SetNextWindowSize(ImVec2(480, 580));
+        ImGui::SetNextWindowSize(ImVec2(480, 600));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -650,12 +649,12 @@ namespace Loader
         float pulse = Pulse();
         float slideY = g_EntranceSlide;
 
-        // ── Background — blue-black gradient ──────────────────────────
-        // Top #111827 to bottom #0B1220
+        // ── Background — refined blue-black gradient ────────────────────
+        // Top #101827 to bottom #0A101A
         {
             int steps = 60;
-            float topR = 0.067f, topG = 0.094f, topB = 0.153f;
-            float botR = 0.043f, botG = 0.071f, botB = 0.125f;
+            float topR = 0.063f, topG = 0.094f, topB = 0.153f;
+            float botR = 0.039f, botG = 0.063f, botB = 0.102f;
             for (int i = 0; i < steps; i++) {
                 float t = (float)i / (float)steps;
                 float y0 = wp.y + ws.y * t;
@@ -667,11 +666,10 @@ namespace Loader
             }
         }
 
-        // ── Header — slightly brighter, with soft bottom reflection ────
+        // ── Header — subtle gradient, slightly brighter top ────────────
         float headerH = 56.0f;
         ImVec2 hdrMin(wp.x, wp.y);
         ImVec2 hdrMax(wp.x + ws.x, wp.y + headerH);
-        // Header gradient
         {
             int hSteps = 20;
             for (int i = 0; i < hSteps; i++) {
@@ -679,14 +677,14 @@ namespace Loader
                 float y0 = hdrMin.y + headerH * t;
                 float y1 = hdrMin.y + headerH * (t + 1.0f / (float)hSteps);
                 float r = 0.078f + (0.055f - 0.078f) * t;
-                float g = 0.114f + (0.078f - 0.114f) * t;
-                float b = 0.169f + (0.118f - 0.169f) * t;
+                float g = 0.106f + (0.071f - 0.106f) * t;
+                float b = 0.157f + (0.102f - 0.157f) * t;
                 dl->AddRectFilled(ImVec2(wp.x, y0), ImVec2(wp.x + ws.x, y1), Pal(r, g, b));
             }
         }
-        // Bottom divider
+        // Bottom divider — #2A4568
         dl->AddRectFilled(ImVec2(wp.x, wp.y + headerH), ImVec2(wp.x + ws.x, wp.y + headerH + 1.0f),
-            Pal(0.149f, 0.212f, 0.302f));  // #26364D
+            Pal(0.165f, 0.271f, 0.408f));
 
         // Top accent line — softer blue
         dl->AddRectFilled(wp, ImVec2(wp.x + ws.x, wp.y + 2.0f),
@@ -706,9 +704,9 @@ namespace Loader
                 sCol, 2.5f, 24);
         }
 
-        // SERAPH title — 22px Bold (display font)
+        // SERAPH title — 22px SemiBold
         {
-            float tx = wp.x + 40.0f + slideY;
+            float tx = wp.x + 42.0f + slideY;
             float ty = wp.y + 7.0f;
             if (l_Font_Display)
                 dl->AddText(l_Font_Display, 0, ImVec2(tx, ty), Pal(0.961f, 0.969f, 0.980f), "SERAPH");
@@ -716,116 +714,116 @@ namespace Loader
                 dl->AddText(ImGui::GetFont(), 22.0f, ImVec2(tx, ty), Pal(0.961f, 0.969f, 0.980f), "SERAPH");
         }
 
-        // Version and platform badges — 11px small font
+        // Version and platform badges — 11px with subtle border
         {
-            float bx = wp.x + 40.0f + slideY;
+            float bx = wp.x + 42.0f + slideY;
             float by = wp.y + 34.0f;
             auto DrawBadge = [&](const char* label, ImU32 bg, ImU32 fg) {
-                ImVec2 ts = l_Font_Small ? ImGui::CalcTextSize(label) : ImGui::CalcTextSize(label);
+                ImVec2 ts = l_Font_Small ? l_Font_Small->CalcTextSizeA(l_Font_Small->FontSize, FLT_MAX, 0.0f, label)
+                    : ImGui::CalcTextSize(label);
                 float bw = ts.x + 8.0f, bh = 13.0f;
                 dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh), bg, 3.0f);
+                dl->AddRect(ImVec2(bx, by), ImVec2(bx + bw, by + bh),
+                    Pal(0.165f, 0.271f, 0.408f, 0.3f), 3.0f, 0, 0.5f);
                 if (l_Font_Small)
                     dl->AddText(l_Font_Small, 0, ImVec2(bx + (bw - ts.x) * 0.5f, by + (bh - ts.y) * 0.5f), fg, label);
                 else
                     dl->AddText(ImGui::GetFont(), 11.0f, ImVec2(bx + (bw - ts.x) * 0.5f, by + (bh - ts.y) * 0.5f), fg, label);
                 bx += bw + 4.0f;
             };
-            DrawBadge("v0.1", Pal(0.04f, 0.06f, 0.10f), Pal(0.604f, 0.659f, 0.737f));
-            DrawBadge("External", Pal(0.04f, 0.06f, 0.10f), Pal(0.604f, 0.659f, 0.737f));
-            DrawBadge("Roblox", Pal(0.0f, 0.10f, 0.20f), Pal(0.118f, 0.655f, 1.0f));
+            DrawBadge("v0.1", Pal(0.035f, 0.055f, 0.075f), Pal(0.55f, 0.62f, 0.70f));
+            DrawBadge("External", Pal(0.035f, 0.055f, 0.075f), Pal(0.55f, 0.62f, 0.70f));
+            DrawBadge("Roblox", Pal(0.0f, 0.08f, 0.18f), Pal(0.118f, 0.655f, 1.0f));
         }
 
         // Status badge (pulsing green dot + "Ready") — 12px label font
         {
-            float badgeW = 68.0f, badgeH = 20.0f;
+            float badgeW = 66.0f, badgeH = 20.0f;
             float badgeX = wp.x + ws.x - badgeW - 16.0f;
             float badgeY = wp.y + (headerH - badgeH) * 0.5f;
             dl->AddRectFilled(ImVec2(badgeX, badgeY), ImVec2(badgeX + badgeW, badgeY + badgeH),
-                Pal(0.03f, 0.08f, 0.05f), 10.0f);
+                Pal(0.02f, 0.06f, 0.04f), 10.0f);
             dl->AddRect(ImVec2(badgeX, badgeY), ImVec2(badgeX + badgeW, badgeY + badgeH),
-                Pal(0.10f, 0.25f, 0.15f, 0.4f), 10.0f, 0, 1.0f);
+                Pal(0.08f, 0.20f, 0.12f, 0.5f), 10.0f, 0, 0.5f);
             float dotPulse = 0.6f + 0.4f * sinf(g_Time * 2.0f);
-            dl->AddCircleFilled(ImVec2(badgeX + 14.0f, badgeY + badgeH * 0.5f), 3.0f,
-                Pal(0.15f + 0.40f * dotPulse, 0.60f + 0.30f * dotPulse, 0.20f + 0.20f * dotPulse));
-            dl->AddCircleFilled(ImVec2(badgeX + 14.0f, badgeY + badgeH * 0.5f), 1.8f,
-                Pal(0.25f, 0.78f, 0.38f));
+            dl->AddCircleFilled(ImVec2(badgeX + 13.0f, badgeY + badgeH * 0.5f), 3.5f,
+                Pal(0.10f + 0.35f * dotPulse, 0.50f + 0.30f * dotPulse, 0.15f + 0.15f * dotPulse));
+            dl->AddCircleFilled(ImVec2(badgeX + 13.0f, badgeY + badgeH * 0.5f), 2.0f,
+                Pal(0.20f, 0.72f, 0.32f));
+            const char* statusTxt = "Ready";
+            ImVec2 sts = l_Font_Label ? l_Font_Label->CalcTextSizeA(l_Font_Label->FontSize, FLT_MAX, 0.0f, statusTxt)
+                : ImGui::CalcTextSize(statusTxt);
+            float stsX = badgeX + 20.0f;
             if (l_Font_Label)
                 dl->AddText(l_Font_Label, 0,
-                    ImVec2(badgeX + 22.0f, badgeY + (badgeH - l_Font_Label->FontSize) * 0.5f),
-                    Pal(0.35f, 0.72f, 0.48f), "Ready");
+                    ImVec2(stsX, badgeY + (badgeH - l_Font_Label->FontSize) * 0.5f),
+                    Pal(0.30f, 0.66f, 0.42f), statusTxt);
             else
                 dl->AddText(ImGui::GetFont(), 12.0f,
-                    ImVec2(badgeX + 22.0f, badgeY + (badgeH - 12.0f) * 0.5f),
-                    Pal(0.35f, 0.72f, 0.48f), "Ready");
+                    ImVec2(stsX, badgeY + (badgeH - 12.0f) * 0.5f),
+                    Pal(0.30f, 0.66f, 0.42f), statusTxt);
         }
 
-        // ── Tab bar (segmented navigation) ──────────────────────────
+        // ── Tab bar ────────────────────────────────────────────────
         float tabBarY = headerH + 1.0f;
-        float tabBarH = 40.0f;
+        float tabBarH = 42.0f;
         const char* tabs[] = { "Stealth", "Theme", "Font", "Config" };
-        float tabW = ws.x / 4.0f;
-        float tabGap = 8.0f;
-        float segW = ws.x - tabGap * 2;
-        float segX = wp.x + tabGap;
-        float segY = tabBarY + 5.0f;
-        float segH = tabBarH - 10.0f;
+        float tabGap = 2.0f;
+        float tabW = (ws.x - tabGap * 5) / 4.0f;
+        float tabX = wp.x + tabGap;
+        float tabY = tabBarY + 6.0f;
+        float tabH = tabBarH - 12.0f;
 
-        // Segmented control background — subtle card
-        dl->AddRectFilled(ImVec2(segX, segY), ImVec2(segX + segW, segY + segH),
-            Pal(0.055f, 0.075f, 0.105f), 6.0f);
-        dl->AddRect(ImVec2(segX, segY), ImVec2(segX + segW, segY + segH),
-            Pal(0.149f, 0.212f, 0.302f, 0.3f), 6.0f, 0, 1.0f);
+        // Tab background bar
+        dl->AddRectFilled(ImVec2(wp.x, tabBarY), ImVec2(wp.x + ws.x, tabBarY + tabBarH),
+            Pal(0.045f, 0.065f, 0.095f));
 
-        float itemW = segW / 4.0f;
         for (int i = 0; i < 4; i++)
         {
             bool active = (l_SelectedTab == i);
-            ImVec2 tMin(segX + i * itemW, segY);
-            ImVec2 tMax(tMin.x + itemW, segY + segH);
+            ImVec2 tMin(tabX + i * (tabW + tabGap), tabY);
+            ImVec2 tMax(tMin.x + tabW, tabY + tabH);
             bool hov = ImGui::IsMouseHoveringRect(tMin, tMax) && !active;
 
-            // Animate tab transition
             float targetFade = active ? 1.0f : 0.0f;
             g_TabFade[i] = LerpF(g_TabFade[i], targetFade, dt * 14.0f);
 
             // Hover background
             if (hov) {
-                dl->AddRectFilled(tMin, tMax, Pal(0.078f, 0.114f, 0.169f, 0.5f), 6.0f);
+                dl->AddRectFilled(tMin, tMax, Pal(0.060f, 0.090f, 0.130f, 0.5f), 6.0f);
+                dl->AddRect(tMin, tMax, Pal(0.165f, 0.271f, 0.408f, 0.2f), 6.0f, 0, 0.5f);
             }
 
-            // Active pill — gradient with accent border
+            // Active pill
             if (g_TabFade[i] > 0.01f) {
-                float pad = 3.0f;
                 float a = g_TabFade[i];
-                // Gradient top-to-bottom for active pill
-                int pSteps = 8;
-                float pR1 = 0.090f, pG1 = 0.122f, pB1 = 0.176f; // #171F2D
-                float pR2 = 0.075f, pG2 = 0.102f, pB2 = 0.153f; // #131A27
+                int pSteps = 6;
+                float pR1 = 0.082f, pG1 = 0.118f, pB1 = 0.169f;
+                float pR2 = 0.067f, pG2 = 0.090f, pB2 = 0.133f;
                 for (int pi = 0; pi < pSteps; pi++) {
                     float pt = (float)pi / (float)pSteps;
-                    float py0 = tMin.y + pad + (tMax.y - tMin.y - pad * 2) * pt;
-                    float py1 = tMin.y + pad + (tMax.y - tMin.y - pad * 2) * (pt + 1.0f / (float)pSteps);
+                    float py0 = tMin.y + (tMax.y - tMin.y) * pt;
+                    float py1 = tMin.y + (tMax.y - tMin.y) * (pt + 1.0f / (float)pSteps);
                     float pr = pR1 + (pR2 - pR1) * pt;
                     float pg = pG1 + (pG2 - pG1) * pt;
                     float pb = pB1 + (pB2 - pB1) * pt;
-                    dl->AddRectFilled(ImVec2(tMin.x + pad, py0), ImVec2(tMax.x - pad, py1),
-                        Pal(pr, pg, pb, a));
+                    dl->AddRectFilled(ImVec2(tMin.x, py0), ImVec2(tMax.x, py1), Pal(pr, pg, pb, a));
                 }
-                // Accent border
-                dl->AddRect(
-                    ImVec2(tMin.x + pad, tMin.y + pad),
-                    ImVec2(tMax.x - pad, tMax.y - pad),
-                    Pal(0.118f, 0.655f, 1.0f, 0.25f * a), 4.0f, 0, 1.0f);
+                dl->AddRect(tMin, tMax, Pal(0.118f, 0.655f, 1.0f, 0.20f * a), 6.0f, 0, 0.5f);
+                // Bottom accent line
+                dl->AddRectFilled(ImVec2(tMin.x + 8.0f, tMax.y - 1.0f),
+                    ImVec2(tMax.x - 8.0f, tMax.y + 2.0f),
+                    Pal(0.118f, 0.655f, 1.0f, 0.9f * a), 1.5f);
             }
 
-            // Tab label — 13px body font
+            // Tab label
             PushBodyFont();
             ImVec2 ts = ImGui::CalcTextSize(tabs[i]);
-            float tx = tMin.x + (itemW - ts.x) * 0.5f;
-            float ty = tMin.y + (segH - ts.y) * 0.5f;
+            float tx = tMin.x + (tabW - ts.x) * 0.5f;
+            float ty = tMin.y + (tabH - ts.y) * 0.5f;
             ImU32 textCol = active ? Pal(0.118f, 0.655f, 1.0f)
                 : hov ? Pal(0.75f, 0.82f, 0.90f)
-                : Pal(0.604f, 0.659f, 0.737f);
+                : Pal(0.55f, 0.62f, 0.70f);
             dl->AddText(ImGui::GetFont(), 0, ImVec2(tx, ty), textCol, tabs[i]);
             PopBodyFont();
 
@@ -834,16 +832,21 @@ namespace Loader
                 l_SelectedTab = i;
         }
 
+        // Bottom divider under tab bar
+        dl->AddRectFilled(ImVec2(wp.x, tabBarY + tabBarH), ImVec2(wp.x + ws.x, tabBarY + tabBarH + 1.0f),
+            Pal(0.165f, 0.271f, 0.408f, 0.4f));
+
         // ── Content area ───────────────────────────────────────────
         float contentPad = 16.0f;
         float btnH = 48.0f;
         float btnPad = 12.0f;
-        float contentH = ws.y - headerH - tabBarH - 1.0f - btnH - btnPad * 2.0f;
+        float contentH = ws.y - headerH - tabBarH - 1.0f - btnH - btnPad * 2.0f - 8.0f;
 
-        ImGui::SetCursorPos(ImVec2(contentPad, headerH + tabBarH + 6.0f));
+        ImGui::SetCursorPos(ImVec2(contentPad, headerH + tabBarH + 8.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0.0f);
-        ImGui::BeginChild("##tab_content", ImVec2(ws.x - contentPad * 2, contentH), false);
+        ImGui::BeginChild("##tab_content", ImVec2(ws.x - contentPad * 2, contentH), false,
+            ImGuiWindowFlags_AlwaysVerticalScrollbar);
         ImGui::PopStyleVar(1);
         ImVec2 cs = ImGui::GetContentRegionAvail();
         g_ConfigListWidth = cs.x;
@@ -852,148 +855,6 @@ namespace Loader
         // ── STEALTH TAB ───────────────────────────────────────────
         if (l_SelectedTab == 0)
         {
-            // Card: Process Camouflage
-            ImVec2 c1m = ImGui::GetCursorScreenPos();
-            float c1H = 164.0f;
-            ImVec2 c1M(c1m.x + cs.x, c1m.y + c1H);
-            DrawCard(dl, c1m, c1M, 10.0f);
-            DrawSectionHeader(dl, ImVec2(c1m.x + 16.0f, c1m.y + 12.0f), "Process Camouflage", 0);
-
-            // Hide Process toggle — 13px label
-            {
-                float ty = c1m.y + 36.0f;
-                if (l_Font_Label)
-                    dl->AddText(l_Font_Label, 0, ImVec2(c1m.x + 16.0f, ty + (26.0f - l_Font_Label->FontSize) * 0.5f),
-                        Pal(0.90f, 0.92f, 0.95f), "Hide Process");
-                else
-                    dl->AddText(ImGui::GetFont(), 13.0f, ImVec2(c1m.x + 16.0f, ty + (26.0f - 13.0f) * 0.5f),
-                        Pal(0.90f, 0.92f, 0.95f), "Hide Process");
-                DrawSwitch(dl, ImVec2(c1M.x - 48.0f, ty + (26.0f - 18.0f) * 0.5f),
-                    40.0f, 18.0f, &Options::Misc::HideProcess, 0);
-                ImGui::SetCursorScreenPos(ImVec2(c1m.x + 16.0f, ty));
-                if (ImGui::InvisibleButton("##hp", ImVec2(cs.x - 32.0f, 26.0f)))
-                    Options::Misc::HideProcess = !Options::Misc::HideProcess;
-            }
-
-            // Process Name input with dropdown arrow
-            {
-                float iy = c1m.y + 68.0f;
-                if (l_Font_Label)
-                    dl->AddText(l_Font_Label, 0, ImVec2(c1m.x + 16.0f, iy), Pal(0.55f, 0.62f, 0.70f), "Process Name");
-                else
-                    dl->AddText(ImGui::GetFont(), 13.0f, ImVec2(c1m.x + 16.0f, iy), Pal(0.55f, 0.62f, 0.70f), "Process Name");
-                ImVec2 inpMin(c1m.x + 16.0f, iy + 18.0f);
-                ImVec2 inpMax(inpMin.x + cs.x - 32.0f, inpMin.y + 32.0f);
-                dl->AddRectFilled(inpMin, inpMax, Pal(0.035f, 0.055f, 0.075f), 5.0f);
-                dl->AddRect(inpMin, inpMax, Pal(0.165f, 0.235f, 0.333f), 5.0f, 0, 1.0f);
-                // Dropdown arrow
-                float arrowCX = inpMax.x - 12.0f, arrowCY = inpMin.y + 16.0f;
-                dl->AddTriangleFilled(ImVec2(arrowCX - 3.5f, arrowCY - 1.5f),
-                    ImVec2(arrowCX + 3.5f, arrowCY - 1.5f),
-                    ImVec2(arrowCX, arrowCY + 3.0f), Pal(0.55f, 0.62f, 0.70f));
-                // Text — 14px body
-                const char* txt = Options::Misc::ProcessName;
-                if (txt[0] == '\0') txt = "Select a process...";
-                ImU32 txtCol = Options::Misc::ProcessName[0]
-                    ? Pal(0.80f, 0.86f, 0.92f) : Pal(0.40f, 0.48f, 0.55f);
-                if (l_Font_Body)
-                    dl->AddText(l_Font_Body, 0, ImVec2(inpMin.x + 10.0f, inpMin.y + (32.0f - l_Font_Body->FontSize) * 0.5f),
-                        txtCol, txt);
-                else
-                    dl->AddText(ImGui::GetFont(), 14.0f, ImVec2(inpMin.x + 10.0f, inpMin.y + (32.0f - 14.0f) * 0.5f),
-                        txtCol, txt);
-                // Click to expand presets
-                static bool l_ProcDropdown = false;
-                ImGui::SetCursorScreenPos(inpMin);
-                if (ImGui::InvisibleButton("##procname", ImVec2(cs.x - 32.0f, 32.0f)))
-                    l_ProcDropdown = !l_ProcDropdown;
-                if (!ImGui::IsMouseHoveringRect(inpMin, ImVec2(inpMax.x + 16.0f, l_ProcDropdown ? inpMax.y + ProcessPresetCount * 26.0f + 4.0f : inpMax.y))
-                    && ImGui::IsMouseClicked(0))
-                    l_ProcDropdown = false;
-
-                if (l_ProcDropdown)
-                {
-                    float ddY = inpMax.y + 4.0f;
-                    ImVec2 ddMin(inpMin.x, ddY);
-                    float ddW = inpMax.x - inpMin.x;
-                    float ddH = ProcessPresetCount * 26.0f + 6.0f;
-                    float maxDY = c1m.y + c1H - 4.0f;
-                    if (ddY + ddH > maxDY) ddH = maxDY - ddY;
-                    ImVec2 ddMax(ddMin.x + ddW, ddMin.y + ddH);
-                    // Shadow
-                    dl->AddRectFilled(ImVec2(ddMin.x + 1.0f, ddMin.y + 2.0f), ImVec2(ddMax.x + 1.0f, ddMax.y + 3.0f),
-                        Pal(0.0f, 0.0f, 0.0f, 0.15f), 6.0f);
-                    dl->AddRectFilled(ImVec2(ddMin.x + 2.0f, ddMin.y + 1.0f), ImVec2(ddMax.x + 2.0f, ddMax.y + 2.0f),
-                        Pal(0.0f, 0.0f, 0.0f, 0.08f), 6.0f);
-                    // Solid bg — #141D2B
-                    dl->AddRectFilled(ddMin, ddMax, Pal(0.078f, 0.114f, 0.169f), 6.0f);
-                    dl->AddRect(ddMin, ddMax, Pal(0.165f, 0.235f, 0.333f), 6.0f, 0, 1.0f);
-                    for (int p = 0; p < ProcessPresetCount; p++)
-                    {
-                        float py = ddY + 3.0f + p * 26.0f;
-                        ImVec2 pMin(inpMin.x + 3.0f, py);
-                        ImVec2 pMax(inpMin.x + ddW - 3.0f, py + 24.0f);
-                        if (py + 24.0f > maxDY) break;
-                        bool hov = ImGui::IsMouseHoveringRect(pMin, pMax);
-                        bool sel = strcmp(Options::Misc::ProcessName, ProcessPresets[p]) == 0;
-                        if (hov) dl->AddRectFilled(pMin, pMax, Pal(0.118f, 0.655f, 1.0f, 0.10f), 4.0f);
-                        if (sel) {
-                            dl->AddRectFilled(ImVec2(pMin.x, pMin.y + 4.0f),
-                                ImVec2(pMin.x + 2.5f, pMin.y + 20.0f), Pal(0.118f, 0.655f, 1.0f));
-                        }
-                        if (l_Font_Body)
-                            dl->AddText(l_Font_Body, 0, ImVec2(pMin.x + 10.0f, pMin.y + (24.0f - l_Font_Body->FontSize) * 0.5f),
-                                sel ? Pal(0.118f, 0.655f, 1.0f) : Pal(0.604f, 0.659f, 0.737f), ProcessPresets[p]);
-                        else
-                            dl->AddText(ImGui::GetFont(), 13.0f, ImVec2(pMin.x + 10.0f, pMin.y + (24.0f - 13.0f) * 0.5f),
-                                sel ? Pal(0.118f, 0.655f, 1.0f) : Pal(0.604f, 0.659f, 0.737f), ProcessPresets[p]);
-                        ImGui::SetCursorScreenPos(pMin);
-                        char pID[32]; sprintf_s(pID, "##pp_%d", p);
-                        if (ImGui::InvisibleButton(pID, ImVec2(ddW - 6.0f, 24.0f)))
-                        {
-                            strncpy_s(Options::Misc::ProcessName, ProcessPresets[p], sizeof(Options::Misc::ProcessName) - 1);
-                            l_ProcDropdown = false;
-                        }
-                    }
-                }
-            }
-
-            // Preset chips — 12px small font
-            {
-                float chy = c1m.y + 122.0f;
-                if (l_Font_Small)
-                    dl->AddText(l_Font_Small, 0, ImVec2(c1m.x + 16.0f, chy), Pal(0.55f, 0.62f, 0.70f), "Quick Presets");
-                else
-                    dl->AddText(ImGui::GetFont(), 12.0f, ImVec2(c1m.x + 16.0f, chy), Pal(0.55f, 0.62f, 0.70f), "Quick Presets");
-                float cx = c1m.x + 16.0f, cy = chy + 14.0f;
-                for (int i = 0; i < ProcessPresetCount; i++)
-                {
-                    ImVec2 bs = ImGui::CalcTextSize(ProcessPresets[i]);
-                    float pW = bs.x + 14.0f, pH = 22.0f;
-                    if (cx + pW > c1M.x - 16.0f) break;
-                    bool hov = ImGui::IsMouseHoveringRect(ImVec2(cx, cy), ImVec2(cx + pW, cy + pH));
-                    bool sel = strcmp(Options::Misc::ProcessName, ProcessPresets[i]) == 0;
-                    ImU32 bg = sel ? Pal(0.118f, 0.655f, 1.0f, 0.15f) : Pal(0.04f, 0.06f, 0.09f);
-                    dl->AddRectFilled(ImVec2(cx, cy), ImVec2(cx + pW, cy + pH), bg, 11.0f);
-                    if (sel)
-                        dl->AddRect(ImVec2(cx, cy), ImVec2(cx + pW, cy + pH),
-                            Pal(0.0f, 0.659f, 1.0f, 0.4f), 11.0f, 0, 1.0f);
-                    if (l_Font_Small)
-                        dl->AddText(l_Font_Small, 0, ImVec2(cx + 7.0f, cy + (pH - l_Font_Small->FontSize) * 0.5f),
-                            sel ? Pal(0.118f, 0.655f, 1.0f) : Pal(0.55f, 0.62f, 0.70f), ProcessPresets[i]);
-                    else
-                        dl->AddText(ImGui::GetFont(), 12.0f, ImVec2(cx + 7.0f, cy + (pH - 12.0f) * 0.5f),
-                            sel ? Pal(0.118f, 0.655f, 1.0f) : Pal(0.55f, 0.62f, 0.70f), ProcessPresets[i]);
-                    ImGui::SetCursorScreenPos(ImVec2(cx, cy));
-                    char cID[32]; sprintf_s(cID, "##pc_%d", i);
-                    if (ImGui::InvisibleButton(cID, ImVec2(pW, pH)))
-                        strncpy_s(Options::Misc::ProcessName, ProcessPresets[i], sizeof(Options::Misc::ProcessName) - 1);
-                    cx += pW + 5.0f;
-                }
-            }
-
-            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + c1H + 8.0f);
-
             // Card: Visibility
             ImVec2 c2m = ImGui::GetCursorScreenPos();
             float c2H = 70.0f;
@@ -1010,7 +871,7 @@ namespace Loader
                 else
                     dl->AddText(ImGui::GetFont(), 13.0f, ImVec2(c2m.x + 16.0f, ty + (26.0f - 13.0f) * 0.5f),
                         Pal(0.80f, 0.86f, 0.92f), "Hide from Taskbar");
-                DrawSwitch(dl, ImVec2(c2M.x - 48.0f, ty + (26.0f - 18.0f) * 0.5f),
+                DrawSwitch(dl, ImVec2(c2M.x - 56.0f, ty + (26.0f - 18.0f) * 0.5f),
                     40.0f, 18.0f, &Options::Misc::HideFromTabs, 1);
                 ImGui::SetCursorScreenPos(ImVec2(c2m.x + 16.0f, ty));
                 if (ImGui::InvisibleButton("##hft", ImVec2(cs.x - 32.0f, 26.0f)))
@@ -1034,53 +895,11 @@ namespace Loader
                 else
                     dl->AddText(ImGui::GetFont(), 13.0f, ImVec2(c3m.x + 32.0f, ty + (36.0f - 13.0f) * 0.5f),
                         Pal(0.80f, 0.86f, 0.92f), "Stream Proof");
-                DrawSwitch(dl, ImVec2(c3M.x - 48.0f, ty + (36.0f - 18.0f) * 0.5f),
+                DrawSwitch(dl, ImVec2(c3M.x - 56.0f, ty + (36.0f - 18.0f) * 0.5f),
                     40.0f, 18.0f, &Options::Misc::StreamProof, 2);
                 ImGui::SetCursorScreenPos(ImVec2(c3m.x + 32.0f, ty));
                 if (ImGui::InvisibleButton("##sp", ImVec2(cs.x - 64.0f, 36.0f)))
                     Options::Misc::StreamProof = !Options::Misc::StreamProof;
-            }
-
-            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + c3H + 8.0f);
-
-            // Card: Exclusions
-            ImVec2 c4m = ImGui::GetCursorScreenPos();
-            float c4H = 82.0f;
-            ImVec2 c4M(c4m.x + cs.x, c4m.y + c4H);
-            DrawCard(dl, c4m, c4M, 10.0f);
-            DrawSectionHeader(dl, ImVec2(c4m.x + 16.0f, c4m.y + 12.0f), "Exclusions", 3);
-
-            {
-                float iy = c4m.y + 36.0f;
-                if (l_Font_Label)
-                    dl->AddText(l_Font_Label, 0, ImVec2(c4m.x + 16.0f, iy), Pal(0.55f, 0.62f, 0.70f), "Exclusion Path");
-                else
-                    dl->AddText(ImGui::GetFont(), 13.0f, ImVec2(c4m.x + 16.0f, iy), Pal(0.55f, 0.62f, 0.70f), "Exclusion Path");
-                ImVec2 inpMin(c4m.x + 16.0f, iy + 18.0f);
-                ImVec2 inpMax(inpMin.x + cs.x - 32.0f, inpMin.y + 30.0f);
-                dl->AddRectFilled(inpMin, inpMax, Pal(0.035f, 0.055f, 0.075f), 5.0f);
-                dl->AddRect(inpMin, inpMax, Pal(0.165f, 0.235f, 0.333f), 5.0f, 0, 1.0f);
-                const char* exTxt = Options::Misc::ExclusionPath;
-                if (exTxt[0] == '\0') exTxt = "e.g. C:\\Program Files\\Game";
-                ImU32 extCol = Options::Misc::ExclusionPath[0]
-                    ? Pal(0.80f, 0.86f, 0.92f) : Pal(0.40f, 0.48f, 0.55f);
-                if (l_Font_Body)
-                    dl->AddText(l_Font_Body, 0, ImVec2(inpMin.x + 10.0f, inpMin.y + (30.0f - l_Font_Body->FontSize) * 0.5f),
-                        extCol, exTxt);
-                else
-                    dl->AddText(ImGui::GetFont(), 14.0f, ImVec2(inpMin.x + 10.0f, inpMin.y + (30.0f - 14.0f) * 0.5f),
-                        extCol, exTxt);
-                ImGui::SetCursorScreenPos(inpMin);
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.0f);
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 4));
-                ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 0));
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.80f, 0.86f, 0.92f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_TextDisabled, ImVec4(0.40f, 0.48f, 0.55f, 1.0f));
-                ImGui::PushItemWidth(inpMax.x - inpMin.x);
-                ImGui::InputText("##exclpath", Options::Misc::ExclusionPath, sizeof(Options::Misc::ExclusionPath));
-                ImGui::PopItemWidth();
-                ImGui::PopStyleColor(3);
-                ImGui::PopStyleVar(2);
             }
         }
 
@@ -1165,11 +984,11 @@ namespace Loader
                 else
                     dl->AddText(ImGui::GetFont(), 13.0f, ImVec2(cf1m.x + 16.0f, sy), Pal(0.80f, 0.86f, 0.92f), "Scale");
                 ImGui::SetCursorScreenPos(ImVec2(cf1m.x + 16.0f, sy + 18.0f));
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 2));
-                ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.035f, 0.055f, 0.075f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.0f, 0.659f, 1.0f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.22f, 0.80f, 1.0f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.030f, 0.050f, 0.068f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.118f, 0.655f, 1.0f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.165f, 0.706f, 1.0f, 1.0f));
                 ImGui::PushItemWidth(cs.x - 32.0f);
                 ImGui::SliderFloat("##scale", &Options::Misc::MenuScale, 0.6f, 2.0f, "%.1fx");
                 ImGui::PopItemWidth();
@@ -1190,12 +1009,12 @@ namespace Loader
                     bool sel = (Options::Misc::MenuFont == i);
                     ImVec2 mn(cf1m.x + 16.0f, fy);
                     ImVec2 mx(mn.x + cs.x - 32.0f, mn.y + 32.0f);
-                    ImU32 bg = sel ? Pal(0.0f, 0.659f, 1.0f, 0.10f) : Pal(0.035f, 0.055f, 0.075f);
-                    dl->AddRectFilled(mn, mx, bg, 5.0f);
+                    ImU32 bg = sel ? Pal(0.118f, 0.655f, 1.0f, 0.10f) : Pal(0.030f, 0.050f, 0.068f);
+                    dl->AddRectFilled(mn, mx, bg, 6.0f);
+                    dl->AddRect(mn, mx, sel ? Pal(0.118f, 0.655f, 1.0f, 0.4f) : Pal(0.165f, 0.271f, 0.408f, 0.3f), 6.0f, 0, 1.0f);
                     if (sel) {
-                        dl->AddRect(mn, mx, Pal(0.0f, 0.659f, 1.0f, 0.4f), 5.0f, 0, 1.5f);
                         dl->AddRectFilled(ImVec2(mn.x + 2.0f, mn.y + 6.0f),
-                            ImVec2(mn.x + 4.0f, mn.y + 26.0f), Pal(0.0f, 0.659f, 1.0f));
+                            ImVec2(mn.x + 4.0f, mn.y + 26.0f), Pal(0.118f, 0.655f, 1.0f));
                     }
                     if (l_Font_Body)
                         dl->AddText(l_Font_Body, 0, ImVec2(mn.x + 12.0f, mn.y + (32.0f - l_Font_Body->FontSize) * 0.5f),
@@ -1232,7 +1051,7 @@ namespace Loader
                 else
                     dl->AddText(ImGui::GetFont(), 13.0f, ImVec2(cc1m.x + 16.0f, ty + (26.0f - 13.0f) * 0.5f),
                         Pal(0.80f, 0.86f, 0.92f), "Autoload on Start");
-                DrawSwitch(dl, ImVec2(cc1M.x - 48.0f, ty + (26.0f - 18.0f) * 0.5f),
+                DrawSwitch(dl, ImVec2(cc1M.x - 56.0f, ty + (26.0f - 18.0f) * 0.5f),
                     40.0f, 18.0f, &Options::Loader::AttachOnStart, 3);
                 ImGui::SetCursorScreenPos(ImVec2(cc1m.x + 16.0f, ty));
                 if (ImGui::InvisibleButton("##autoload", ImVec2(cs.x - 32.0f, 26.0f)))
@@ -1253,7 +1072,7 @@ namespace Loader
                 ImGui::SetCursorScreenPos(ImVec2(cc1m.x + 16.0f, listY));
                 ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 5.0f);
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(3, 3));
-                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.035f, 0.055f, 0.075f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.030f, 0.050f, 0.068f, 1.0f));
                 ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
                 ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, ImVec4(0.06f, 0.09f, 0.14f, 0.8f));
                 ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, ImVec4(0.0f, 0.659f, 1.0f, 0.4f));
@@ -1271,17 +1090,17 @@ namespace Loader
                     float itemH = 28.0f;
                     ImVec2 mx(mn.x + innerW, mn.y + itemH);
                     bool hov = ImGui::IsMouseHoveringRect(mn, mx);
-                    ImU32 bg = sel ? Pal(0.0f, 0.659f, 1.0f, 0.10f)
-                        : hov ? Pal(0.045f, 0.065f, 0.090f)
-                        : Pal(0.030f, 0.048f, 0.068f);
+                    ImU32 bg = sel ? Pal(0.118f, 0.655f, 1.0f, 0.10f)
+                        : hov ? Pal(0.040f, 0.060f, 0.082f)
+                        : Pal(0.025f, 0.042f, 0.060f);
                     cdl->AddRectFilled(mn, mx, bg, 4.0f);
                     if (sel) {
                         cdl->AddRectFilled(ImVec2(mn.x + 2.0f, mn.y + 5.0f),
-                            ImVec2(mn.x + 4.0f, mn.y + itemH - 5.0f), Pal(0.0f, 0.659f, 1.0f));
+                            ImVec2(mn.x + 4.0f, mn.y + itemH - 5.0f), Pal(0.118f, 0.655f, 1.0f));
                     }
                     if (l_Font_Body)
                         cdl->AddText(l_Font_Body, 0, ImVec2(mn.x + 10.0f, mn.y + (itemH - l_Font_Body->FontSize) * 0.5f),
-                            sel ? Pal(0.0f, 0.659f, 1.0f) : Pal(0.78f, 0.84f, 0.90f),
+                            sel ? Pal(0.118f, 0.655f, 1.0f) : Pal(0.78f, 0.84f, 0.90f),
                             ConfigFiles[i].c_str());
                     else
                         cdl->AddText(ImGui::GetFont(), 14.0f, ImVec2(mn.x + 10.0f, mn.y + (itemH - 14.0f) * 0.5f),
@@ -1391,7 +1210,7 @@ namespace Loader
         RegisterClassExW(&wc);
 
         int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
-        int ww = 480, wh = 580;
+        int ww = 480, wh = 600;
         l_Hwnd = CreateWindowW(wc.lpszClassName, L"Seraph", WS_POPUP | WS_VISIBLE,
             (sw - ww) / 2, (sh - wh) / 2, ww, wh, nullptr, nullptr, wc.hInstance, nullptr);
 
@@ -1423,33 +1242,34 @@ namespace Loader
 
         ImGui::StyleColorsDark();
         ImGuiStyle& s = ImGui::GetStyle();
-        s.WindowRounding = 0; s.FrameRounding = 5; s.GrabRounding = 3;
-        s.ChildRounding = 8; s.ScrollbarRounding = 4; s.ScrollbarSize = 3;
+        s.WindowRounding = 0; s.FrameRounding = 6; s.GrabRounding = 6;
+        s.ChildRounding = 6; s.ScrollbarRounding = 6; s.ScrollbarSize = 8;
         s.WindowPadding = ImVec2(0, 0); s.FramePadding = ImVec2(8, 5); s.ItemSpacing = ImVec2(8, 5);
         s.PopupRounding = 6;
+        s.GrabMinSize = 12.0f;
 
-        // Loader palette — premium blue-black gradient
-        s.Colors[ImGuiCol_WindowBg]             = PalV(0.067f, 0.094f, 0.153f);  // #111827
+        // Loader palette — premium blue-black gradient (refined)
+        s.Colors[ImGuiCol_WindowBg]             = PalV(0.063f, 0.094f, 0.153f);  // #101827
         s.Colors[ImGuiCol_ChildBg]              = ImVec4(0, 0, 0, 0);
-        s.Colors[ImGuiCol_Border]               = PalV(0.149f, 0.212f, 0.302f);  // #26364D
+        s.Colors[ImGuiCol_Border]               = PalV(0.165f, 0.271f, 0.408f);  // #2A4568
         s.Colors[ImGuiCol_Text]                 = PalV(0.961f, 0.969f, 0.980f);  // #F5F7FA
-        s.Colors[ImGuiCol_TextDisabled]         = PalV(0.604f, 0.659f, 0.737f);  // #9AA8BC
-        s.Colors[ImGuiCol_FrameBg]              = PalV(0.035f, 0.055f, 0.075f);
-        s.Colors[ImGuiCol_FrameBgHovered]       = PalV(0.045f, 0.065f, 0.090f);
-        s.Colors[ImGuiCol_FrameBgActive]        = PalV(0.0f, 0.18f, 0.28f);
+        s.Colors[ImGuiCol_TextDisabled]         = PalV(0.400f, 0.455f, 0.533f);  // #667488
+        s.Colors[ImGuiCol_FrameBg]              = PalV(0.030f, 0.050f, 0.068f);
+        s.Colors[ImGuiCol_FrameBgHovered]       = PalV(0.040f, 0.060f, 0.082f);
+        s.Colors[ImGuiCol_FrameBgActive]        = PalV(0.0f, 0.15f, 0.25f);
         s.Colors[ImGuiCol_SliderGrab]           = PalV(0.118f, 0.655f, 1.0f);    // #1EA7FF
-        s.Colors[ImGuiCol_SliderGrabActive]     = PalV(0.165f, 0.706f, 1.0f);    // #2AB4FF
+        s.Colors[ImGuiCol_SliderGrabActive]     = PalV(0.208f, 0.710f, 1.0f);    // #35B5FF
         s.Colors[ImGuiCol_CheckMark]            = PalV(0.118f, 0.655f, 1.0f);    // #1EA7FF
-        s.Colors[ImGuiCol_Header]               = PalV(0.0f, 0.18f, 0.28f, 0.3f);
-        s.Colors[ImGuiCol_HeaderHovered]        = PalV(0.0f, 0.18f, 0.28f, 0.4f);
-        s.Colors[ImGuiCol_HeaderActive]         = PalV(0.0f, 0.18f, 0.28f, 0.5f);
+        s.Colors[ImGuiCol_Header]               = PalV(0.0f, 0.15f, 0.25f, 0.3f);
+        s.Colors[ImGuiCol_HeaderHovered]        = PalV(0.0f, 0.15f, 0.25f, 0.4f);
+        s.Colors[ImGuiCol_HeaderActive]         = PalV(0.0f, 0.15f, 0.25f, 0.5f);
         s.Colors[ImGuiCol_Separator]            = PalV(0.04f, 0.07f, 0.11f);
         s.Colors[ImGuiCol_Button]               = ImVec4(0, 0, 0, 0);
-        s.Colors[ImGuiCol_ButtonHovered]        = PalV(0.0f, 0.18f, 0.28f, 0.15f);
-        s.Colors[ImGuiCol_ButtonActive]         = PalV(0.0f, 0.18f, 0.28f, 0.25f);
-        s.Colors[ImGuiCol_ScrollbarBg]          = ImVec4(0, 0, 0, 0);
-        s.Colors[ImGuiCol_ScrollbarGrab]        = PalV(0.06f, 0.09f, 0.13f, 0.8f);
-        s.Colors[ImGuiCol_ScrollbarGrabHovered] = PalV(0.118f, 0.655f, 1.0f, 0.4f);
+        s.Colors[ImGuiCol_ButtonHovered]        = PalV(0.0f, 0.15f, 0.25f, 0.15f);
+        s.Colors[ImGuiCol_ButtonActive]         = PalV(0.0f, 0.15f, 0.25f, 0.25f);
+        s.Colors[ImGuiCol_ScrollbarBg]          = PalV(0.04f, 0.06f, 0.09f, 0.6f);
+        s.Colors[ImGuiCol_ScrollbarGrab]        = PalV(0.165f, 0.271f, 0.408f, 0.9f);
+        s.Colors[ImGuiCol_ScrollbarGrabHovered] = PalV(0.118f, 0.655f, 1.0f, 0.7f);
         s.Colors[ImGuiCol_PopupBg]              = PalV(0.078f, 0.114f, 0.169f, 0.98f); // #141D2B
 
         // ── Load fonts BEFORE backends (atlas must contain fonts when built) ──

@@ -553,12 +553,10 @@ inline json BuildConfigJson()
 
     j["Chams"] = {
         { "Enabled", Options::Chams::Enabled },
-        { "Mode", Options::Chams::Mode },
-        { "Engine Chams", Options::Chams::EngineChams },
-        { "Material", Options::Chams::Material },
-        { "Visible Color", ToJsonColor(Options::Chams::VisibleColor, 4) },
-        { "Occluded Color", ToJsonColor(Options::Chams::OccludedColor, 4) },
-        { "Outline Thickness", Options::Chams::OutlineThickness },
+        { "Fade", Options::Chams::ChamsFade },
+        { "Fade Speed", Options::Chams::ChamsFadeSpeed },
+        { "Fill Color", ToJsonColor(Options::Chams::FillColor, 4) },
+        { "Outline Color", ToJsonColor(Options::Chams::OutlineColor, 4) },
         { "Team Check", Options::Chams::TeamCheck }
     };
 
@@ -1079,12 +1077,10 @@ inline void ApplyConfigJson(const json& data)
     {
         const auto& ch = data["Chams"];
         LoadVal(ch, "Enabled", Options::Chams::Enabled);
-        LoadVal(ch, "Mode", Options::Chams::Mode);
-        LoadVal(ch, "Engine Chams", Options::Chams::EngineChams);
-        LoadVal(ch, "Material", Options::Chams::Material);
-        LoadFloatArray(ch, "Visible Color", Options::Chams::VisibleColor);
-        LoadFloatArray(ch, "Occluded Color", Options::Chams::OccludedColor);
-        LoadVal(ch, "Outline Thickness", Options::Chams::OutlineThickness);
+        LoadVal(ch, "Fade", Options::Chams::ChamsFade);
+        LoadVal(ch, "Fade Speed", Options::Chams::ChamsFadeSpeed);
+        LoadFloatArray(ch, "Fill Color", Options::Chams::FillColor);
+        LoadFloatArray(ch, "Outline Color", Options::Chams::OutlineColor);
         LoadVal(ch, "Team Check", Options::Chams::TeamCheck);
     }
 

@@ -47,6 +47,52 @@ namespace CombatFeedback
         float maxTime = 0.6f;
     };
 
+    // Enhanced 3D hit effect particles
+    struct ImpactParticle
+    {
+        Vectors::Vector3 worldPos;
+        Vectors::Vector3 velocity;
+        ImU32 color;
+        float size;
+        float timeLeft;
+        float maxTime;
+        float rotation;
+        float rotationSpeed;
+        bool isSpark;
+    };
+
+    // 3D damage number floating up
+    struct DamageNumber
+    {
+        Vectors::Vector3 worldPos;
+        float damage;
+        float timeLeft;
+        float maxTime;
+        float yOffset;
+        ImU32 color;
+    };
+
+    // Hit splatter / blood effect
+    struct HitSplatter
+    {
+        Vectors::Vector3 worldPos;
+        Vectors::Vector3 normal;
+        float timeLeft;
+        float maxTime;
+        float size;
+    };
+
+    // Ghost chams left at hit position
+    struct GhostChams
+    {
+        uintptr_t playerAddress;
+        std::vector<ImVec2> hull;
+        ImU32 fillColor;
+        ImU32 outlineColor;
+        float timeLeft;
+        float maxTime;
+    };
+
     struct BulletTracer
     {
         Vectors::Vector3 start;
@@ -65,6 +111,10 @@ namespace CombatFeedback
     inline std::unordered_map<uintptr_t, float> hitFlashTimer;
     inline std::vector<HitNotification> notifications;
     inline std::vector<HitEffect> effects;
+    inline std::vector<ImpactParticle> impactParticles;
+    inline std::vector<DamageNumber> damageNumbers;
+    inline std::vector<HitSplatter> hitSplatters;
+    inline std::vector<GhostChams> ghostChams;
     inline std::vector<BulletTracer> bulletTracers;
     inline std::vector<Footstep> footsteps;
     inline std::unordered_map<uintptr_t, Vectors::Vector3> lastPlayerPos;
@@ -206,19 +256,40 @@ namespace CombatFeedback
             return;
         LastHitSoundTime() = now;
 
-        auto& files = Globals::HitSounds::Files;
-        if (files.empty())
+        // If custom file is set, use it
+        if (Options::Combat::HitSoundFile[0] != '\0')
         {
-            PlayTone(1800, 45, 0.85f, 10);
+            std::string path = Options::Combat::HitSoundFile;
+            PlaySoundA(path.c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
             return;
         }
 
-        int idx = Options::Combat::HitSoundType;
-        if (idx < 0 || idx >= static_cast<int>(files.size()))
-            idx = 0;
+        // Auto-use first file from hitsounds folder if available
+        auto& files = Globals::HitSounds::Files;
+        if (!files.empty())
+        {
+            std::string path = Globals::HitSounds::FolderPath + "\\" + files[0];
+            PlaySoundA(path.c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+            return;
+        }
 
-        std::string path = Globals::HitSounds::FolderPath + "\\" + files[idx];
-        PlaySoundA(path.c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+        // Built-in presets fallback
+        switch (Options::Combat::HitSoundType)
+        {
+            case 1: PlayTone(800, 120, 0.85f, 10); break;      // bell
+            case 2: PlayTone(150, 200, 1.0f, 20); break;       // bass
+            case 3: PlayTwoTone(200, 400, 80, 80, 0.9f, 15); break; // hvhpissy
+            case 4: PlayTwoTone(600, 800, 50, 50, 0.9f, 15); break; // hvhks
+            case 5: PlayTwoTone(400, 600, 100, 50, 0.9f, 15); break; // hvhtag
+            case 6: PlayTone(1800, 45, 0.85f, 10); break;      // neverlose
+            case 7: PlayTwoTone(1200, 600, 50, 50); break;     // rust
+            case 8: PlayTwoTone(1000, 3000, 30, 30); break;    // quake
+            case 9: PlayTone(1200, 80, 0.8f, 10); break;       // cod
+            case 10: PlayTwoTone(400, 800, 40, 40); break;     // bubble
+            case 11: PlayTone(1000, 80, 0.8f, 10); break;      // minecraft
+            case 12: PlayTwoTone(2000, 1000, 40, 60); break;   // fatality
+            default: PlayTone(1800, 45, 0.85f, 10); break;     // click (default)
+        }
     }
 
     inline float ReadLiveHealth(const RobloxPlayer& player)
@@ -448,8 +519,65 @@ namespace CombatFeedback
                 [](const Footstep& f) { return f.timeLeft <= 0.0f; }),
             footsteps.end());
 
-        if (Globals::Caches::CachedPlayerObjects.empty())
-            return;
+        // Update impact particles
+        for (auto& p : impactParticles)
+        {
+            p.worldPos = p.worldPos + p.velocity * dt;
+            p.velocity.y -= dt * 9.81f * 2.0f; // gravity
+            p.rotation += p.rotationSpeed * dt;
+            p.timeLeft -= dt;
+        }
+        impactParticles.erase(
+            std::remove_if(impactParticles.begin(), impactParticles.end(),
+                [](const ImpactParticle& p) { return p.timeLeft <= 0.0f; }),
+            impactParticles.end());
+
+        // Update damage numbers
+        for (auto& d : damageNumbers)
+        {
+            d.yOffset += dt * 40.0f; // float upward
+            d.timeLeft -= dt;
+        }
+        damageNumbers.erase(
+            std::remove_if(damageNumbers.begin(), damageNumbers.end(),
+                [](const DamageNumber& d) { return d.timeLeft <= 0.0f; }),
+            damageNumbers.end());
+
+        // Update hit splatters
+        for (auto& s : hitSplatters)
+        {
+            s.timeLeft -= dt;
+        }
+        hitSplatters.erase(
+            std::remove_if(hitSplatters.begin(), hitSplatters.end(),
+                [](const HitSplatter& s) { return s.timeLeft <= 0.0f; }),
+            hitSplatters.end());
+
+        // Update ghost chams
+        for (auto& g : ghostChams)
+        {
+            g.timeLeft -= dt;
+        }
+        ghostChams.erase(
+            std::remove_if(ghostChams.begin(), ghostChams.end(),
+                [](const GhostChams& g) { return g.timeLeft <= 0.0f; }),
+            ghostChams.end());
+
+        // Update bullet tracers
+        for (auto& tracer : bulletTracers)
+            tracer.timeLeft -= dt;
+        bulletTracers.erase(
+            std::remove_if(bulletTracers.begin(), bulletTracers.end(),
+                [](const BulletTracer& t) { return t.timeLeft <= 0.0f; }),
+            bulletTracers.end());
+
+        // Update footsteps
+        for (auto& fs : footsteps)
+            fs.timeLeft -= dt;
+        footsteps.erase(
+            std::remove_if(footsteps.begin(), footsteps.end(),
+                [](const Footstep& f) { return f.timeLeft <= 0.0f; }),
+            footsteps.end());
 
         std::unordered_map<uintptr_t, bool> seen;
         for (const auto& player : Globals::Caches::CachedPlayerObjects)
@@ -660,7 +788,112 @@ namespace CombatFeedback
                 default: // 0 - Solid
                     drawList->AddLine(p1, p2, col, thickness);
                     break;
+}
+        }
+
+        // Render 3D impact particles
+        if (!impactParticles.empty())
+        {
+            for (const auto& p : impactParticles)
+            {
+                auto screenPos = WorldToScreen(p.worldPos);
+                if (screenPos.x < 0 || screenPos.y < 0) continue;
+
+                float t = p.timeLeft / p.maxTime;
+                int alpha = static_cast<int>(255.0f * t);
+                ImU32 col = (p.color & 0x00FFFFFF) | (static_cast<ImU32>(alpha) << 24);
+
+                float size = p.size * (0.5f + 0.5f * t);
+                if (p.isSpark)
+                {
+                    // Draw spark as small line
+                    float len = p.size * 4.0f;
+                    Vectors::Vector3 end3D = p.worldPos + p.velocity.Normalize() * len * 0.1f;
+                    auto endScreen = WorldToScreen(end3D);
+                    if (endScreen.x >= 0 && endScreen.y >= 0)
+                    {
+                        drawList->AddLine(ImVec2(screenPos.x, screenPos.y), ImVec2(endScreen.x, endScreen.y), col, 1.5f);
+                    }
                 }
+                else
+                {
+                    drawList->AddCircleFilled(ImVec2(screenPos.x, screenPos.y), size, col, 12);
+                }
+            }
+        }
+
+        // Render 3D damage numbers
+        if (!damageNumbers.empty())
+        {
+            ImFont* font = ImGui::GetFont();
+            for (const auto& d : damageNumbers)
+            {
+                auto screenPos = WorldToScreen({ d.worldPos.x, d.worldPos.y + d.yOffset, d.worldPos.z });
+                if (screenPos.x < 0 || screenPos.y < 0) continue;
+
+                float t = d.timeLeft / d.maxTime;
+                int alpha = static_cast<int>(255.0f * t);
+                ImU32 col = (d.color & 0x00FFFFFF) | (static_cast<ImU32>(alpha) << 24);
+                ImU32 outlineCol = IM_COL32(0, 0, 0, alpha);
+
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%.0f", d.damage);
+                const float fontSize = 16.0f + (1.0f - t) * 8.0f;
+                ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, buf);
+                ImVec2 textPos(screenPos.x - textSize.x * 0.5f, screenPos.y - textSize.y * 0.5f);
+
+                // Outline
+                drawList->AddText(font, fontSize, ImVec2(textPos.x + 1, textPos.y + 1), IM_COL32(0, 0, 0, alpha), buf);
+                drawList->AddText(font, fontSize, ImVec2(textPos.x - 1, textPos.y - 1), IM_COL32(0, 0, 0, alpha), buf);
+                drawList->AddText(font, fontSize, ImVec2(textPos.x + 1, textPos.y - 1), IM_COL32(0, 0, 0, alpha), buf);
+                drawList->AddText(font, fontSize, ImVec2(textPos.x - 1, textPos.y + 1), IM_COL32(0, 0, 0, alpha), buf);
+                drawList->AddText(font, fontSize, textPos, col, buf);
+            }
+        }
+
+        // Render hit splatters (3D blood/hit decals)
+        if (!hitSplatters.empty())
+        {
+            for (const auto& s : hitSplatters)
+            {
+                auto screenPos = WorldToScreen(s.worldPos);
+                if (screenPos.x < 0 || screenPos.y < 0) continue;
+
+                float t = s.timeLeft / s.maxTime;
+                float size = s.size * (1.0f - t * 0.5f);
+                int alpha = static_cast<int>(200.0f * t);
+                ImU32 col = IM_COL32(255, 50, 50, alpha);
+
+                // Draw splatter as multiple small circles
+                int numDrops = 6;
+                for (int i = 0; i < numDrops; ++i)
+                {
+                    float angle = (float)i / numDrops * 6.28318f;
+                    float dist = size * (0.5f + 0.5f * (1.0f - t));
+                    float dx = cosf(angle) * dist;
+                    float dy = sinf(angle) * dist;
+                    drawList->AddCircleFilled(ImVec2(screenPos.x + dx, screenPos.y + dy), size * 0.3f, col, 8);
+                }
+            }
+        }
+
+        // Render ghost chams (copies of player at hit moment)
+        if (!ghostChams.empty())
+        {
+            for (const auto& g : ghostChams)
+            {
+                if (g.hull.size() < 3) continue;
+
+                float t = g.timeLeft / g.maxTime;
+                int fillAlpha = static_cast<int>(180.0f * g.timeLeft / g.maxTime);
+                int outlineAlpha = static_cast<int>(220.0f * g.timeLeft / g.maxTime);
+
+                ImU32 fillColor = (g.fillColor & 0x00FFFFFF) | (static_cast<ImU32>(fillAlpha) << 24);
+                ImU32 outlineColor = (g.outlineColor & 0x00FFFFFF) | (static_cast<ImU32>(outlineAlpha) << 24);
+
+                // Draw ghost as wireframe with fading fill
+                drawList->AddConvexPolyFilled(g.hull.data(), static_cast<int>(g.hull.size()), fillColor);
+                drawList->AddPolyline(g.hull.data(), static_cast<int>(g.hull.size()), outlineColor, true, 2.0f);
             }
         }
 
@@ -713,4 +946,5 @@ namespace CombatFeedback
             }
         }
     }
+}
 }

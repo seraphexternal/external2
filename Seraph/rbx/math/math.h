@@ -33,6 +33,9 @@ namespace Vectors
         float x;
         float y;
 
+        inline Vector2() : x(0.f), y(0.f) {}
+        inline Vector2(float vx, float vy) : x(vx), y(vy) {}
+
         float Magnitude() const
         {
             return std::sqrt(x * x + y * y);
@@ -49,6 +52,9 @@ namespace Vectors
     struct Vector3 {
         float x, y, z;
 
+        inline Vector3() : x(0.f), y(0.f), z(0.f) {}
+        inline Vector3(float vx, float vy, float vz) : x(vx), y(vy), z(vz) {}
+
         inline Vector3 operator+(const Vector3& other) const {
             return { x + other.x, y + other.y, z + other.z };
         }
@@ -57,6 +63,10 @@ namespace Vectors
         }
         inline Vector3 operator*(float scalar) const {
             return { x * scalar, y * scalar, z * scalar };
+        }
+        inline Vector3 operator/(float scalar) const {
+            float inv = 1.0f / scalar;
+            return { x * inv, y * inv, z * inv };
         }
 
         float Magnitude() const

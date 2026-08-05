@@ -10,6 +10,7 @@
 #include "../overlay/imgui/KeyBind.h"
 #include "combatfeedback.h"
 #include "visibility.h"
+#include "silentaim.h"
 
 namespace RivalsDetect
 {
@@ -1340,6 +1341,9 @@ inline void RunAimbot(ImDrawList* drawList)
     if (!Options::Aimbot::Aimbot)
         return;
 
+    // Run raycast silent aim
+    SilentAim::RunSilentAim();
+
     auto localTeam = Globals::Roblox::LocalPlayer.Team();
     auto localCharacter = Globals::Roblox::LocalPlayer.Character();
     auto localHRP = localCharacter.FindFirstChild("HumanoidRootPart");
@@ -1514,7 +1518,7 @@ inline void RunAimbot(ImDrawList* drawList)
         // In toggle mode, check if toggled state is active
         if (!Options::Aimbot::Toggled)
         {
-            Options::Aimbot::CurrentTarget = RobloxPlayer(0);
+            Options::Aimbot::CurrentTarget = RobloxPlayer();
             return;
         }
     }
@@ -1523,7 +1527,7 @@ inline void RunAimbot(ImDrawList* drawList)
         // Hold mode: check if key is currently pressed
         if (!isKeyPressed)
         {
-            Options::Aimbot::CurrentTarget = RobloxPlayer(0);
+            Options::Aimbot::CurrentTarget = RobloxPlayer();
             Options::Aimbot::Toggled = false; // Reset toggle state when in hold mode
             return;
         }
