@@ -464,6 +464,9 @@ inline RobloxPlayer GetClosestPlayer()
 
             if (Options::Rivals::IgnoreFlash && RivalsDetect::isFlashed)
                 continue;
+
+            if (Options::Rivals::AntiKatana && IsHoldingKatana(player))
+                continue;
         }
 
         if (Options::Aimbot::WallCheck && Visibility::IsPlayerOccluded(player))
@@ -864,7 +867,7 @@ inline void SilentLockAim()
     wasActive = true;
 }
 
-// ── Aim Info runtime state (filled each frame by RunAimbot) ────────────────
+// ── Aim Info runtime state (filled each frame by RunAimCore) ────────────────
 struct AimInfoState
 {
     bool valid = false;
@@ -873,6 +876,8 @@ struct AimInfoState
     float health = 0.f;
     float maxHealth = 0.f;
     std::string part;
+    std::string tool;
+    uint64_t userId = 0;
 };
 inline AimInfoState g_AimInfo;
 
@@ -891,86 +896,6 @@ inline const char* AimInfoPartName()
     case 6: return "Lower Torso";
     case 7: return "Upper Torso";
     default: return "Head";
-    }
-}
-
-inline void RenderAimInfo()
-{
-    if (!Options::Aimbot::AimInfo || !g_AimInfo.valid)
-        return;
-
-    ImDrawList* dl = ImGui::GetForegroundDrawList();
-    ImGuiIO& io = ImGui::GetIO();
-
-    // Build the lines we want to show.
-    std::vector<std::pair<std::string, ImU32>> lines;
-    if (Options::Aimbot::AimInfoName)
-        lines.push_back({ g_AimInfo.name, IM_COL32(235, 235, 235, 255) });
-    if (Options::Aimbot::AimInfoDistance)
-    {
-        char b[48]; snprintf(b, sizeof(b), "Distance  %.0f studs", g_AimInfo.distance);
-        lines.push_back({ b, IM_COL32(180, 200, 255, 255) });
-    }
-    if (Options::Aimbot::AimInfoHealth)
-    {
-        char b[48]; snprintf(b, sizeof(b), "Health  %.0f / %.0f", g_AimInfo.health, g_AimInfo.maxHealth);
-        lines.push_back({ b, IM_COL32(180, 255, 200, 255) });
-    }
-    if (Options::Aimbot::AimInfoPart)
-    {
-        std::string s = "Target  " + g_AimInfo.part;
-        lines.push_back({ s, IM_COL32(255, 210, 150, 255) });
-    }
-
-    if (lines.empty()) return;
-
-    const float padX = 12.0f, padY = 8.0f;
-    const float lineH = 20.0f;
-    const float barH = 6.0f;
-
-    // Measure widest line for panel width.
-    float maxW = 0.0f;
-    for (auto& l : lines)
-        maxW = (std::max)(maxW, ImGui::CalcTextSize(l.first.c_str()).x);
-
-    const float panelW = maxW + padX * 2.0f;
-    const float headerH = 26.0f;
-    const bool showBar = Options::Aimbot::AimInfoHealth && g_AimInfo.maxHealth > 0.0f;
-    const float contentH = headerH + static_cast<float>(lines.size()) * lineH
-        + (showBar ? barH + 6.0f : 0.0f) + padY * 2.0f - 4.0f;
-
-    ImVec2 pos(io.DisplaySize.x - panelW - 18.0f, 120.0f);
-    ImVec2 rectMin(pos.x, pos.y);
-    ImVec2 rectMax(pos.x + panelW, pos.y + contentH);
-
-    // Body
-    dl->AddRectFilled(rectMin, rectMax, IM_COL32(14, 16, 22, 225), 6.0f);
-    dl->AddRect(rectMin, rectMax, IM_COL32(90, 120, 180, 200), 6.0f, 0, 1.5f);
-
-    // Header strip
-    ImVec2 headerMax(pos.x + panelW, pos.y + headerH);
-    dl->AddRectFilled(rectMin, headerMax, IM_COL32(40, 60, 110, 235), 6.0f);
-    dl->AddLine(ImVec2(pos.x, pos.y + headerH), ImVec2(pos.x + panelW, pos.y + headerH), IM_COL32(90, 120, 180, 200), 1.0f);
-    dl->AddText(ImVec2(pos.x + padX, pos.y + 5.0f), IM_COL32(255, 255, 255, 255), "TARGET LOCKED");
-
-    // Lines
-    float y = pos.y + headerH + 4.0f;
-    for (auto& l : lines)
-    {
-        dl->AddText(ImVec2(pos.x + padX, y + 2.0f), l.second, l.first.c_str());
-        y += lineH;
-    }
-
-    // Health bar
-    if (showBar)
-    {
-        float frac = (std::max)(0.0f, (std::min)(1.0f, g_AimInfo.health / g_AimInfo.maxHealth));
-        ImVec2 barMin(pos.x + padX, y);
-        ImVec2 barMax(pos.x + panelW - padX, y + barH);
-        dl->AddRectFilled(barMin, barMax, IM_COL32(30, 30, 35, 255), 3.0f);
-        ImU32 barCol = frac > 0.5f ? IM_COL32(80, 220, 120, 255)
-            : (frac > 0.25f ? IM_COL32(230, 200, 70, 255) : IM_COL32(230, 80, 80, 255));
-        dl->AddRectFilled(barMin, ImVec2(barMin.x + (barMax.x - barMin.x) * frac, barMax.y), barCol, 3.0f);
     }
 }
 
@@ -1335,7 +1260,7 @@ inline void DrawFOVShape(ImDrawList* dl, const ImVec2& center, float r, ImU32 co
     }
 }
 
-inline void RunAimbot(ImDrawList* drawList)
+inline void RunAimCore(ImDrawList* drawList)
 {
     // Check if aimbot is enabled first
     if (!Options::Aimbot::Aimbot)
@@ -1567,6 +1492,14 @@ inline void RunAimbot(ImDrawList* drawList)
                 needNew = true;
         }
 
+        // WallCheck: if the locked target goes behind a wall, release the lock so
+        // aimbot re-acquires a visible enemy instead of tracking through geometry.
+        if (!needNew && Options::Aimbot::WallCheck &&
+            Visibility::IsPlayerOccluded(Options::Aimbot::CurrentTarget))
+        {
+            needNew = true;
+        }
+
         // Honour the target-switch delay so the lock doesn't snap between
         // enemies every frame.
         auto now = std::chrono::steady_clock::now();
@@ -1599,11 +1532,15 @@ inline void RunAimbot(ImDrawList* drawList)
         GetPlayerHealth(target, hp, maxhp);
         g_AimInfo.health = hp;
         g_AimInfo.maxHealth = maxhp;
+        g_AimInfo.tool = target.ToolName;
+        g_AimInfo.userId = Memory->read<uint64_t>(target.address + Offsets::Player::UserId);
     }
     else
     {
         g_AimInfo.name.clear();
         g_AimInfo.part.clear();
+        g_AimInfo.tool.clear();
+        g_AimInfo.userId = 0;
     }
 
     auto sensitivity = Memory->read<float>(Memory->getBaseAddress() + Offsets::MouseService::SensitivityPointer);

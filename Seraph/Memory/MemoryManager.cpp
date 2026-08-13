@@ -71,11 +71,10 @@ int32_t MemoryManager::getProcessId(const std::string& processName) {
 uintptr_t MemoryManager::getModuleAddress(const std::string& moduleName) {
 	uintptr_t moduleAddress = 0;
 
-	if (!processHandle) {
+	if (processId <= 0) {
 		return moduleAddress;
 	}
 
-	DWORD processId = GetProcessId(processHandle);
 	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, processId);
 
 	if (snapshot == INVALID_HANDLE_VALUE) {
@@ -102,23 +101,39 @@ bool MemoryManager::attachToProcess(const std::string& processName)
 {
 	closeProcess();
 	auto pid = getProcessId(processName);
-	HANDLE process = OpenProcess(PROCESS_ALL_ACCESS, false, pid);
-
-	if (process == INVALID_HANDLE_VALUE || !process) {
+	if (pid <= 0) {
 		return false;
 	}
 
-	processHandle = process;
-	processId = pid;
+	// Validate access with a transient handle; no handle is retained.
+	HANDLE probe = OpenProcess(PROCESS_VM_READ, FALSE, pid);
+	if (!probe || probe == INVALID_HANDLE_VALUE) {
+		return false;
+	}
+	CloseHandle(probe);
 
+	processId = pid;
 	baseAddress = getModuleAddress(processName);
 
 	return true;
 }
 
+HANDLE MemoryManager::openTransientHandle(bool forWrite) {
+	if (processId <= 0) return nullptr;
+
+	DWORD access = PROCESS_VM_READ;
+	if (forWrite) access |= PROCESS_VM_WRITE | PROCESS_VM_OPERATION;
+
+	return OpenProcess(access, FALSE, processId);
+}
+
 
 void MemoryManager::readRaw(uintptr_t address, void* buffer, uintptr_t size) {
-	Luck_ReadVirtualMemory(processHandle, reinterpret_cast<void*>(address), &buffer, size, nullptr);
+	HANDLE h = openTransientHandle(false);
+	if (!h) return;
+
+	Luck_ReadVirtualMemory(h, reinterpret_cast<void*>(address), buffer, static_cast<ULONG>(size), nullptr);
+	CloseHandle(h);
 }
 
 bool MemoryManager::writeString(uintptr_t address, const std::string& value)
@@ -155,9 +170,6 @@ std::string MemoryManager::readString(uintptr_t address) {
 	if (address == 0)
 		return result;
 
-	char character;
-	int offset = 0;
-
 	int32_t StrLength = read<int32_t>(address + 0x18);
 
 	// Basic safety check for StrLength to prevent massive jumps or issues
@@ -171,12 +183,23 @@ std::string MemoryManager::readString(uintptr_t address) {
 			return result;
 	}
 
-	while ((character = read<char>(address + offset)) != 0)
-	{
-		result.push_back(character);
-		offset += sizeof(character);
-		if (offset > 10000) // Upper limit for string length safety
-			break;
+	// Read the string in one bounded buffer instead of character-by-character
+	// so each string read only opens/closes a transient handle once.
+	char buffer[512];
+	ULONG bytesRead = 0;
+	HANDLE h = openTransientHandle(false);
+	if (!h)
+		return result;
+
+	Luck_ReadVirtualMemory(h, reinterpret_cast<void*>(address), buffer, sizeof(buffer), &bytesRead);
+	CloseHandle(h);
+
+	if (bytesRead > 0) {
+		size_t len = bytesRead < sizeof(buffer) ? bytesRead : sizeof(buffer);
+		size_t end = 0;
+		while (end < len && buffer[end] != 0)
+			++end;
+		result.assign(buffer, end);
 	}
 
 	return result;
@@ -199,10 +222,6 @@ void MemoryManager::setBaseAddress(uintptr_t newBaseAddress) {
 }
 
 void MemoryManager::closeProcess() {
-	if (processHandle && processHandle != INVALID_HANDLE_VALUE) {
-		CloseHandle(processHandle);
-		processHandle = nullptr;
-	}
 	processId = 0;
 	baseAddress = 0;
 }

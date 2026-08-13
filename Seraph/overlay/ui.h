@@ -38,18 +38,18 @@ namespace UI
 
     inline float sc = 1.0f;
     inline float SidebarX = 16.0f;
-    inline float SidebarW = 130.0f;
-    inline float ContentX = 158.0f;
-    inline float ContentW = 882.0f;
-    inline float CardW = 431.0f;
-
-    static const float RADIUS    = 9.0f;
+    inline float SidebarW = 150.0f;
+    inline float ContentX = 170.0f;
+    inline float ContentW = 680.0f;
+    inline float CardW = 325.0f;
+    inline float CardH = 430.0f;
+    static const float RADIUS    = 10.0f;
     static const float RADIUS_SM = 6.0f;
     static const float PAD       = 16.0f;
     static const float PAD_SM    = 10.0f;
-    static const float ROW       = 11.0f;
-    static const float GROUP     = 14.0f;
-    static const float SECTION   = 30.0f;
+    static const float ROW       = 12.0f;
+    static const float GROUP     = 16.0f;
+    static const float SECTION   = 24.0f;
     static const float ANIM      = 0.16f;
     static const float BORDER    = 1.0f;
 
@@ -121,64 +121,59 @@ namespace UI
 
     inline void ApplyStyle(const ImVec4& accent, const ImVec4& bg, const ImVec4& panel)
     {
-        // Accent family — derived from the theme accent
-        P.accent      = accent;
-        P.accentHover = ImVec4(
-            accent.x + (1.0f - accent.x) * 0.20f,
-            accent.y + (1.0f - accent.y) * 0.20f,
-            accent.z + (1.0f - accent.z) * 0.20f, 1.0f);
-        P.accentDim   = ImVec4(accent.x * 0.35f, accent.y * 0.35f, accent.z * 0.35f, 1.0f);
-        P.accentSoft  = ImVec4(accent.x, accent.y, accent.z, 0.20f);
-        P.accentGlow  = ImVec4(accent.x, accent.y, accent.z, 0.10f);
-        P.glow        = ImVec4(accent.x, accent.y, accent.z, 0.28f);
-        P.glowPurple  = ImVec4(accent.x * 0.6f, accent.y * 0.7f, accent.z, 0.20f);
+        // ── Fixed professional palette ──
+        // Background:  #090C10
+        // Surface:     #10151B
+        // Surface Alt: #151B22
+        // Hover:       #1A222B
+        // Border:      #222B35
+        // Accent:      #3B9DFF
 
-        // Background family — derived from the theme bg
-        P.surface     = bg;
-        P.surfaceAlt  = ImVec4(bg.x * 1.4f, bg.y * 1.4f, bg.z * 1.4f, 1.0f);
-        P.surfaceHi   = ImVec4(bg.x * 2.0f, bg.y * 2.0f, bg.z * 2.0f, 1.0f);
+        P.accent      = ImVec4(0.231f, 0.616f, 1.000f, 1.0f);  // #3B9DFF
+        P.accentHover = ImVec4(0.353f, 0.686f, 1.000f, 1.0f);  // #5AAFFF
+        P.accentDim   = ImVec4(0.116f, 0.308f, 0.500f, 1.0f);  // dimmed accent
+        P.accentSoft  = ImVec4(0.231f, 0.616f, 1.000f, 0.10f); // soft accent fill
+        P.accentGlow  = ImVec4(0.231f, 0.616f, 1.000f, 0.06f); // subtle glow
+        P.glow        = ImVec4(0.231f, 0.616f, 1.000f, 0.15f);
+        P.glowPurple  = ImVec4(0.231f, 0.616f, 1.000f, 0.08f);
+        P.accent2     = accent; // keep user's accent for gradient line
 
-        // Panel/card family — derived from the theme panel
-        P.card        = panel;
-        P.cardHov     = ImVec4(
-            panel.x + (accent.x - panel.x) * 0.15f,
-            panel.y + (accent.y - panel.y) * 0.15f,
-            panel.z + (accent.z - panel.z) * 0.15f, 1.0f);
-        P.borderDim   = ImVec4(
-            panel.x * 0.8f + bg.x * 0.2f,
-            panel.y * 0.8f + bg.y * 0.2f,
-            panel.z * 0.8f + bg.z * 0.2f, 1.0f);
-        P.track       = ImVec4(
-            panel.x * 1.1f, panel.y * 1.1f, panel.z * 1.1f, 1.0f);
+        // Surfaces
+        P.surface     = ImVec4(0.063f, 0.082f, 0.106f, 1.0f);  // #10151B
+        P.surfaceAlt  = ImVec4(0.082f, 0.106f, 0.133f, 1.0f);  // #151B22
+        P.surfaceHi   = ImVec4(0.102f, 0.133f, 0.169f, 1.0f);  // #1A222B
 
-        // Line/divider — blend accent into panel for a colored border
-        P.line        = ImVec4(
-            panel.x * 0.5f + accent.x * 0.5f,
-            panel.y * 0.5f + accent.y * 0.5f,
-            panel.z * 0.5f + accent.z * 0.5f, 1.0f);
-        P.divider     = ImVec4(
-            bg.x * 0.6f + panel.x * 0.4f,
-            bg.y * 0.6f + panel.y * 0.4f,
-            bg.z * 0.6f + panel.z * 0.4f, 1.0f);
+        // Cards and panels
+        P.card        = ImVec4(0.063f, 0.082f, 0.106f, 1.0f);  // #10151B
+        P.cardHov     = ImVec4(0.082f, 0.106f, 0.133f, 1.0f);  // #151B22
 
-        // Text — keep readable on any dark bg
-        P.textStrong  = ImVec4(1.000f, 1.000f, 1.000f, 1.0f);
-        P.text        = ImVec4(0.910f, 0.949f, 0.976f, 1.0f);
-        P.textMid     = ImVec4(0.573f, 0.651f, 0.698f, 1.0f);
-        P.textDim     = ImVec4(0.306f, 0.388f, 0.439f, 1.0f);
-        P.disabled    = ImVec4(0.306f, 0.388f, 0.439f, 1.0f);
+        // Borders — neutral gray, NOT accent-colored
+        P.borderDim   = ImVec4(0.133f, 0.169f, 0.208f, 1.0f);  // #222B35
+        P.line        = ImVec4(0.133f, 0.169f, 0.208f, 1.0f);  // #222B35
+        P.divider     = ImVec4(0.102f, 0.133f, 0.169f, 1.0f);  // #1A222B
+
+        // Track (slider background)
+        P.track       = ImVec4(0.102f, 0.133f, 0.169f, 1.0f);  // #1A222B
+
+        // Text hierarchy
+        P.textStrong  = ImVec4(0.945f, 0.961f, 0.976f, 1.0f);  // #F1F5F9
+        P.text        = ImVec4(0.545f, 0.588f, 0.647f, 1.0f);  // #8B96A5
+        P.textMid     = ImVec4(0.545f, 0.588f, 0.647f, 1.0f);  // #8B96A5
+        P.textDim     = ImVec4(0.373f, 0.420f, 0.471f, 1.0f);  // #5F6B78
+        P.disabled    = ImVec4(0.373f, 0.420f, 0.471f, 1.0f);  // #5F6B78
+
         P.shadow      = ImVec4(0, 0, 0, 1);
-        P.good        = ImVec4(0.302f, 0.851f, 0.549f, 1.0f);
+        P.good        = ImVec4(0.224f, 0.851f, 0.541f, 1.0f);  // #39D98A
         P.bad         = ImVec4(1.000f, 0.314f, 0.408f, 1.0f);
 
-        // ImGui style
+        // ImGui style — clean and minimal
         ImGuiStyle& s = ImGui::GetStyle();
-        s.WindowRounding    = 14.0f;
-        s.FrameRounding     = 7.0f;
+        s.WindowRounding    = 10.0f;
+        s.FrameRounding     = 6.0f;
         s.GrabRounding      = 6.0f;
-        s.ChildRounding     = 11.0f;
-        s.PopupRounding     = 10.0f;
-        s.ScrollbarRounding = 8.0f;
+        s.ChildRounding     = 8.0f;
+        s.PopupRounding     = 8.0f;
+        s.ScrollbarRounding = 6.0f;
         s.WindowBorderSize  = 0.0f;
         s.FrameBorderSize   = 0.0f;
         s.WindowPadding     = ImVec2(0.0f, 0.0f);
@@ -186,40 +181,35 @@ namespace UI
         s.ItemSpacing       = ImVec2(10.0f, 8.0f);
         s.CellPadding       = ImVec2(10.0f, 8.0f);
         s.ItemInnerSpacing  = ImVec2(8, 5);
-        s.ScrollbarSize     = 6.0f;
+        s.ScrollbarSize     = 4.0f;
         s.PopupBorderSize   = 1.0f;
 
-        // ImGui colors — derived from the theme palette
-        s.Colors[ImGuiCol_WindowBg]             = ImVec4(bg.x, bg.y, bg.z, 1.0f);
+        // ImGui colors — flat, no accent tinting on backgrounds
+        s.Colors[ImGuiCol_WindowBg]             = P.surface;
         s.Colors[ImGuiCol_ChildBg]              = ImVec4(0, 0, 0, 0);
-        s.Colors[ImGuiCol_Border]               = P.line;
-        s.Colors[ImGuiCol_Text]                 = P.text;
+        s.Colors[ImGuiCol_Border]               = P.borderDim;
+        s.Colors[ImGuiCol_Text]                 = P.textStrong;
         s.Colors[ImGuiCol_TextDisabled]         = P.textDim;
-        s.Colors[ImGuiCol_Button]               = ImVec4(accent.x * 0.08f, accent.y * 0.08f, accent.z * 0.08f, 0.40f);
-        s.Colors[ImGuiCol_ButtonHovered]        = ImVec4(accent.x, accent.y, accent.z, 0.22f);
-        s.Colors[ImGuiCol_ButtonActive]         = ImVec4(accent.x, accent.y, accent.z, 0.38f);
-        s.Colors[ImGuiCol_FrameBg]              = ImVec4(
-            panel.x + accent.x * 0.06f,
-            panel.y + accent.y * 0.06f,
-            panel.z + accent.z * 0.06f, 1.0f);
-        s.Colors[ImGuiCol_FrameBgHovered]       = ImVec4(
-            panel.x + accent.x * 0.12f,
-            panel.y + accent.y * 0.12f,
-            panel.z + accent.z * 0.12f, 1.0f);
-        s.Colors[ImGuiCol_FrameBgActive]        = ImVec4(
-            accent.x * 0.22f, accent.y * 0.22f, accent.z * 0.22f, 1.0f);
-        s.Colors[ImGuiCol_SliderGrab]           = accent;
+        s.Colors[ImGuiCol_Button]               = P.surfaceAlt;
+        s.Colors[ImGuiCol_ButtonHovered]        = P.surfaceHi;
+        s.Colors[ImGuiCol_ButtonActive]         = ImVec4(P.accent.x, P.accent.y, P.accent.z, 0.30f);
+        s.Colors[ImGuiCol_FrameBg]              = P.surfaceAlt;
+        s.Colors[ImGuiCol_FrameBgHovered]       = P.surfaceHi;
+        s.Colors[ImGuiCol_FrameBgActive]        = ImVec4(P.accent.x, P.accent.y, P.accent.z, 0.15f);
+        s.Colors[ImGuiCol_SliderGrab]           = P.accent;
         s.Colors[ImGuiCol_SliderGrabActive]     = P.accentHover;
-        s.Colors[ImGuiCol_CheckMark]            = accent;
-        s.Colors[ImGuiCol_Header]               = ImVec4(accent.x, accent.y, accent.z, 0.30f);
-        s.Colors[ImGuiCol_HeaderHovered]        = ImVec4(accent.x, accent.y, accent.z, 0.42f);
-        s.Colors[ImGuiCol_HeaderActive]         = ImVec4(accent.x, accent.y, accent.z, 0.54f);
+        s.Colors[ImGuiCol_CheckMark]            = P.accent;
+        s.Colors[ImGuiCol_Header]               = ImVec4(P.accent.x, P.accent.y, P.accent.z, 0.12f);
+        s.Colors[ImGuiCol_HeaderHovered]        = ImVec4(P.accent.x, P.accent.y, P.accent.z, 0.20f);
+        s.Colors[ImGuiCol_HeaderActive]         = ImVec4(P.accent.x, P.accent.y, P.accent.z, 0.30f);
         s.Colors[ImGuiCol_Separator]            = P.divider;
-        s.Colors[ImGuiCol_ScrollbarBg]          = ImVec4(bg.x, bg.y, bg.z, 1.0f);
-        s.Colors[ImGuiCol_ScrollbarGrab]        = ImVec4(accent.x * 0.35f, accent.y * 0.35f, accent.z * 0.35f, 1.0f);
-        s.Colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(accent.x, accent.y, accent.z, 0.40f);
-        s.Colors[ImGuiCol_PopupBg]              = ImVec4(panel.x, panel.y, panel.z, 1.0f);
+        s.Colors[ImGuiCol_ScrollbarBg]          = ImVec4(0, 0, 0, 0);
+        s.Colors[ImGuiCol_ScrollbarGrab]        = ImVec4(0.231f, 0.616f, 1.000f, 0.20f);
+        s.Colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.231f, 0.616f, 1.000f, 0.35f);
+        s.Colors[ImGuiCol_PopupBg]              = P.surface;
     }
+
+
 
     inline bool BeginSection(const char* title, const ImVec2& size = ImVec2(0, 0))
     {
@@ -269,18 +259,21 @@ namespace UI
     inline bool Toggle(const char* label, bool* v)
     {
         ImGui::PushID(label);
-        const float w = 34.0f, h = 18.0f, knobR = 7.0f;
+        const float w = 36.0f, h = 19.0f, knobR = 6.5f;
         ImVec2 cursor = ImGui::GetCursorPos();
         ImGui::Dummy(ImVec2(1, h));
         if (label && *label)
         {
             ImGui::SameLine(0, 8);
             ImGui::SetCursorPosY(cursor.y + 1);
-            ImGui::TextColored(*v ? P.text : P.textMid, "%s", label);
+            ImGui::TextColored(*v ? P.textStrong : P.textMid, "%s", label);
         }
+        
+        // Align toggle switch absolutely to the right margin of the card
+        float toggleX = ImGui::GetWindowContentRegionMax().x - w - 4.0f;
         ImGui::SameLine();
-        float tw = ImGui::GetContentRegionAvail().x;
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + tw - w);
+        ImGui::SetCursorPosX(toggleX);
+        
         ImVec2 screen = ImGui::GetCursorScreenPos();
         ImGui::InvisibleButton("##tgl", ImVec2(w, h));
         bool changed = false;
@@ -292,7 +285,7 @@ namespace UI
         float t = store->GetFloat(id, 0.0f);
         float target = *v ? 1.0f : 0.0f;
         float dt = ImGui::GetIO().DeltaTime;
-        float rate = 1.0f - expf(-dt * 9.5f);
+        float rate = 1.0f - expf(-dt * 11.0f);
         t += (target - t) * rate;
         if (fabsf(t - target) < 0.001f) t = target;
         store->SetFloat(id, t);
@@ -301,20 +294,145 @@ namespace UI
         ImVec2 a = screen, b = ImVec2(screen.x + w, screen.y + h);
 
         ImVec4 trackCol = Mix(P.track, P.accentDim, t);
+        if (hover && !*v) trackCol = Mix(trackCol, P.surfaceHi, 0.4f);
         dl->AddRectFilled(a, b, U(trackCol), h * 0.5f);
+        
+        // Track border & glow
         if (t > 0.01f)
         {
-            dl->AddRect(a, b, U(ImVec4(P.accent.x, P.accent.y, P.accent.z, t * 0.53f)), h * 0.5f, 0, 1.0f);
+            ImVec4 borderCol = Mix(P.borderDim, P.accent, t);
+            dl->AddRect(a, b, U(borderCol), h * 0.5f, 0, 1.2f);
+            
+            // Soft outer glow when active
+            ImVec4 glowCol = ImVec4(P.accent.x, P.accent.y, P.accent.z, t * 0.22f);
+            dl->AddRect(ImVec2(a.x - 1.0f, a.y - 1.0f), ImVec2(b.x + 1.0f, b.y + 1.0f), U(glowCol), (h + 2.0f) * 0.5f, 0, 1.0f);
+        }
+        else
+        {
+            dl->AddRect(a, b, U(P.borderDim), h * 0.5f, 0, 1.0f);
         }
 
-        float pad = 2.0f;
+        float pad = 2.5f;
+        float currentKnobR = knobR * (0.85f + 0.15f * t);
         float knobX = a.x + knobR + pad + t * (w - 2.0f * knobR - 2.0f * pad);
         float knobY = (a.y + b.y) * 0.5f;
-        ImVec4 knobCol = hover ? ImVec4(1, 1, 1, 1) : ImVec4(0.878f, 0.878f, 0.910f, 1.0f);
-        dl->AddCircleFilled(ImVec2(knobX, knobY), knobR, U(knobCol), 24);
+
+        // Knob shadow
+        dl->AddCircleFilled(ImVec2(knobX, knobY + 1.0f), currentKnobR, IM_COL32(0, 0, 0, 80), 24);
+
+        ImVec4 knobCol = hover ? ImVec4(1.0f, 1.0f, 1.0f, 1.0f) : Mix(ImVec4(0.70f, 0.73f, 0.78f, 1.0f), P.textStrong, t);
+        dl->AddCircleFilled(ImVec2(knobX, knobY), currentKnobR, U(knobCol), 24);
 
         ImGui::PopID();
-        return false;
+        return changed;
+    }
+
+    inline bool CheckboxBind(const char* label, bool* v, int* key, int* mode = nullptr)
+    {
+        ImGui::PushID(label);
+        const float tglW = 36.0f, h = 19.0f, knobR = 6.5f;
+        ImVec2 cursor = ImGui::GetCursorPos();
+        
+        ImGui::Dummy(ImVec2(1, h));
+        
+        if (label && *label)
+        {
+            ImGui::SameLine(0, 8);
+            ImGui::SetCursorPosY(cursor.y + 1);
+            ImGui::TextColored(*v ? P.textStrong : P.textMid, "%s", label);
+        }
+        
+        const char* kn = VKName(*key);
+        const float kw = MaxF(ImGui::CalcTextSize(kn).x + 12.0f, 42.0f);
+        
+        // Position keybind absolutely to the left of the toggle
+        float cardRight = ImGui::GetWindowContentRegionMax().x - 4.0f;
+        float keybindX = cardRight - tglW - kw - 6.0f;
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(keybindX);
+        ImVec2 kp = ImGui::GetCursorScreenPos();
+        
+        ImGuiID self = ImGui::GetID("##kb");
+        static bool s_listen = false;
+        static bool s_waitRelease = false;
+        static ImGuiID s_ownerId = 0;
+        bool listening = s_listen && (s_ownerId == self);
+        if (listening) kn = "...";
+        
+        ImGui::InvisibleButton("##k", ImVec2(kw, h));
+        if (ImGui::IsItemClicked()) { s_listen = true; s_waitRelease = true; s_ownerId = self; }
+        if (listening) {
+            if (s_waitRelease) {
+                bool anyDown = false;
+                for (int k = VK_LBUTTON; k <= 0xFE; k++) {
+                    if (GetAsyncKeyState(k) & 0x8000) { anyDown = true; break; }
+                }
+                if (!anyDown) s_waitRelease = false;
+            }
+            else {
+                for (int k = VK_LBUTTON; k <= 0xFE; k++) {
+                    if (GetAsyncKeyState(k) & 0x8000) {
+                        *key = k;
+                        s_listen = false;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 kpmax(kp.x + kw, kp.y + h);
+        ImVec4 fillCol = P.surfaceAlt;
+        ImVec4 borderCol = P.borderDim;
+        if (listening) {
+            float pulse = (sinf((float)ImGui::GetTime() * 8.0f) + 1.0f) * 0.5f;
+            fillCol = Mix(P.accentDim, P.accentSoft, pulse);
+            borderCol = P.accent;
+        }
+        dl->AddRectFilled(kp, kpmax, U(fillCol), 4.0f);
+        dl->AddRect(kp, kpmax, U(borderCol), 4.0f, 0, 1.0f);
+        dl->AddText(ImVec2(kp.x + (kw - ImGui::CalcTextSize(kn).x) * 0.5f,
+                     kp.y + (h - ImGui::GetFontSize()) * 0.5f),
+            listening ? U(P.textStrong) : U(P.text), kn);
+            
+        // Position toggle absolutely on the far right
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(cardRight - tglW);
+        ImVec2 screen = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##tgl", ImVec2(tglW, h));
+        bool toggle_hover = ImGui::IsItemHovered();
+        bool changed = false;
+        if (ImGui::IsItemClicked()) { *v = !*v; changed = true; }
+        
+        ImGuiID id = ImGui::GetID("##tgl");
+        ImGuiStorage* store = ImGui::GetStateStorage();
+        float t = store->GetFloat(id, 0.0f);
+        float target = *v ? 1.0f : 0.0f;
+        float dt = ImGui::GetIO().DeltaTime;
+        t += (target - t) * (1.0f - expf(-dt * 11.0f));
+        if (fabsf(t - target) < 0.001f) t = target;
+        store->SetFloat(id, t);
+        
+        ImVec2 a = screen, b = ImVec2(screen.x + tglW, screen.y + h);
+        ImVec4 trackCol = Mix(P.track, P.accentDim, t);
+        if (toggle_hover && !*v) trackCol = Mix(trackCol, P.surfaceHi, 0.4f);
+        dl->AddRectFilled(a, b, U(trackCol), h * 0.5f);
+        if (t > 0.01f) {
+            dl->AddRect(a, b, U(Mix(P.borderDim, P.accent, t)), h * 0.5f, 0, 1.2f);
+            dl->AddRect(ImVec2(a.x - 1.f, a.y - 1.f), ImVec2(b.x + 1.f, b.y + 1.f),
+                U(ImVec4(P.accent.x, P.accent.y, P.accent.z, t * 0.22f)), (h + 2.f) * 0.5f, 0, 1.0f);
+        } else {
+            dl->AddRect(a, b, U(P.borderDim), h * 0.5f, 0, 1.0f);
+        }
+        float pad = 2.5f;
+        float currentKnobR = knobR * (0.85f + 0.15f * t);
+        float knobX = a.x + knobR + pad + t * (tglW - 2.0f * knobR - 2.0f * pad);
+        float knobY = (a.y + b.y) * 0.5f;
+        dl->AddCircleFilled(ImVec2(knobX, knobY + 1.f), currentKnobR, IM_COL32(0, 0, 0, 80), 24);
+        dl->AddCircleFilled(ImVec2(knobX, knobY), currentKnobR, U((toggle_hover) ? ImVec4(1.0f, 1.0f, 1.0f, 1.0f) : Mix(ImVec4(0.70f, 0.73f, 0.78f, 1.0f), P.textStrong, t)), 24);
+        
+        ImGui::PopID();
+        return changed;
     }
 
     inline bool Subtab(const char* label, bool active, float width = -1)
@@ -391,27 +509,25 @@ namespace UI
             ImDrawList* dl = ImGui::GetWindowDrawList();
             if (size.x > 0.f && size.y > 0.f)
             {
-                dl->AddRectFilled(ImVec2(p.x, p.y + 4.0f), ImVec2(p.x + size.x, p.y + size.y + 4.0f),
-                    IM_COL32(0, 0, 0, 120), 12.0f);
-                dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y),
-                    ImGui::ColorConvertFloat4ToU32(P.card), 12.0f);
+                dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y), U(P.card), 8.0f);
+                dl->AddRect(p, ImVec2(p.x + size.x, p.y + size.y), U(P.borderDim), 8.0f, 0, 1.0f);
             }
             ImGui::PushStyleColor(ImGuiCol_ChildBg, P.card);
             ImGui::PushStyleColor(ImGuiCol_Border, P.line);
-            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 12.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 14.0f));
-            const bool open = ImGui::BeginChild(id, size, true, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
+            const bool open = ImGui::BeginChild(id, size, true, ImGuiWindowFlags_None);
             if (open && title)
             {
                 ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 2.0f);
                 ImDrawList* cd = ImGui::GetWindowDrawList();
                 ImVec2 tp = ImGui::GetCursorScreenPos();
-                cd->AddRectFilled(tp, ImVec2(tp.x + 3.0f, tp.y + ImGui::GetFontSize() + 1.0f),
-                    ImGui::ColorConvertFloat4ToU32(P.accent), 1.5f);
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.0f);
-                ImGui::TextColored(P.textMid, "%s", title);
-                ImGui::Dummy(ImVec2(0, 4.0f));
+                cd->AddRectFilled(tp, ImVec2(tp.x + 2.0f, tp.y + ImGui::GetFontSize() + 2.0f),
+                    U(P.accent), 1.0f);
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.0f);
+                ImGui::TextColored(P.textDim, "%s", title);
+                ImGui::Dummy(ImVec2(0, 8.0f));
             }
             return open;
         }
@@ -425,15 +541,15 @@ namespace UI
 
     inline bool SidebarTab(int iconId, const char* label, bool active, float startX, float startY, float width)
     {
-        const float tabH = 42.0f;
-        const float tabPad = 14.0f;
+        const float tabH = 38.0f;
+        const float tabPad = 12.0f;
         const float tabW = width - tabPad * 2.0f;
         const float tabX = startX + tabPad;
         const float tabY = startY;
         
         ImVec2 tMin = ImVec2(tabX, tabY);
         ImVec2 tMax = ImVec2(tabX + tabW, tabY + tabH);
-        ImVec2 center = ImVec2(tMin.x + 18.0f, tMin.y + tabH * 0.5f);
+        ImVec2 center = ImVec2(tMin.x + 16.0f, tMin.y + tabH * 0.5f);
 
         ImGui::SetCursorScreenPos(tMin);
         ImGui::PushID(label);
@@ -448,20 +564,19 @@ namespace UI
         
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
-        ImU32 hoverFill = LerpU32(ImGui::ColorConvertFloat4ToU32(P.surface), IM_COL32(11, 28, 42, 126), t);
-        ImU32 activeFill = IM_COL32(0, 78, 116, 178);
-        dl->AddRectFilled(tMin, tMax, LerpU32(hoverFill, activeFill, at), 9.0f);
+        ImU32 hoverFill = LerpU32(IM_COL32(0,0,0,0), U(P.surfaceHi), t);
+        ImU32 activeFill = U(ImVec4(P.accent.x, P.accent.y, P.accent.z, 0.08f));
+        dl->AddRectFilled(tMin, tMax, active ? activeFill : hoverFill, 6.0f);
 
         if (at > 0.01f)
         {
-            dl->AddRectFilled(ImVec2(tMin.x + 1.f, tMin.y + 1.f), ImVec2(tMax.x - 1.f, tMax.y - 1.f),
-                IM_COL32(0, 174, 255, (int)(at * 12.f)), 8.0f);
-            dl->AddRect(tMin, tMax, IM_COL32(0, 174, 255, (int)(at * 96.f)), 9.0f, 0, 1.0f);
+            // Vertical accent indicator bar on the left edge
+            dl->AddRectFilled(ImVec2(tMin.x, tMin.y + 8.0f), ImVec2(tMin.x + 3.0f, tMax.y - 8.0f), U(P.accent), 1.5f);
         }
 
-        float s = 18.0f + at * 1.0f;
+        float s = 16.0f + at * 1.0f;
         ImU32 iconCol = ImGui::ColorConvertFloat4ToU32(
-            Mix(hov ? P.text : P.textMid, P.accentHover, at));
+            Mix(hov ? P.textStrong : P.textDim, P.accent, at));
         switch (iconId)
         {
         case 1: // crosshair
@@ -538,7 +653,7 @@ namespace UI
 
         if (label && *label)
         {
-            dl->AddText(ImVec2(tMin.x + 42.0f, tMin.y + (tabH - ImGui::GetFontSize()) * 0.5f), iconCol, label);
+            dl->AddText(ImVec2(tMin.x + 38.0f, tMin.y + (tabH - ImGui::GetFontSize()) * 0.5f), iconCol, label);
         }
 
         return clicked;
@@ -557,24 +672,20 @@ namespace UI
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
         ImGuiID id = ImGui::GetID(label);
-        float t = AnimEased(id, active || hover, 9.f);
-        float at = AnimEased(id ^ 0x5C3A1Bu, active, 10.f);
+        float t = AnimEased(id, active || hover, 10.f);
+        float at = AnimEased(id ^ 0x5C3A1Bu, active, 12.f);
 
         if (active)
         {
-            dl->AddRectFilled(a, b, IM_COL32(0, 78, 116, 178), 6.0f, 0);
-            dl->AddRectFilled(ImVec2(a.x + 1.f, a.y + 1.f), ImVec2(b.x - 1.f, b.y - 1.f),
-                IM_COL32(0, 174, 255, (int)(at * 12.f)), 8.0f);
-            dl->AddRect(a, b, IM_COL32(0, 174, 255, (int)(at * 96.f)), 6.0f, 0, 1.0f);
+            ImVec4 activeBg = ImVec4(P.accent.x, P.accent.y, P.accent.z, 0.10f);
+            dl->AddRectFilled(a, b, U(activeBg), 6.0f, 0);
         }
-        else
+        else if (hover)
         {
-            ImU32 hoverFill = IM_COL32(11, 28, 42, (int)(126 * t));
-            dl->AddRectFilled(a, b, hoverFill, 6.0f, 0);
+            dl->AddRectFilled(a, b, U(P.surfaceHi), 6.0f, 0);
         }
 
-        ImU32 baseCol = hover ? ImGui::ColorConvertFloat4ToU32(P.text) : ImGui::ColorConvertFloat4ToU32(P.textMid);
-        ImU32 labelCol = LerpU32(baseCol, ImGui::ColorConvertFloat4ToU32(P.accentHover), at);
+        ImU32 labelCol = U(Mix(hover ? P.textStrong : P.textMid, P.textStrong, at));
         dl->AddText(ImVec2((a.x + b.x) * 0.5f - ts.x * 0.5f, (a.y + b.y) * 0.5f - ts.y * 0.5f),
             labelCol, label);
         animStore = t;
@@ -586,17 +697,17 @@ namespace UI
         ImDrawList* dl = ImGui::GetWindowDrawList();
         ImVec2 p = ImGui::GetCursorScreenPos();
 
-        dl->AddRectFilled(p, ImVec2(p.x + 3.0f, p.y + ImGui::GetFontSize() + 1.0f),
-            ImGui::ColorConvertFloat4ToU32(P.accent), 1.5f);
+        dl->AddRectFilled(p, ImVec2(p.x + 2.5f, p.y + ImGui::GetFontSize() + 2.0f),
+            U(P.accent), 1.0f);
         
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.0f);
-        ImGui::TextColored(P.textMid, "%s", title);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.0f);
+        ImGui::TextColored(P.textStrong, "%s", title);
         
         ImGui::PushStyleColor(ImGuiCol_Separator, P.divider);
         ImGui::Separator();
         ImGui::PopStyleColor();
         
-        ImGui::Dummy(ImVec2(0.0f, 4.0f));
+        ImGui::Dummy(ImVec2(0.0f, 8.0f));
         
         if (subtitle)
         {
@@ -616,17 +727,28 @@ namespace UI
         ImDrawList* dl = ImGui::GetWindowDrawList();
         const float avail = ImGui::GetContentRegionAvail().x;
 
-        ImGui::TextColored(P.textMid, "%s", label);
-        char buf[32]; snprintf(buf, sizeof(buf), "%.2f", *v);
-        ImGui::SameLine(avail - ImGui::CalcTextSize(buf).x);
-        ImGui::TextColored(P.accentHover, "%s", buf);
+        ImVec2 p0 = ImGui::GetCursorScreenPos();
+        ImGui::TextColored(P.textDim, "%s", label);
+        char buf[32]; snprintf(buf, sizeof(buf), fmt ? fmt : "%.2f", *v);
+        
+        // Value badge (drawn manually so we don't mess up cursor)
+        ImVec2 valSize = ImGui::CalcTextSize(buf);
+        float badgeW = valSize.x + 10.0f;
+        float badgeH = valSize.y + 2.0f;
+        ImVec2 bMin = ImVec2(p0.x + avail - badgeW, p0.y);
+        
+        dl->AddRectFilled(bMin, ImVec2(bMin.x + badgeW, bMin.y + badgeH), U(P.surfaceAlt), 4.0f);
+        dl->AddText(ImVec2(bMin.x + 5.0f, bMin.y + 1.0f), U(P.accent), buf);
 
+        // Advance cursor properly instead of absolute set
+        ImGui::Dummy(ImVec2(0, 2.0f));
         ImVec2 p = ImGui::GetCursorScreenPos();
-        const float w = ImGui::GetContentRegionAvail().x;
-        const float cy = p.y + 11.0f;
-        constexpr float kTrkH = 4.0f;
+        
+        const float w = avail;
+        const float cy = p.y + 10.0f;
+        constexpr float kTrkH = 3.0f;
 
-        ImGui::InvisibleButton("##sl", ImVec2(w, 22.0f));
+        ImGui::InvisibleButton("##sl", ImVec2(w, 20.0f));
         bool active = ImGui::IsItemActive();
         bool hov = ImGui::IsItemHovered();
         if (active)
@@ -636,12 +758,23 @@ namespace UI
         }
         const float t = mx == mn ? 0.0f : ClampF((*v - mn) / (mx - mn), 0.0f, 1.0f);
 
+        // Track background
         dl->AddRectFilled(ImVec2(p.x, cy - kTrkH * 0.5f), ImVec2(p.x + w, cy + kTrkH * 0.5f), U(P.track), kTrkH);
-        dl->AddRectFilled(ImVec2(p.x, cy - kTrkH * 0.5f), ImVec2(p.x + w * t, cy + kTrkH * 0.5f),
-            active ? U(P.accentHover) : U(P.accent), kTrkH);
-        const float hh = active ? 7.5f : (hov ? 6.5f : 5.5f);
+        
+        // Active track fill
+        if (t > 0.001f)
+        {
+            dl->AddRectFilled(ImVec2(p.x, cy - kTrkH * 0.5f), ImVec2(p.x + w * t, cy + kTrkH * 0.5f),
+                active ? U(P.accentHover) : U(P.accent), kTrkH);
+        }
+
+        const float hh = active ? 6.0f : 5.0f;
         const float hx = p.x + w * t;
+        
+        // Thumb shadow & circle
+        dl->AddCircleFilled(ImVec2(hx, cy + 1.0f), hh, IM_COL32(0, 0, 0, 70), 22);
         dl->AddCircleFilled(ImVec2(hx, cy), hh, active ? U(P.accentHover) : U(P.accent), 22);
+        dl->AddCircle(ImVec2(hx, cy), hh, U(P.textStrong), 22, 1.0f);
 
         ImGui::PopID();
         return ImGui::IsItemDeactivatedAfterEdit();
@@ -666,43 +799,43 @@ namespace UI
         ImDrawList* dl = ImGui::GetWindowDrawList();
         const float avail = ImGui::GetContentRegionAvail().x;
 
-        ImGui::TextColored(P.textMid, "%s", label);
+        ImGui::TextColored(P.textDim, "%s", label);
 
         ImVec2 p = ImGui::GetCursorScreenPos();
-        const float w = avail, h = 23.0f;
+        const float w = avail, h = 32.0f;
 
         ImGui::InvisibleButton("##cb", ImVec2(w, h));
         bool hov = ImGui::IsItemHovered();
         bool clicked = ImGui::IsItemClicked();
 
         ImVec2 pmax(p.x + w, p.y + h);
-        dl->AddRectFilled(p, pmax, hov ? U(P.cardHov) : U(P.surface), 6.0f);
-        dl->AddRect(p, pmax, hov ? U(P.accentDim) : U(P.line), 6.0f, 0, 1.0f);
+        dl->AddRectFilled(p, pmax, hov ? U(P.surfaceHi) : U(P.surfaceAlt), 6.0f);
+        dl->AddRect(p, pmax, hov ? U(P.accent) : U(P.borderDim), 6.0f, 0, 1.0f);
 
         const char* cur = (*idx >= 0 && *idx < (int)items.size()) ? items[*idx] : "---";
-        dl->AddText(ImVec2(p.x + 7.0f, p.y + (h - ImGui::GetFontSize()) * 0.5f), U(P.text), cur);
+        dl->AddText(ImVec2(p.x + 10.0f, p.y + (h - ImGui::GetFontSize()) * 0.5f), U(P.textStrong), cur);
 
-        const float cx = p.x + w - 13.0f, cy = p.y + h * 0.5f;
-        dl->AddTriangleFilled(ImVec2(cx - 4.0f, cy - 2.0f), ImVec2(cx + 4.0f, cy - 2.0f), ImVec2(cx, cy + 3.0f), U(P.textMid));
+        const float cx = p.x + w - 16.0f, cy = p.y + h * 0.5f;
+        dl->AddTriangleFilled(ImVec2(cx - 4.0f, cy - 2.0f), ImVec2(cx + 4.0f, cy - 2.0f), ImVec2(cx, cy + 3.0f), U(P.textDim));
 
         bool changed = false;
         if (clicked) ImGui::OpenPopup("##cop");
-        ImGui::SetNextWindowPos(ImVec2(p.x, p.y + h + 2.0f));
+        ImGui::SetNextWindowPos(ImVec2(p.x, p.y + h + 4.0f));
         ImGui::SetNextWindowSize(ImVec2(w, 0.0f));
-        ImGui::SetNextWindowSizeConstraints(ImVec2(w, 0.0f), ImVec2(w, 160.0f));
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, P.card);
-        ImGui::PushStyleColor(ImGuiCol_Border, P.line);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(w, 0.0f), ImVec2(w, 200.0f));
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, P.surface);
+        ImGui::PushStyleColor(ImGuiCol_Border, P.borderDim);
         if (ImGui::BeginPopup("##cop"))
         {
             for (int i = 0; i < (int)items.size(); i++)
             {
                 bool sel = (i == *idx);
                 ImGui::PushStyleColor(ImGuiCol_Header,
-                    sel ? P.accentDim : ImVec4(0,0,0,0));
+                    sel ? ImVec4(P.accent.x, P.accent.y, P.accent.z, 0.12f) : ImVec4(0,0,0,0));
                 ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
-                    P.accentDim);
+                    ImVec4(P.accent.x, P.accent.y, P.accent.z, 0.12f));
                 ImGui::PushStyleColor(ImGuiCol_Text,
-                    sel ? P.accentHover : P.text);
+                    sel ? P.accent : P.text);
                 if (ImGui::Selectable(items[i], sel))
                 {
                     *idx = i;
@@ -741,11 +874,12 @@ namespace UI
 
     inline void labelsection(const char* text)
     {
+        ImGui::Dummy(ImVec2(0.0f, 8.0f));
         ImDrawList* dl = ImGui::GetWindowDrawList();
         ImVec2 p = ImGui::GetCursorScreenPos();
-        dl->AddRectFilled(p, ImVec2(p.x + 3.0f, p.y + ImGui::GetFontSize() + 1.0f), U(P.accent), 1.5f);
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.0f);
-        ImGui::TextColored(P.textMid, "%s", text);
+        dl->AddRectFilled(p, ImVec2(p.x + 2.0f, p.y + ImGui::GetFontSize() + 1.0f), U(P.accent), 1.0f);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8.0f);
+        ImGui::TextColored(P.textDim, "%s", text);
         ImGui::PushStyleColor(ImGuiCol_Separator, P.divider);
         ImGui::Separator();
         ImGui::PopStyleColor();
@@ -763,12 +897,12 @@ namespace UI
         ImGuiID self = ImGui::GetID("##kb");
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        const float h = 18.0f;
-        const char* kn = VKName(*key);
-        const char* mn = (mode && *mode == 1) ? "TOGG" : "HOLD";
-        const float kw = MaxF(ImGui::CalcTextSize(kn).x + 14.0f, 38.0f);
-        const float mw = mode ? (ImGui::CalcTextSize(mn).x + 10.0f) : 0.0f;
+        const float h = 20.0f;
         bool listening = s_listen && (s_ownerId == self);
+        const char* kn = listening ? "..." : VKName(*key);
+        const char* mn = (mode && *mode == 1) ? "TOGG" : "HOLD";
+        const float kw = MaxF(ImGui::CalcTextSize(kn).x + 16.0f, 42.0f);
+        const float mw = mode ? (ImGui::CalcTextSize(mn).x + 12.0f) : 0.0f;
 
         ImVec2 kp = ImGui::GetCursorScreenPos();
         ImGui::InvisibleButton("##k", ImVec2(kw, h));
@@ -792,21 +926,31 @@ namespace UI
             }
         }
         ImVec2 kpmax(kp.x + kw, kp.y + h);
-        dl->AddRectFilled(kp, kpmax, listening ? U(P.accentDim) : U(P.surface), 5.0f);
-        dl->AddRect(kp, kpmax, listening ? U(P.accent) : U(P.line), 5.0f, 0, 1.0f);
+        
+        ImVec4 fillCol = P.surfaceAlt;
+        ImVec4 borderCol = P.borderDim;
+        if (listening)
+        {
+            float pulse = (sinf((float)ImGui::GetTime() * 8.0f) + 1.0f) * 0.5f;
+            fillCol = Mix(P.accentDim, P.accentSoft, pulse);
+            borderCol = P.accent;
+        }
+        
+        dl->AddRectFilled(kp, kpmax, U(fillCol), 5.0f);
+        dl->AddRect(kp, kpmax, U(borderCol), 5.0f, 0, 1.0f);
         dl->AddText(ImVec2(kp.x + (kw - ImGui::CalcTextSize(kn).x) * 0.5f,
                      kp.y + (h - ImGui::GetFontSize()) * 0.5f),
-            listening ? U(P.accentHover) : U(P.text), kn);
+            listening ? U(P.textStrong) : U(P.text), kn);
 
         if (mode) {
-            ImGui::SameLine(0.0f, 3.0f);
+            ImGui::SameLine(0.0f, 4.0f);
             ImVec2 mp = ImGui::GetCursorScreenPos();
             ImGui::InvisibleButton("##m", ImVec2(mw, h));
             bool mhov = ImGui::IsItemHovered();
             if (ImGui::IsItemClicked()) *mode = (*mode == 0) ? 1 : 0;
             ImVec2 mpmax(mp.x + mw, mp.y + h);
             dl->AddRectFilled(mp, mpmax, mhov ? U(P.cardHov) : U(P.surface), 5.0f);
-            dl->AddRect(mp, mpmax, U(P.line), 5.0f, 0, 1.0f);
+            dl->AddRect(mp, mpmax, mhov ? U(P.accentDim) : U(P.borderDim), 5.0f, 0, 1.0f);
             dl->AddText(ImVec2(mp.x + (mw - ImGui::CalcTextSize(mn).x) * 0.5f,
                          mp.y + (h - ImGui::GetFontSize()) * 0.5f), U(P.textMid), mn);
         }

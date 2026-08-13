@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../configs/json.hpp"
+#include "../../obfuscate.h"
 #include "../globals/options.h"
 #include "../globals/globals.h"
 #include <fstream>
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <type_traits>
 #include <cctype>
+#include <cstring>
 #include <vector>
 #include <mutex>
 #include <shlobj.h>
@@ -147,6 +149,56 @@ inline json ToJsonColor(const float* values, size_t count)
     return arr;
 }
 
+// ── On-disk config encryption ────────────────────────────────────────────
+// Config JSON is stored XOR-obfuscated (with a magic header) so the plaintext
+// feature/option names never appear as strings on disk. Files written by older
+// builds (plain JSON) are still read transparently.
+namespace CfgCrypto
+{
+    static const unsigned char MAGIC[8] = { 0xC7, 0x4D, 0x2E, 0x91, 0x00, 0x00, 0x00, 0x01 };
+    static const unsigned char KEY[16] = {
+        0xB2, 0x47, 0x9E, 0x15, 0x6C, 0xD8, 0x31, 0x4A,
+        0xF6, 0x89, 0x2B, 0xE7, 0x53, 0x04, 0xC9, 0x70
+    };
+
+    inline bool IsEncrypted(const std::string& content)
+    {
+        return content.size() >= sizeof(MAGIC) &&
+            std::memcmp(content.data(), MAGIC, sizeof(MAGIC)) == 0;
+    }
+
+    inline std::string Encrypt(const std::string& plain)
+    {
+        std::string out;
+        out.reserve(sizeof(MAGIC) + plain.size());
+        out.append(reinterpret_cast<const char*>(MAGIC), sizeof(MAGIC));
+        for (size_t i = 0; i < plain.size(); ++i)
+        {
+            unsigned char c = static_cast<unsigned char>(plain[i]);
+            c ^= KEY[i % sizeof(KEY)];
+            c ^= static_cast<unsigned char>((i * 7u) & 0xFF);
+            out.push_back(static_cast<char>(c));
+        }
+        return out;
+    }
+
+    inline std::string Decrypt(const std::string& blob)
+    {
+        if (!IsEncrypted(blob))
+            return blob; // legacy plaintext config
+        std::string out;
+        out.reserve(blob.size() - sizeof(MAGIC));
+        for (size_t i = sizeof(MAGIC); i < blob.size(); ++i)
+        {
+            unsigned char c = static_cast<unsigned char>(blob[i]);
+            c ^= static_cast<unsigned char>(((i - sizeof(MAGIC)) * 7u) & 0xFF);
+            c ^= KEY[(i - sizeof(MAGIC)) % sizeof(KEY)];
+            out.push_back(static_cast<char>(c));
+        }
+        return out;
+    }
+}
+
 inline bool ReadJsonFile(const std::filesystem::path& filePath, json& out)
 {
     std::ifstream f(filePath, std::ios::binary);
@@ -158,7 +210,7 @@ inline bool ReadJsonFile(const std::filesystem::path& filePath, json& out)
 
     std::ostringstream buffer;
     buffer << f.rdbuf();
-    const std::string content = buffer.str();
+    const std::string content = CfgCrypto::Decrypt(buffer.str());
     if (content.empty())
     {
         Config::lastError = "Config file is empty";
@@ -258,6 +310,11 @@ inline json BuildConfigJson()
         { "Health Text", Options::ESP::HealthText },
         { "Enemy Health Indicator", Options::ESP::EnemyHealthIndicator },
         { "ESP Preview", Options::ESP::ESPPreview },
+        { "ESP Edit Key", Options::ESP::ESPEditKey },
+        { "ESP Distance Offset X", Options::ESP::DistanceOffsetX },
+        { "ESP Distance Offset Y", Options::ESP::DistanceOffsetY },
+        { "ESP RigType Offset X", Options::ESP::RigTypeOffsetX },
+        { "ESP RigType Offset Y", Options::ESP::RigTypeOffsetY },
         { "Preview Auto Rotate", Options::ESP::PreviewAutoRotate },
         { "Preview Rotation Speed", Options::ESP::PreviewRotationSpeed },
         { "Box Thickness", Options::ESP::BoxThickness },
@@ -302,8 +359,27 @@ inline json BuildConfigJson()
         { "ESP Pulse Speed", Options::ESP::PulseSpeed },
         { "ESP Rings", Options::ESP::Rings },
         { "ESP Ring Radius", Options::ESP::RingRadius },
+        { "ESP Ring Follow", Options::ESP::RingFollow },
+        { "ESP Ring Height Offset", Options::ESP::RingHeightOffset },
+        { "ESP Ring Color Mode", Options::ESP::RingColorMode },
+        { "ESP Ring Health Gradient", Options::ESP::RingHealthGradient },
         { "ESP Trails", Options::ESP::Trails },
         { "ESP Trail Length", Options::ESP::TrailLength },
+        { "ESP Trail Duration", Options::ESP::TrailDuration },
+        { "ESP Trail Update Interval", Options::ESP::TrailUpdateInterval },
+        { "ESP Trail Min Movement", Options::ESP::TrailMinMovement },
+        { "ESP Trail Only Moving", Options::ESP::TrailOnlyMoving },
+        { "ESP Trail Follow", Options::ESP::TrailFollow },
+        { "ESP Trail Color Mode", Options::ESP::TrailColorMode },
+        { "ESP Trail Color", ToJsonColor(Options::ESP::TrailColor, 3) },
+        { "ESP Trail Smoothing", Options::ESP::TrailSmoothingMode },
+        { "ESP Trail Spline Segments", Options::ESP::TrailSplineSegments },
+        { "ESP Trail Thickness", Options::ESP::TrailThickness },
+        { "ESP Trail Glow", Options::ESP::TrailGlow },
+        { "ESP Trail Glow Layers", Options::ESP::TrailGlowLayers },
+        { "ESP Trail Glow Intensity", Options::ESP::TrailGlowIntensity },
+        { "ESP Trail Fade", Options::ESP::TrailFade },
+        { "ESP Trail Fade Start", Options::ESP::TrailFadeStart },
         { "ESP Local Only", Options::ESP::LocalOnly },
         { "ESP Avatar Icon", Options::ESP::AvatarIcon },
         { "ESP Name Mode", Options::ESP::NameMode },
@@ -312,11 +388,11 @@ inline json BuildConfigJson()
         { "ESP Custom Image Scale", Options::ESP::CustomImageScale }
     };
 
-    j["Aimbot"] = {
-        { "Aimbot Key", Options::Aimbot::AimbotKey },
+    j[OBS("Aim", "bot")] = {
+        { OBS("Aim", "bot Key"), Options::Aimbot::AimbotKey },
         { "Aiming Type", Options::Aimbot::AimingType },
         { "Toggle Type", Options::Aimbot::ToggleType },
-        { "Aimbot", Options::Aimbot::Aimbot },
+        { OBS("Aim", "bot"), Options::Aimbot::Aimbot },
         { "Team Check", Options::Aimbot::TeamCheck },
         { "Downed Check", Options::Aimbot::DownedCheck },
         { "Wall Check", Options::Aimbot::WallCheck },
@@ -334,18 +410,23 @@ inline json BuildConfigJson()
         { "Show FOV", Options::Aimbot::ShowFOV },
         { "Show FOV Fill", Options::Aimbot::ShowFOVFill },
         { "FOV Position Mode", Options::Aimbot::FOVPositionMode },
-        { "Silent Aim", Options::Aimbot::SilentAim },
-        { "Silent Aim Mode", Options::Aimbot::SilentAimMode },
-        { "Silent Aim Real Cursor", Options::Aimbot::SilentAimRealCursor },
-        { "Silent Aim Teleport", Options::Aimbot::SilentAimTeleport },
+        { OBS("Silent A", "im"), Options::Aimbot::SilentAim },
+        { OBS("Silent A", "im Mode"), Options::Aimbot::SilentAimMode },
+        { OBS("Silent A", "im Real Cursor"), Options::Aimbot::SilentAimRealCursor },
+        { OBS("Silent A", "im Teleport"), Options::Aimbot::SilentAimTeleport },
         { "Silent Lock", Options::Aimbot::SilentLock },
         { "Silent Lock Key", Options::Aimbot::SilentLockKey },
         { "Silent Lock Mode", Options::Aimbot::SilentLockMode },
-        { "Aim Info", Options::Aimbot::AimInfo },
-        { "Aim Info Name", Options::Aimbot::AimInfoName },
-        { "Aim Info Distance", Options::Aimbot::AimInfoDistance },
-        { "Aim Info Health", Options::Aimbot::AimInfoHealth },
-        { "Aim Info Part", Options::Aimbot::AimInfoPart },
+        { "Target HUD", Options::Aimbot::TargetHud },
+        { "Target HUD Name", Options::Aimbot::TargetHudName },
+        { "Target HUD Distance", Options::Aimbot::TargetHudDistance },
+        { "Target HUD Health", Options::Aimbot::TargetHudHealth },
+        { "Target HUD Tool", Options::Aimbot::TargetHudTool },
+        { "Target HUD Outline", Options::Aimbot::TargetHudOutline },
+        { "Target HUD Position Mode", Options::Aimbot::TargetHudPositionMode },
+        { "Target HUD Bar Direction", Options::Aimbot::TargetHudBarDirection },
+        { "Target HUD Bar Style", Options::Aimbot::TargetHudBarStyle },
+        { "Target HUD Pos", ToJsonColor(Options::Aimbot::TargetHudPos, 2) },
         { "Flickbot", Options::Aimbot::Flickbot },
         { "Flickbot Key", Options::Aimbot::FlickbotKey },
         { "Flickbot FOV", Options::Aimbot::FlickbotFOV },
@@ -380,8 +461,8 @@ inline json BuildConfigJson()
         { "Jump Threshold", Options::Aimbot::JumpThreshold }
     };
 
-    j["Triggerbot"] = {
-        { "Triggerbot Key", Options::Triggerbot::TriggerbotKey },
+    j[OBS("Trigger", "bot")] = {
+        { OBS("Trigger", "bot Key"), Options::Triggerbot::TriggerbotKey },
         { "Toggle Type", Options::Triggerbot::ToggleType },
         { "Enabled", Options::Triggerbot::Enabled },
         { "Team Check", Options::Triggerbot::TeamCheck },
@@ -467,6 +548,9 @@ inline json BuildConfigJson()
         { "Keybind List", Options::Misc::KeybindList },
         { "Keybind List X", Options::Misc::KeybindListX },
         { "Keybind List Y", Options::Misc::KeybindListY },
+        { "HUD Edit Mode", Options::Misc::HUDEditMode },
+        { "ESP Preview Offset X", Options::Misc::ESPPreviewOffsetX },
+        { "ESP Preview Offset Y", Options::Misc::ESPPreviewOffsetY },
         { "Stream Proof", Options::Misc::StreamProof },
         { "Third Person", Options::Misc::ThirdPerson },
         { "Menu Key", Options::Misc::MenuKey },
@@ -481,6 +565,7 @@ inline json BuildConfigJson()
         { "Target Player", std::string(Options::Misc::TargetPlayer) },
         { "Explorer Enabled", Options::Misc::ExplorerEnabled },
         { "Menu Scale", Options::Misc::MenuScale },
+        { "Debug Log", Options::Misc::DebugLog },
         { "Hide From Tabs", Options::Misc::HideFromTabs },
         { "Hide Process", Options::Misc::HideProcess },
         { "Process Name", std::string(Options::Misc::ProcessName) },
@@ -511,10 +596,21 @@ inline json BuildConfigJson()
         { "Speed", Options::WalkSpeed::Speed }
     };
 
+    j["Autoclicker"] = {
+        { "Key", Options::Autoclicker::Key },
+        { "Toggle Type", Options::Autoclicker::ToggleType },
+        { "Enabled", Options::Autoclicker::Enabled },
+        { "CPS", Options::Autoclicker::CPS },
+        { "Right Click", Options::Autoclicker::RightClick },
+        { "Only On Hold", Options::Autoclicker::OnlyOnHold }
+    };
+
     j["Combat"] = {
         { "Hit Sounds", Options::Combat::HitSounds },
         { "Hit Sound Type", Options::Combat::HitSoundType },
         { "Hit Notifications", Options::Combat::HitNotifications },
+        { "Hit Notifications X", Options::Combat::HitNotificationsX },
+        { "Hit Notifications Y", Options::Combat::HitNotificationsY },
         { "Hit Chams", Options::Combat::HitChams },
         { "Hit Effects", Options::Combat::HitEffects },
         { "Hit Chams Duration", Options::Combat::HitChamsDuration },
@@ -532,6 +628,12 @@ inline json BuildConfigJson()
         { "Hitmarker Size", Options::Combat::HitmarkerSize },
         { "Hitmarker On Crosshair", Options::Combat::HitmarkerOnCrosshair },
         { "Hitmarker Thickness", Options::Combat::HitmarkerThickness }
+    };
+
+    j["AntiFling"] = {
+        { "Enabled", Options::AntiFling::Enabled },
+        { "Velocity Threshold", Options::AntiFling::VelocityThreshold },
+        { "Save Interval", Options::AntiFling::SaveInterval }
     };
 
     j["World"] = {
@@ -603,7 +705,12 @@ inline json BuildConfigJson()
         { "OrbitKey",    Options::Orbit::OrbitKey },
         { "ToggleType",  Options::Orbit::ToggleType },
         { "TargetMode",  Options::Orbit::TargetMode },
-        { "TargetPlayer", std::string(Options::Orbit::TargetPlayer) }
+        { "TargetPlayer", std::string(Options::Orbit::TargetPlayer) },
+        { "OrbitUntilDeath", Options::Orbit::OrbitUntilDeath },
+        { "Follow",        Options::Orbit::Follow },
+        { "Height",        Options::Orbit::Height },
+        { "WallCheck",     Options::Orbit::WallCheck },
+        { "KnockedCheck",  Options::Orbit::KnockedCheck }
     };
 
     j["Rage"] = {
@@ -638,7 +745,8 @@ inline json BuildConfigJson()
 
     j["Rivals"] = {
         { "Ignore Smoke", Options::Rivals::IgnoreSmoke },
-        { "Ignore Flash", Options::Rivals::IgnoreFlash }
+        { "Ignore Flash", Options::Rivals::IgnoreFlash },
+        { "Anti Katana", Options::Rivals::AntiKatana }
     };
 
     j["Desync"] = {
@@ -659,6 +767,10 @@ inline json BuildConfigJson()
         { "ClickTP Enabled", Options::ClickTP::Enabled },
         { "ClickTP Key", Options::ClickTP::Key },
         { "ClickTP MaxDistance", Options::ClickTP::MaxDistance },
+        { "ClickTP HoldKey", Options::ClickTP::HoldKey },
+        { "ClickTP YOffset", Options::ClickTP::YOffset },
+        { "ClickTP MaxDistanceCheck", Options::ClickTP::MaxDistanceCheck },
+        { "ClickTP MaxDist", Options::ClickTP::MaxDist },
         { "HipHeight Enabled", Options::HipHeight::Enabled },
         { "HipHeight Value", Options::HipHeight::Value },
         { "HipHeight Key", Options::HipHeight::Key },
@@ -667,6 +779,36 @@ inline json BuildConfigJson()
         { "FreeCam Key", Options::FreeCam::Key },
         { "FreeCam ToggleType", Options::FreeCam::ToggleType },
         { "FreeCam Speed", Options::FreeCam::Speed },
+        { "FreeCam Sensitivity", Options::FreeCam::Sensitivity },
+        { "FreeCam ShiftMultiplier", Options::FreeCam::ShiftMultiplier },
+        { "FreeCam FOVOverride", Options::FreeCam::FOVOverride },
+        { "FreeCam FOVValue", Options::FreeCam::FOVValue },
+        { "ThirdPerson Key", Options::ThirdPerson::Key },
+        { "ThirdPerson ToggleType", Options::ThirdPerson::ToggleType },
+        { "ThirdPerson OffsetForward", Options::ThirdPerson::OffsetForward },
+        { "ThirdPerson OffsetUp", Options::ThirdPerson::OffsetUp },
+        { "ThirdPerson LookHeight", Options::ThirdPerson::LookHeight },
+        { "ThirdPerson OffsetRight", Options::ThirdPerson::OffsetRight },
+        { "ThirdPerson CinematicMode", Options::ThirdPerson::CinematicMode },
+        { "ThirdPerson UseHeadTracking", Options::ThirdPerson::UseHeadTracking },
+        { "ThirdPerson PortraitMode", Options::ThirdPerson::PortraitMode },
+        { "ThirdPerson CinematicSmoothing", Options::ThirdPerson::CinematicSmoothing },
+        { "Rewind Enabled", Options::Rewind::Enabled },
+        { "Rewind Key", Options::Rewind::Key },
+        { "Rewind YOffset", Options::Rewind::YOffset },
+        { "Rewind AutoClearOnTP", Options::Rewind::AutoClearOnTP },
+        { "Rewind ShowOverlay", Options::Rewind::ShowOverlay },
+        { "Rewind ShowWorldMarker", Options::Rewind::ShowWorldMarker },
+        { "Rewind MarkerStyle", Options::Rewind::MarkerStyle },
+        { "Rewind MarkerSize", Options::Rewind::MarkerSize },
+        { "Rewind MarkerPulseSpeed", Options::Rewind::MarkerPulseSpeed },
+        { "Rewind MarkerGlow", Options::Rewind::MarkerGlow },
+        { "Rewind MarkerFilled", Options::Rewind::MarkerFilled },
+        { "Rewind MarkerThickness", Options::Rewind::MarkerThickness },
+        { "Rewind MarkerColor", ToJsonColor(Options::Rewind::MarkerColor, 3) },
+        { "Rewind ShowMarkerText", Options::Rewind::ShowMarkerText },
+        { "Rewind MarkerTextOutline", Options::Rewind::MarkerTextOutline },
+        { "Rewind MarkerTextColor", ToJsonColor(Options::Rewind::MarkerTextColor, 3) },
         { "StretchRes Enabled", Options::StretchRes::Enabled },
         { "StretchRes ScaleX", Options::StretchRes::ScaleX },
         { "StretchRes ScaleY", Options::StretchRes::ScaleY }
@@ -744,6 +886,11 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(esp, "Health Text", Options::ESP::HealthText);
         LoadVal(esp, "Enemy Health Indicator", Options::ESP::EnemyHealthIndicator);
         LoadVal(esp, "ESP Preview", Options::ESP::ESPPreview);
+        LoadVal(esp, "ESP Edit Key", Options::ESP::ESPEditKey);
+        LoadVal(esp, "ESP Distance Offset X", Options::ESP::DistanceOffsetX);
+        LoadVal(esp, "ESP Distance Offset Y", Options::ESP::DistanceOffsetY);
+        LoadVal(esp, "ESP RigType Offset X", Options::ESP::RigTypeOffsetX);
+        LoadVal(esp, "ESP RigType Offset Y", Options::ESP::RigTypeOffsetY);
         LoadVal(esp, "Preview Auto Rotate", Options::ESP::PreviewAutoRotate);
         LoadVal(esp, "Preview Rotation Speed", Options::ESP::PreviewRotationSpeed);
         LoadVal(esp, "Box Thickness", Options::ESP::BoxThickness);
@@ -788,8 +935,27 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(esp, "ESP Pulse Speed", Options::ESP::PulseSpeed);
         LoadVal(esp, "ESP Rings", Options::ESP::Rings);
         LoadVal(esp, "ESP Ring Radius", Options::ESP::RingRadius);
+        LoadVal(esp, "ESP Ring Follow", Options::ESP::RingFollow);
+        LoadVal(esp, "ESP Ring Height Offset", Options::ESP::RingHeightOffset);
+        LoadVal(esp, "ESP Ring Color Mode", Options::ESP::RingColorMode);
+        LoadVal(esp, "ESP Ring Health Gradient", Options::ESP::RingHealthGradient);
         LoadVal(esp, "ESP Trails", Options::ESP::Trails);
         LoadVal(esp, "ESP Trail Length", Options::ESP::TrailLength);
+        LoadVal(esp, "ESP Trail Duration", Options::ESP::TrailDuration);
+        LoadVal(esp, "ESP Trail Update Interval", Options::ESP::TrailUpdateInterval);
+        LoadVal(esp, "ESP Trail Min Movement", Options::ESP::TrailMinMovement);
+        LoadVal(esp, "ESP Trail Only Moving", Options::ESP::TrailOnlyMoving);
+        LoadVal(esp, "ESP Trail Follow", Options::ESP::TrailFollow);
+        LoadVal(esp, "ESP Trail Color Mode", Options::ESP::TrailColorMode);
+        LoadFloatArray(esp, "ESP Trail Color", Options::ESP::TrailColor);
+        LoadVal(esp, "ESP Trail Smoothing", Options::ESP::TrailSmoothingMode);
+        LoadVal(esp, "ESP Trail Spline Segments", Options::ESP::TrailSplineSegments);
+        LoadVal(esp, "ESP Trail Thickness", Options::ESP::TrailThickness);
+        LoadVal(esp, "ESP Trail Glow", Options::ESP::TrailGlow);
+        LoadVal(esp, "ESP Trail Glow Layers", Options::ESP::TrailGlowLayers);
+        LoadVal(esp, "ESP Trail Glow Intensity", Options::ESP::TrailGlowIntensity);
+        LoadVal(esp, "ESP Trail Fade", Options::ESP::TrailFade);
+        LoadVal(esp, "ESP Trail Fade Start", Options::ESP::TrailFadeStart);
         LoadVal(esp, "ESP Local Only", Options::ESP::LocalOnly);
         LoadVal(esp, "ESP Avatar Icon", Options::ESP::AvatarIcon);
         LoadVal(esp, "ESP Name Mode", Options::ESP::NameMode);
@@ -802,13 +968,13 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(esp, "ESP Custom Image Scale", Options::ESP::CustomImageScale);
     }
 
-    if (data.is_object() && data.contains("Aimbot"))
+    if (data.is_object() && data.contains(OBS("Aim", "bot")))
     {
-        const auto& aim = data["Aimbot"];
-        LoadVal(aim, "Aimbot Key", Options::Aimbot::AimbotKey);
+        const auto& aim = data[OBS("Aim", "bot")];
+        LoadVal(aim, OBS("Aim", "bot Key"), Options::Aimbot::AimbotKey);
         LoadVal(aim, "Aiming Type", Options::Aimbot::AimingType);
         LoadVal(aim, "Toggle Type", Options::Aimbot::ToggleType);
-        LoadVal(aim, "Aimbot", Options::Aimbot::Aimbot);
+        LoadVal(aim, OBS("Aim", "bot"), Options::Aimbot::Aimbot);
         LoadVal(aim, "Team Check", Options::Aimbot::TeamCheck);
         LoadVal(aim, "Downed Check", Options::Aimbot::DownedCheck);
         LoadVal(aim, "Wall Check", Options::Aimbot::WallCheck);
@@ -832,18 +998,23 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(aim, "FOV Breathing", Options::Aimbot::FOVBreathing);
         LoadVal(aim, "FOV Spin", Options::Aimbot::FOVSpin);
         LoadVal(aim, "FOV Spin Speed", Options::Aimbot::FOVSpinSpeed);
-        LoadVal(aim, "Silent Aim", Options::Aimbot::SilentAim);
-        LoadVal(aim, "Silent Aim Mode", Options::Aimbot::SilentAimMode);
-        LoadVal(aim, "Silent Aim Real Cursor", Options::Aimbot::SilentAimRealCursor);
-        LoadVal(aim, "Silent Aim Teleport", Options::Aimbot::SilentAimTeleport);
+        LoadVal(aim, OBS("Silent A", "im"), Options::Aimbot::SilentAim);
+        LoadVal(aim, OBS("Silent A", "im Mode"), Options::Aimbot::SilentAimMode);
+        LoadVal(aim, OBS("Silent A", "im Real Cursor"), Options::Aimbot::SilentAimRealCursor);
+        LoadVal(aim, OBS("Silent A", "im Teleport"), Options::Aimbot::SilentAimTeleport);
         LoadVal(aim, "Silent Lock", Options::Aimbot::SilentLock);
         LoadVal(aim, "Silent Lock Key", Options::Aimbot::SilentLockKey);
         LoadVal(aim, "Silent Lock Mode", Options::Aimbot::SilentLockMode);
-        LoadVal(aim, "Aim Info", Options::Aimbot::AimInfo);
-        LoadVal(aim, "Aim Info Name", Options::Aimbot::AimInfoName);
-        LoadVal(aim, "Aim Info Distance", Options::Aimbot::AimInfoDistance);
-        LoadVal(aim, "Aim Info Health", Options::Aimbot::AimInfoHealth);
-        LoadVal(aim, "Aim Info Part", Options::Aimbot::AimInfoPart);
+        LoadVal(aim, "Target HUD", Options::Aimbot::TargetHud);
+        LoadVal(aim, "Target HUD Name", Options::Aimbot::TargetHudName);
+        LoadVal(aim, "Target HUD Distance", Options::Aimbot::TargetHudDistance);
+        LoadVal(aim, "Target HUD Health", Options::Aimbot::TargetHudHealth);
+        LoadVal(aim, "Target HUD Tool", Options::Aimbot::TargetHudTool);
+        LoadVal(aim, "Target HUD Outline", Options::Aimbot::TargetHudOutline);
+        LoadVal(aim, "Target HUD Position Mode", Options::Aimbot::TargetHudPositionMode);
+        LoadVal(aim, "Target HUD Bar Direction", Options::Aimbot::TargetHudBarDirection);
+        LoadVal(aim, "Target HUD Bar Style", Options::Aimbot::TargetHudBarStyle);
+        LoadFloatArray(aim, "Target HUD Pos", Options::Aimbot::TargetHudPos);
         LoadVal(aim, "Flickbot", Options::Aimbot::Flickbot);
         LoadVal(aim, "Flickbot Key", Options::Aimbot::FlickbotKey);
         LoadVal(aim, "Flickbot FOV", Options::Aimbot::FlickbotFOV);
@@ -872,10 +1043,10 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(aim, "Jump Threshold", Options::Aimbot::JumpThreshold);
     }
 
-    if (data.is_object() && data.contains("Triggerbot"))
+    if (data.is_object() && data.contains(OBS("Trigger", "bot")))
     {
-        const auto& tb = data["Triggerbot"];
-        LoadVal(tb, "Triggerbot Key", Options::Triggerbot::TriggerbotKey);
+        const auto& tb = data[OBS("Trigger", "bot")];
+        LoadVal(tb, OBS("Trigger", "bot Key"), Options::Triggerbot::TriggerbotKey);
         LoadVal(tb, "Toggle Type", Options::Triggerbot::ToggleType);
         LoadVal(tb, "Enabled", Options::Triggerbot::Enabled);
         LoadVal(tb, "Team Check", Options::Triggerbot::TeamCheck);
@@ -967,6 +1138,9 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(ms, "Keybind List", Options::Misc::KeybindList);
         LoadVal(ms, "Keybind List X", Options::Misc::KeybindListX);
         LoadVal(ms, "Keybind List Y", Options::Misc::KeybindListY);
+        LoadVal(ms, "HUD Edit Mode", Options::Misc::HUDEditMode);
+        LoadVal(ms, "ESP Preview Offset X", Options::Misc::ESPPreviewOffsetX);
+        LoadVal(ms, "ESP Preview Offset Y", Options::Misc::ESPPreviewOffsetY);
         LoadVal(ms, "Stream Proof", Options::Misc::StreamProof);
         LoadVal(ms, "Third Person", Options::Misc::ThirdPerson);
         LoadVal(ms, "Menu Key", Options::Misc::MenuKey);
@@ -987,6 +1161,7 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(ms, "Menu Scale", Options::Misc::MenuScale);
         LoadVal(ms, "Hide From Tabs", Options::Misc::HideFromTabs);
         LoadVal(ms, "Hide Process", Options::Misc::HideProcess);
+        LoadVal(ms, "Debug Log", Options::Misc::DebugLog);
         LoadVal(ms, "Show Certified", Options::Misc::ShowCertified);
         if (ms.contains("Process Name"))
         {
@@ -1029,12 +1204,25 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(ws, "Speed", Options::WalkSpeed::Speed);
     }
 
+    if (data.is_object() && data.contains("Autoclicker"))
+    {
+        const auto& ac = data["Autoclicker"];
+        LoadVal(ac, "Key", Options::Autoclicker::Key);
+        LoadVal(ac, "Toggle Type", Options::Autoclicker::ToggleType);
+        LoadVal(ac, "Enabled", Options::Autoclicker::Enabled);
+        LoadVal(ac, "CPS", Options::Autoclicker::CPS);
+        LoadVal(ac, "Right Click", Options::Autoclicker::RightClick);
+        LoadVal(ac, "Only On Hold", Options::Autoclicker::OnlyOnHold);
+    }
+
     if (data.is_object() && data.contains("Combat"))
     {
         const auto& combat = data["Combat"];
         LoadVal(combat, "Hit Sounds", Options::Combat::HitSounds);
         LoadVal(combat, "Hit Sound Type", Options::Combat::HitSoundType);
         LoadVal(combat, "Hit Notifications", Options::Combat::HitNotifications);
+        LoadVal(combat, "Hit Notifications X", Options::Combat::HitNotificationsX);
+        LoadVal(combat, "Hit Notifications Y", Options::Combat::HitNotificationsY);
         LoadVal(combat, "Hit Chams", Options::Combat::HitChams);
         LoadVal(combat, "Hit Effects", Options::Combat::HitEffects);
         LoadVal(combat, "Hit Chams Duration", Options::Combat::HitChamsDuration);
@@ -1052,6 +1240,14 @@ inline void ApplyConfigJson(const json& data)
         LoadFloatArray(combat, "Hit Chams Color", Options::Combat::HitChamsColor);
         LoadFloatArray(combat, "Hit Effect Color", Options::Combat::HitEffectColor);
         LoadFloatArray(combat, "Bullet Tracer Color", Options::Combat::BulletTracerColor);
+    }
+
+    if (data.is_object() && data.contains("AntiFling"))
+    {
+        const auto& af = data["AntiFling"];
+        LoadVal(af, "Enabled", Options::AntiFling::Enabled);
+        LoadVal(af, "Velocity Threshold", Options::AntiFling::VelocityThreshold);
+        LoadVal(af, "Save Interval", Options::AntiFling::SaveInterval);
     }
 
     if (data.is_object() && data.contains("World"))
@@ -1144,6 +1340,11 @@ inline void ApplyConfigJson(const json& data)
             std::string tp = ob["TargetPlayer"].get<std::string>();
             strncpy_s(Options::Orbit::TargetPlayer, tp.c_str(), sizeof(Options::Orbit::TargetPlayer) - 1);
         }
+        LoadVal(ob, "OrbitUntilDeath", Options::Orbit::OrbitUntilDeath);
+        LoadVal(ob, "Follow",          Options::Orbit::Follow);
+        LoadVal(ob, "Height",          Options::Orbit::Height);
+        LoadVal(ob, "WallCheck",       Options::Orbit::WallCheck);
+        LoadVal(ob, "KnockedCheck",    Options::Orbit::KnockedCheck);
     }
 
     if (data.is_object() && data.contains("Rage"))
@@ -1211,6 +1412,7 @@ inline void ApplyConfigJson(const json& data)
         const auto& rv = data["Rivals"];
         LoadVal(rv, "Ignore Smoke", Options::Rivals::IgnoreSmoke);
         LoadVal(rv, "Ignore Flash", Options::Rivals::IgnoreFlash);
+        LoadVal(rv, "Anti Katana", Options::Rivals::AntiKatana);
     }
 
     if (data.is_object() && data.contains("Desync"))
@@ -1235,6 +1437,10 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(me, "ClickTP Enabled", Options::ClickTP::Enabled);
         LoadVal(me, "ClickTP Key", Options::ClickTP::Key);
         LoadVal(me, "ClickTP MaxDistance", Options::ClickTP::MaxDistance);
+        LoadVal(me, "ClickTP HoldKey", Options::ClickTP::HoldKey);
+        LoadVal(me, "ClickTP YOffset", Options::ClickTP::YOffset);
+        LoadVal(me, "ClickTP MaxDistanceCheck", Options::ClickTP::MaxDistanceCheck);
+        LoadVal(me, "ClickTP MaxDist", Options::ClickTP::MaxDist);
         LoadVal(me, "HipHeight Enabled", Options::HipHeight::Enabled);
         LoadVal(me, "HipHeight Value", Options::HipHeight::Value);
         LoadVal(me, "HipHeight Key", Options::HipHeight::Key);
@@ -1243,6 +1449,36 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(me, "FreeCam Key", Options::FreeCam::Key);
         LoadVal(me, "FreeCam ToggleType", Options::FreeCam::ToggleType);
         LoadVal(me, "FreeCam Speed", Options::FreeCam::Speed);
+        LoadVal(me, "FreeCam Sensitivity", Options::FreeCam::Sensitivity);
+        LoadVal(me, "FreeCam ShiftMultiplier", Options::FreeCam::ShiftMultiplier);
+        LoadVal(me, "FreeCam FOVOverride", Options::FreeCam::FOVOverride);
+        LoadVal(me, "FreeCam FOVValue", Options::FreeCam::FOVValue);
+        LoadVal(me, "ThirdPerson Key", Options::ThirdPerson::Key);
+        LoadVal(me, "ThirdPerson ToggleType", Options::ThirdPerson::ToggleType);
+        LoadVal(me, "ThirdPerson OffsetForward", Options::ThirdPerson::OffsetForward);
+        LoadVal(me, "ThirdPerson OffsetUp", Options::ThirdPerson::OffsetUp);
+        LoadVal(me, "ThirdPerson LookHeight", Options::ThirdPerson::LookHeight);
+        LoadVal(me, "ThirdPerson OffsetRight", Options::ThirdPerson::OffsetRight);
+        LoadVal(me, "ThirdPerson CinematicMode", Options::ThirdPerson::CinematicMode);
+        LoadVal(me, "ThirdPerson UseHeadTracking", Options::ThirdPerson::UseHeadTracking);
+        LoadVal(me, "ThirdPerson PortraitMode", Options::ThirdPerson::PortraitMode);
+        LoadVal(me, "ThirdPerson CinematicSmoothing", Options::ThirdPerson::CinematicSmoothing);
+        LoadVal(me, "Rewind Enabled", Options::Rewind::Enabled);
+        LoadVal(me, "Rewind Key", Options::Rewind::Key);
+        LoadVal(me, "Rewind YOffset", Options::Rewind::YOffset);
+        LoadVal(me, "Rewind AutoClearOnTP", Options::Rewind::AutoClearOnTP);
+        LoadVal(me, "Rewind ShowOverlay", Options::Rewind::ShowOverlay);
+        LoadVal(me, "Rewind ShowWorldMarker", Options::Rewind::ShowWorldMarker);
+        LoadVal(me, "Rewind MarkerStyle", Options::Rewind::MarkerStyle);
+        LoadVal(me, "Rewind MarkerSize", Options::Rewind::MarkerSize);
+        LoadVal(me, "Rewind MarkerPulseSpeed", Options::Rewind::MarkerPulseSpeed);
+        LoadVal(me, "Rewind MarkerGlow", Options::Rewind::MarkerGlow);
+        LoadVal(me, "Rewind MarkerFilled", Options::Rewind::MarkerFilled);
+        LoadVal(me, "Rewind MarkerThickness", Options::Rewind::MarkerThickness);
+        LoadFloatArray(me, "Rewind MarkerColor", Options::Rewind::MarkerColor);
+        LoadVal(me, "Rewind ShowMarkerText", Options::Rewind::ShowMarkerText);
+        LoadVal(me, "Rewind MarkerTextOutline", Options::Rewind::MarkerTextOutline);
+        LoadFloatArray(me, "Rewind MarkerTextColor", Options::Rewind::MarkerTextColor);
         LoadVal(me, "StretchRes Enabled", Options::StretchRes::Enabled);
         LoadVal(me, "StretchRes ScaleX", Options::StretchRes::ScaleX);
         LoadVal(me, "StretchRes ScaleY", Options::StretchRes::ScaleY);
@@ -1301,7 +1537,7 @@ inline bool SaveConfig(std::string configName)
     try
     {
         const json j = BuildConfigJson();
-        const std::string payload = j.dump(4);
+        const std::string payload = CfgCrypto::Encrypt(j.dump(4));
 
         {
             std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
@@ -1478,7 +1714,7 @@ inline bool SaveAutoloadSettings(const AutoloadSettings& settings)
     const std::filesystem::path tempPath = settingsPath.string() + ".tmp";
     try
     {
-        const std::string payload = data.dump(4);
+        const std::string payload = CfgCrypto::Encrypt(data.dump(4));
         {
             std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
             if (!out.is_open())
@@ -1863,11 +2099,21 @@ inline bool ImportConfigFromFile(const std::filesystem::path& sourcePath)
         return false;
     }
 
-    std::filesystem::copy_file(sourcePath, destPath, std::filesystem::copy_options::none, ec);
-    if (ec)
     {
-        Config::lastError = "Could not copy file: " + ec.message();
-        return false;
+        const std::string payload = CfgCrypto::Encrypt(data.dump(4));
+        std::ofstream out(destPath, std::ios::binary | std::ios::trunc);
+        if (!out.is_open())
+        {
+            Config::lastError = "Could not write file: " + destPath.string();
+            return false;
+        }
+        out.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+        out.flush();
+        if (!out.good())
+        {
+            Config::lastError = "Failed while writing file: " + destPath.string();
+            return false;
+        }
     }
     return true;
 }

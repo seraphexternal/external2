@@ -15,6 +15,7 @@
 #include "../rbx/math/math.h"
 #include "../overlay/utils/W2S.h"
 #include "../overlay/imgui/imgui.h"
+#include "map_parser.h"
 
 namespace Visibility
 {
@@ -235,6 +236,47 @@ namespace Visibility
         return hit > 0.01f && hit < maxDistance;
     }
 
+    // Accurate static-map raycast via MapParser's shape-classified cache, with
+    // fallback to the coarse legacy occluder spheres while the cache warms up.
+    // Returns true if any static part blocks the (origin → origin+delta*distance)
+    // segment, where maxDistance trims 0.75 studs off the far end so parts just
+    // behind the target don't falsely occlude it.
+    inline bool IsMapBlocking(
+        const Vectors::Vector3& origin,
+        const Vectors::Vector3& delta,
+        float distance,
+        uintptr_t ignoreModelAddress)
+    {
+        const float maxDistance = distance - 0.75f;
+
+        if (MapParser::IsCacheReady())
+        {
+            const Vectors::Vector3 end = {
+                origin.x + delta.x * maxDistance,
+                origin.y + delta.y * maxDistance,
+                origin.z + delta.z * maxDistance
+            };
+            return !MapParser::IsVisible(origin, end, ignoreModelAddress);
+        }
+
+        const float cullDistance = distance + 12.f;
+        std::lock_guard<std::mutex> lock(occluderMutex);
+        for (const auto& wall : occluders)
+        {
+            if (ignoreModelAddress != 0 && wall.modelAddress == ignoreModelAddress)
+                continue;
+
+            const float wallDist = wall.position.Distance(origin);
+            if (wallDist > cullDistance)
+                continue;
+
+            if (RayIntersectsSphere(origin, delta, wall.position, wall.radius + 0.35f, maxDistance))
+                return true;
+        }
+
+        return false;
+    }
+
     inline bool IsPointVisible(const Vectors::Vector3& target, uintptr_t ignoreModelAddress)
     {
         if ((!Options::ESP::VisibilityCheck && !Options::ESP::VisibilityChams && !Options::Chams::Enabled) || !Globals::Roblox::Camera.address)
@@ -266,23 +308,7 @@ namespace Visibility
         if (maxDistance <= 0.5f)
             return true;
 
-        const float cullDistance = distance + 12.f;
-
-        std::lock_guard<std::mutex> lock(occluderMutex);
-        for (const auto& wall : occluders)
-        {
-            if (ignoreModelAddress != 0 && wall.modelAddress == ignoreModelAddress)
-                continue;
-
-            const float wallDist = wall.position.Distance(origin);
-            if (wallDist > cullDistance)
-                continue;
-
-            if (RayIntersectsSphere(origin, delta, wall.position, wall.radius + 0.35f, maxDistance))
-                return false;
-        }
-
-        return true;
+        return !IsMapBlocking(origin, delta, distance, ignoreModelAddress);
     }
 
     inline bool IsPointVisibleCached(uintptr_t cacheKey, const Vectors::Vector3& target, uintptr_t ignoreModelAddress)
@@ -337,23 +363,7 @@ namespace Visibility
         if (maxDistance <= 0.5f)
             return true;
 
-        const float cullDistance = distance + 12.f;
-
-        std::lock_guard<std::mutex> lock(occluderMutex);
-        for (const auto& wall : occluders)
-        {
-            if (ignoreModelAddress != 0 && wall.modelAddress == ignoreModelAddress)
-                continue;
-
-            const float wallDist = wall.position.Distance(origin);
-            if (wallDist > cullDistance)
-                continue;
-
-            if (RayIntersectsSphere(origin, delta, wall.position, wall.radius + 0.35f, maxDistance))
-                return false;
-        }
-
-        return true;
+        return !IsMapBlocking(origin, delta, distance, ignoreModelAddress);
     }
 
     inline bool IsPlayerVisibleImpl(const RobloxPlayer& player)
@@ -394,6 +404,48 @@ namespace Visibility
     {
         if (!Globals::Roblox::Camera.address)
             return false;
+
+        if (MapParser::IsCacheReady())
+        {
+            const uintptr_t ignoreModel = player.Character.address;
+            Vectors::Vector3 origin;
+            try
+            {
+                origin = Memory->read<Vectors::Vector3>(
+                    Globals::Roblox::Camera.address + Offsets::Camera::Position);
+            }
+            catch (...) { return false; }
+
+            auto pointBlocked = [&](const Vectors::Vector3& target) -> bool
+            {
+                Vectors::Vector3 delta = {
+                    target.x - origin.x,
+                    target.y - origin.y,
+                    target.z - origin.z
+                };
+                const float distance = delta.Magnitude();
+                if (distance < 1.5f)
+                    return false;
+
+                delta.x /= distance;
+                delta.y /= distance;
+                delta.z /= distance;
+
+                const float maxDistance = distance - 0.75f;
+                if (maxDistance <= 0.5f)
+                    return false;
+
+                return IsMapBlocking(origin, delta, distance, ignoreModel);
+            };
+
+            // Occluded only when both the head and the humanoid root are blocked.
+            if (player.Head.address && !pointBlocked(player.Head.Position()))
+                return false;
+            if (player.HumanoidRootPart.address && !pointBlocked(player.HumanoidRootPart.Position()))
+                return false;
+            return true;
+        }
+
         return !IsPlayerVisibleImpl(player);
     }
 

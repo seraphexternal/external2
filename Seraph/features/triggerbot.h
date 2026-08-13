@@ -284,6 +284,9 @@ inline void RunTriggerbot()
         if (Options::Triggerbot::DownedCheck && player.Health > 0 && player.Health <= 5.0f)
             continue;
 
+        if (Globals::Roblox::isRivals && Options::Rivals::AntiKatana && IsHoldingKatana(player))
+            continue;
+
         if (Options::Triggerbot::WallCheck && Visibility::IsPlayerOccluded(player))
             continue;
 

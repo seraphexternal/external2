@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "../rbx/globals/globals.h"
 #include "../rbx/globals/options.h"
 #include "../rbx/offsets.h"
@@ -81,39 +81,112 @@ namespace DesyncVisual
 
         if (!shouldDraw)
             return;
+            
+        // Fallback for missing Globals
+        if (!Globals::Roblox::LocalPlayer.address) return;
 
-        const auto ghostScreen = WorldToScreen(gPos);
-        const auto realScreen = WorldToScreen(rPos);
-
-        if (ghostScreen.x == -1.f || ghostScreen.y == -1.f)
-            return;
-        if (realScreen.x == -1.f || realScreen.y == -1.f)
-            return;
-
-        const ImU32 ghostColor = IM_COL32(
-            static_cast<int>(Options::Desync::VisualColor[0] * 255.f),
-            static_cast<int>(Options::Desync::VisualColor[1] * 255.f),
-            static_cast<int>(Options::Desync::VisualColor[2] * 255.f),
-            static_cast<int>(Options::Desync::VisualAlpha * 255.f));
-
-        const ImU32 lineColor = IM_COL32(
-            static_cast<int>(Options::Desync::LineColor[0] * 255.f),
-            static_cast<int>(Options::Desync::LineColor[1] * 255.f),
-            static_cast<int>(Options::Desync::LineColor[2] * 255.f),
-            220);
-
+        // Rather than drawing a stickman, let's draw chams for the ghost
+        // We will project the player's parts offset by the difference between ghost and real pos
+        Vectors::Vector3 offset = gPos - rPos;
         float dist = rPos.Distance(gPos);
 
-        float viewDist = headPos.Distance(rPos);
-        if (viewDist < 1.f) viewDist = 200.f;
-        const float scale = 450.f / fmaxf(viewDist, 1.f);
-        const float clampedScale = fminf(fmaxf(scale, 0.3f), 3.0f);
+        // if too close, don't render to avoid clutter
+        if (dist < 1.0f) return;
 
-        const float boxW = 12.f * clampedScale;
-        const float boxH = 24.f * clampedScale;
+        auto character = Globals::Roblox::LocalPlayer.Character();
+        if (!character.address) return;
 
-        ImVec2 ghostMin(ghostScreen.x - boxW * 0.5f, ghostScreen.y - boxH * 0.5f);
-        ImVec2 ghostMax(ghostScreen.x + boxW * 0.5f, ghostScreen.y + boxH * 0.5f);
+        std::vector<RobloxInstance> partsToDraw;
+        auto children = character.GetChildren();
+        for (auto& child : children)
+        {
+            if (child.IsA("BasePart") || child.IsA("MeshPart") || child.IsA("Part"))
+            {
+                if (child.Name() != "HumanoidRootPart")
+                {
+                    partsToDraw.push_back(child);
+                }
+            }
+        }
+        
+        // Also get accessories
+        for (auto& child : children)
+        {
+            std::string cls = child.Class();
+            if (cls == "Accessory" || cls == "Hat" || cls == "Backpack" || cls == "Tool")
+            {
+                auto handle = child.FindFirstChild("Handle");
+                if (handle.address) partsToDraw.push_back(handle);
+            }
+        }
+
+        if (partsToDraw.empty()) return;
+
+        // Group projected corners by limb so the visualizer renders chams
+        // (per-limb silhouette) at the ghost location instead of one solid block.
+        auto limbKey = [](const RobloxInstance& p) -> int {
+            std::string n = p.Name();
+            if (n == "Head") return 0;
+            if (n.find("Torso") != std::string::npos) return 1;
+            bool left = n.find("Left") != std::string::npos;
+            bool right = n.find("Right") != std::string::npos;
+            if (n.find("Arm") != std::string::npos || n.find("Hand") != std::string::npos) return left ? 2 : (right ? 3 : 2);
+            if (n.find("Leg") != std::string::npos || n.find("Foot") != std::string::npos) return left ? 4 : (right ? 5 : 4);
+            if (n.find("Handle") != std::string::npos) return 6;
+            return 7;
+        };
+
+        static const float corners[8][3] = {
+            {-1,-1,-1}, {1,-1,-1}, {-1,1,-1}, {1,1,-1},
+            {-1,-1, 1}, {1,-1, 1}, {-1,1, 1}, {1,1, 1}
+        };
+
+        std::vector<std::vector<ImVec2>> limbBuckets(8);
+
+        for (const auto& part : partsToDraw)
+        {
+            if (!part.address) continue;
+            const auto pos = part.Position();
+            const auto size = part.Size();
+            const auto cf = part.CFrame();
+
+            for (int i = 0; i < 8; ++i)
+            {
+                Vectors::Vector3 localOffset{ corners[i][0] * size.x * 0.5f, corners[i][1] * size.y * 0.5f, corners[i][2] * size.z * 0.5f };
+                Vectors::Vector3 rotated{ cf.r00 * localOffset.x + cf.r01 * localOffset.y + cf.r02 * localOffset.z,
+                                          cf.r10 * localOffset.x + cf.r11 * localOffset.y + cf.r12 * localOffset.z,
+                                          cf.r20 * localOffset.x + cf.r21 * localOffset.y + cf.r22 * localOffset.z };
+
+                // Add the desync offset to place the part at the ghost location
+                Vectors::Vector3 world = pos + rotated + offset;
+                auto screen = WorldToScreen(world);
+                if (screen.x >= 0.f && screen.y >= 0.f)
+                    limbBuckets[limbKey(part)].emplace_back(screen.x, screen.y);
+            }
+        }
+
+        auto buildHull = [](std::vector<ImVec2>& pts) -> std::vector<ImVec2> {
+            if (pts.size() < 3) return {};
+            std::sort(pts.begin(), pts.end(), [](const ImVec2& a, const ImVec2& b) {
+                return a.x < b.x || (a.x == b.x && a.y < b.y);
+            });
+            std::vector<ImVec2> hull;
+            auto cross = [](const ImVec2& o, const ImVec2& a, const ImVec2& b) {
+                return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+            };
+            for (auto& p : pts) {
+                while (hull.size() >= 2 && cross(hull[hull.size() - 2], hull.back(), p) <= 0) hull.pop_back();
+                hull.push_back(p);
+            }
+            size_t t = hull.size() + 1;
+            for (int i = (int)pts.size() - 1; i >= 0; --i) {
+                auto& p = pts[i];
+                while (hull.size() >= t && cross(hull[hull.size() - 2], hull.back(), p) <= 0) hull.pop_back();
+                hull.push_back(p);
+            }
+            if (hull.size() > 1) hull.pop_back();
+            return hull;
+        };
 
         ImU32 ghostFill = IM_COL32(
             static_cast<int>(Options::Desync::VisualColor[0] * 255.f),
@@ -121,85 +194,39 @@ namespace DesyncVisual
             static_cast<int>(Options::Desync::VisualColor[2] * 255.f),
             static_cast<int>(40.f * Options::Desync::VisualAlpha));
 
-        drawList->AddRectFilled(ghostMin, ghostMax, ghostFill, 4.0f);
-        drawList->AddRect(ghostMin, ghostMax, ghostColor, 4.0f, 0, 2.0f);
+        const ImU32 ghostOutline = IM_COL32(
+            static_cast<int>(Options::Desync::VisualColor[0] * 255.f),
+            static_cast<int>(Options::Desync::VisualColor[1] * 255.f),
+            static_cast<int>(Options::Desync::VisualColor[2] * 255.f),
+            static_cast<int>(Options::Desync::VisualAlpha * 255.f));
 
-        const float cornerLen = boxW * 0.3f;
-        auto drawCorner = [&](ImVec2 a, ImVec2 b, ImVec2 c)
+        for (auto& bucket : limbBuckets)
         {
-            drawList->AddLine(a, b, ghostColor, 1.8f);
-            drawList->AddLine(a, c, ghostColor, 1.8f);
-        };
-        drawCorner(ghostMin, ImVec2(ghostMin.x + cornerLen, ghostMin.y), ImVec2(ghostMin.x, ghostMin.y + cornerLen));
-        drawCorner(ghostMax, ImVec2(ghostMax.x - cornerLen, ghostMax.y), ImVec2(ghostMax.x, ghostMax.y + cornerLen));
-        drawCorner(ImVec2(ghostMin.x, ghostMax.y), ImVec2(ghostMin.x + cornerLen, ghostMax.y), ImVec2(ghostMin.x, ghostMax.y - cornerLen));
-        drawCorner(ImVec2(ghostMax.x, ghostMin.y), ImVec2(ghostMax.x - cornerLen, ghostMin.y), ImVec2(ghostMax.x, ghostMin.y + cornerLen));
-
-        const float headRadius = boxW * 0.35f;
-        ImVec2 headCenter(ghostScreen.x, ghostMin.y - headRadius - 2.f);
-        drawList->AddCircle(headCenter, headRadius, ghostColor, 16, 1.5f);
-        drawList->AddCircleFilled(headCenter, headRadius * 0.4f, ghostColor, 12);
-
-        const float shoulderY = headCenter.y + headRadius + boxH * 0.05f;
-        const float hipY = ghostMin.y + boxH * 0.55f;
-        const float footY = ghostMax.y - 3.f;
-        const float shoulderHalf = boxW * 0.32f;
-        const float hipHalf = boxW * 0.18f;
-
-        ImVec2 hipCenter(ghostScreen.x, hipY);
-        ImVec2 lShoulder(ghostScreen.x - shoulderHalf, shoulderY);
-        ImVec2 rShoulder(ghostScreen.x + shoulderHalf, shoulderY);
-        ImVec2 lElbow(ghostScreen.x - shoulderHalf, shoulderY + boxH * 0.18f);
-        ImVec2 rElbow(ghostScreen.x + shoulderHalf, shoulderY + boxH * 0.18f);
-        ImVec2 lHand(ghostScreen.x - shoulderHalf, shoulderY + boxH * 0.32f);
-        ImVec2 rHand(ghostScreen.x + shoulderHalf, shoulderY + boxH * 0.32f);
-        ImVec2 lKnee(ghostScreen.x - hipHalf, hipY + (footY - hipY) * 0.5f);
-        ImVec2 rKnee(ghostScreen.x + hipHalf, hipY + (footY - hipY) * 0.5f);
-        ImVec2 lFoot(ghostScreen.x - hipHalf, footY);
-        ImVec2 rFoot(ghostScreen.x + hipHalf, footY);
-
-        drawList->AddLine(headCenter, ImVec2(ghostScreen.x, shoulderY), ghostColor, 1.2f);
-        drawList->AddLine(ImVec2(ghostScreen.x, shoulderY), hipCenter, ghostColor, 1.2f);
-        drawList->AddLine(lShoulder, lElbow, ghostColor, 1.2f);
-        drawList->AddLine(lElbow, lHand, ghostColor, 1.2f);
-        drawList->AddLine(rShoulder, rElbow, ghostColor, 1.2f);
-        drawList->AddLine(rElbow, rHand, ghostColor, 1.2f);
-        drawList->AddLine(hipCenter, lKnee, ghostColor, 1.2f);
-        drawList->AddLine(lKnee, lFoot, ghostColor, 1.2f);
-        drawList->AddLine(hipCenter, rKnee, ghostColor, 1.2f);
-        drawList->AddLine(rKnee, rFoot, ghostColor, 1.2f);
+            std::vector<ImVec2> hull = buildHull(bucket);
+            if (hull.size() < 3) continue;
+            drawList->AddConvexPolyFilled(hull.data(), static_cast<int>(hull.size()), ghostFill);
+            drawList->AddPolyline(hull.data(), static_cast<int>(hull.size()), ghostOutline, true, 2.0f);
+        }
 
         if (Options::Desync::ShowLine && dist > 1.f)
         {
-            drawList->AddLine(
-                ImVec2(realScreen.x, realScreen.y),
-                ImVec2(ghostScreen.x, ghostScreen.y),
-                lineColor, 2.0f);
-        }
+            const ImU32 lineColor = IM_COL32(
+                static_cast<int>(Options::Desync::LineColor[0] * 255.f),
+                static_cast<int>(Options::Desync::LineColor[1] * 255.f),
+                static_cast<int>(Options::Desync::LineColor[2] * 255.f),
+                220);
 
-        const ImU32 distLabelColor = IM_COL32(255, 255, 255, 230);
-        char distText[32];
-        snprintf(distText, sizeof(distText), "%.0f studs", dist);
-        const float fontSize = fmaxf(11.f * clampedScale, 10.f);
-        const ImVec2 textSize = ImGui::GetFont()->CalcTextSizeA(fontSize, FLT_MAX, 0.f, distText);
+            const auto ghostScreen = WorldToScreen(gPos);
+            const auto realScreen = WorldToScreen(rPos);
 
-        ImVec2 labelPos;
-        if (dist > 1.f)
-        {
-            float midX = (realScreen.x + ghostScreen.x) * 0.5f;
-            float midY = (realScreen.y + ghostScreen.y) * 0.5f;
-            labelPos = ImVec2(midX - textSize.x * 0.5f, midY - textSize.y * 0.5f);
+            if (ghostScreen.x != -1.f && realScreen.x != -1.f)
+            {
+                drawList->AddLine(
+                    ImVec2(realScreen.x, realScreen.y),
+                    ImVec2(ghostScreen.x, ghostScreen.y),
+                    lineColor, 2.0f);
+            }
         }
-        else
-        {
-            labelPos = ImVec2(ghostScreen.x - textSize.x * 0.5f, ghostMax.y + 4.f);
-        }
-
-        drawList->AddRectFilled(
-            ImVec2(labelPos.x - 3.f, labelPos.y - 1.f),
-            ImVec2(labelPos.x + textSize.x + 3.f, labelPos.y + textSize.y + 1.f),
-            IM_COL32(0, 0, 0, 160), 3.0f);
-        drawList->AddText(ImGui::GetFont(), fontSize, labelPos, distLabelColor, distText);
     }
 }
 
@@ -307,8 +334,8 @@ inline void DesyncLoop()
                 if (base)
                 {
                     Memory->write<float>(base + Offsets::FFlags::GameNetCompressionLodByteBudgetThresholdPct, 1.0f);
-                    Memory->write<int>(base + Offsets::FFlags::PhysicsSenderMaxBandwidthBps, 524288);
-                    Memory->write<int>(base + Offsets::FFlags::NextGenReplicatorEnabledWrite4, 0);
+                    Memory->write<int>(base + Offsets::FFlags::PhysicsSenderMaxBandwidthBps, 1000);
+                    Memory->write<int>(base + Offsets::FFlags::NextGenReplicatorEnabledWrite4, 1);
                 }
                 DesyncVisual::OnDeactivate();
             }

@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <vector>
 #include <shellapi.h>
+#include <tlhelp32.h>
 #include "../rbx/globals/options.h"
 
 // Convert a UTF-8/ANSI char buffer to a wide string (used for process names, etc.)
@@ -51,6 +52,29 @@ namespace Stealth
         return std::wstring(tmp) + name + L".exe";
     }
 
+    // Terminate any stale instance of ours still running from the relaunch path
+    // (a previous copy that was killed instead of exiting cleanly). We match on
+    // the exact full image path so system RuntimeBroker processes are untouched.
+    inline void KillStaleRelaunch()
+    {
+        std::wstring dest = GetRelaunchPath();
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snap == INVALID_HANDLE_VALUE) return;
+        PROCESSENTRY32W pe = { sizeof(pe) };
+        for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe))
+        {
+            HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+            if (!h) continue;
+            wchar_t path[MAX_PATH] = { 0 };
+            DWORD len = MAX_PATH;
+            BOOL got = QueryFullProcessImageNameW(h, 0, path, &len);
+            if (got && _wcsicmp(path, dest.c_str()) == 0)
+                TerminateProcess(h, 1);
+            CloseHandle(h);
+        }
+        CloseHandle(snap);
+    }
+
     // Copy current exe to the relaunch path and spawn it, then exit this process.
     inline void RelaunchAsRenamed()
     {
@@ -71,13 +95,21 @@ namespace Stealth
             return;
         }
 
+        // Kill any stale temp copy still running from a previous session, then
+        // always overwrite the file so a leftover copy never blocks relaunch.
+        KillStaleRelaunch();
+
         if (!CopyFileW(selfPath, dest.c_str(), FALSE))
             return; // copy failed -> just run as-is (still functional)
 
-        // Re-launch with the same command line, elevated/normal as we are.
+        // Re-launch with a clean command line so Task Manager's "Command Line"
+        // column shows only the disguised image name (no original path leaks).
+        std::wstring cmdLineName = dest.substr(dest.find_last_of(L"\\/") + 1);
+        wchar_t cmdLineBuf[MAX_PATH] = { 0 };
+        wcsncpy_s(cmdLineBuf, cmdLineName.c_str(), _TRUNCATE);
         STARTUPINFOW si = { sizeof(si) };
         PROCESS_INFORMATION pi = { 0 };
-        if (CreateProcessW(dest.c_str(), GetCommandLineW(), nullptr, nullptr,
+        if (CreateProcessW(dest.c_str(), cmdLineBuf, nullptr, nullptr,
             FALSE, 0, nullptr, nullptr, &si, &pi))
         {
             CloseHandle(pi.hThread);

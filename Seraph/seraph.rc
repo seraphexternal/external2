@@ -1,4 +1,8 @@
 // Seraph resource file
+// The Fleasion icon is intentionally re-embedded here so the launched
+// executable and the system-tray icon both display the branded icon, and
+// the process appears named after the Fleasion binary rather than an
+// innocuous RuntimeBroker.exe.
 
 #include <windows.h>
 

@@ -26,8 +26,6 @@ Luck_WriteVirtualMemory
 
 class MemoryManager final {
 private:
-	HANDLE processHandle;
-
 	int32_t processId;
 	uintptr_t baseAddress;
 public:
@@ -43,6 +41,10 @@ public:
 	std::string readString(uintptr_t address);
 	bool writeString(uintptr_t address, const std::string& value);
 
+	// Opens a short-lived handle to the target process (caller must CloseHandle).
+	// Handles are never retained across calls so no persistent handle exists.
+	HANDLE openTransientHandle(bool forWrite = false);
+
 	template <typename T>
 	T read(uintptr_t address);
 
@@ -56,21 +58,28 @@ public:
 	void setBaseAddress(uintptr_t newBaseAddress);
 
 	void closeProcess();
-	HANDLE getHandle() { return processHandle; }
 };
 
 template <typename T>
 T MemoryManager::read(uintptr_t address) {
 	T buffer{};
 
-	Luck_ReadVirtualMemory(processHandle, reinterpret_cast<void*>(address), &buffer, sizeof(T), nullptr);
+	HANDLE h = openTransientHandle(false);
+	if (!h) return buffer;
+
+	Luck_ReadVirtualMemory(h, reinterpret_cast<void*>(address), &buffer, sizeof(T), nullptr);
+	CloseHandle(h);
 
 	return buffer;
 }
 
 template <typename T>
 void MemoryManager::write(uintptr_t address, T value) {
-	Luck_WriteVirtualMemory(processHandle, reinterpret_cast<void*>(address), &value, sizeof(T), nullptr);
+	HANDLE h = openTransientHandle(true);
+	if (!h) return;
+
+	Luck_WriteVirtualMemory(h, reinterpret_cast<void*>(address), &value, sizeof(T), nullptr);
+	CloseHandle(h);
 }
 
 inline std::unique_ptr<MemoryManager> Memory = std::make_unique<MemoryManager>();

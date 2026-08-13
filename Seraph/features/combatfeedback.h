@@ -17,6 +17,7 @@
 #include "../rbx/globals/globals.h"
 #include "../features/visibility.h"
 #include "../overlay/utils/W2S.h"
+#include "hud_editor.h"
 
 namespace CombatFeedback
 {
@@ -923,14 +924,30 @@ namespace CombatFeedback
         if (Options::Combat::HitNotifications && !notifications.empty())
         {
             ImGuiIO& io = ImGui::GetIO();
-            float y = 60.0f;
+            // anchorX = right edge of the notification text; anchorY = top.
+            // 0/60 defaults keep the original top-right behaviour.
+            float anchorX = (Options::Combat::HitNotificationsX == 0.0f)
+                ? (io.DisplaySize.x - 20.0f) : Options::Combat::HitNotificationsX;
+            float anchorY = Options::Combat::HitNotificationsY;
+
+            if (Options::Misc::HUDEditMode)
+            {
+                float hx = anchorX - 28.0f, hy = anchorY;
+                HudEditor::Handle("##hitnotif", hx, hy, drawList);
+                anchorX = hx + 28.0f;
+                anchorY = hy;
+                Options::Combat::HitNotificationsX = anchorX;
+                Options::Combat::HitNotificationsY = anchorY;
+            }
+
+            float y = anchorY;
             for (const auto& note : notifications)
             {
                 char buffer[128];
                 snprintf(buffer, sizeof(buffer), "Hit %s (-%.0f HP)", note.name.c_str(), note.damage);
 
                 const ImVec2 textSize = ImGui::CalcTextSize(buffer);
-                const ImVec2 pos(io.DisplaySize.x - textSize.x - 20.0f, y);
+                const ImVec2 pos(anchorX - textSize.x, y);
                 const int alpha = static_cast<int>(255.0f * ClampFloat(note.timeLeft / 2.5f, 0.0f, 1.0f));
 
                 drawList->AddRectFilled(

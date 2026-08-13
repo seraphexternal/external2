@@ -152,6 +152,9 @@ namespace SilentAim
             if (Options::Aimbot::SilentAimTeamCheck && IsTeammate(player))
                 continue;
 
+            if (Globals::Roblox::isRivals && Options::Rivals::AntiKatana && IsHoldingKatana(player))
+                continue;
+
             auto targetPart = player.Head;
             if (Options::Aimbot::SilentAimTargetBone == 1)
                 targetPart = player.RigType == 1 ? player.Upper_Torso : player.Torso;

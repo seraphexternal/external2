@@ -10,10 +10,12 @@
 #include <functional>
 #include <windows.h>
 #include "Memory/MemoryManager.h"
+#include "rbx/globals/OffsetsFetcher.h"
 #include "overlay/renderer.h"
 #include "features/misc.h"
 #include "features/hitboxexpander.h"
 #include "features/fly.h"
+#include "features/autoclicker.h"
 #include "features/speed.h"
 #include "features/world.h"
 #include "features/antiaim.h"
@@ -27,6 +29,7 @@
 #include "features/rampfling.h"
 #include "features/voidhide.h"
 #include "features/bunnyhop.h"
+#include "features/map_parser.h"
 #include "features/ragebot.h"
 #include "features/visibility.h"
 #include "rbx/Caches/playercache.h"
@@ -36,6 +39,8 @@
 #include "rbx/configs/configs.h"
 #include "features/stealth.h"
 #include "features/movement_extra.h"
+#include "features/rewind.h"
+#include "features/thirdperson.h"
 #include "tray.h"
 #include "overlay/loader.h"
 #include "features/rivals_skinchanger.h"
@@ -86,6 +91,7 @@ int main()
     // anything else. This must run before attach so the "hidden" process is
     // the one that actually does the work. On clean exit we wipe our traces.
     std::atexit(Stealth::WipeTempTraces);
+    Stealth::WipeTempTraces(); // also clear leftovers from any prior (crashed) session
     Stealth::RelaunchAsRenamed();
 
     InitializeConfigPaths();
@@ -493,6 +499,7 @@ int main()
         std::thread(MiscLoop).detach();
         std::thread(RunHitboxExpander).detach();
         std::thread(FlyLoop).detach();
+        std::thread(AutoClickerLoop).detach();
         std::thread(SpeedLoop).detach();
         std::thread(WorldLoop).detach();
         std::thread(AntiAimLoop).detach();
@@ -506,28 +513,22 @@ int main()
         std::thread(RampFlingLoop).detach();
         std::thread(VoidHideLoop).detach();
         std::thread(BhopLoop).detach();
-        std::thread(ClickTPLoop).detach();
-        std::thread(HipHeightLoop).detach();
+		std::thread(ClickTPLoop).detach();
+		std::thread(HipHeightLoop).detach();
 		std::thread(FreeCamLoop).detach();
+		std::thread(ThirdPersonLoop).detach();
+		std::thread(Rewind::Tick).detach();
 		std::thread(StretchResLoop).detach();
 		std::thread(RageKillLoop).detach();
 		std::thread(RivalsSkinChangerLoop).detach();
 		Visibility::StartOccluderThread();
+		std::thread(MapParser::WorkerLoop).detach();
 
-        // Monitor process exits cleanly and without CPU cycles using synchronize handle
-        HANDLE processHandle = OpenProcess(SYNCHRONIZE, FALSE, Memory->getProcessId());
-        if (processHandle && processHandle != INVALID_HANDLE_VALUE)
+        // Monitor process exit without holding any handle into Roblox.
+        // Poll via snapshot so no process handle is ever retained.
+        while (IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
-            WaitForSingleObject(processHandle, INFINITE);
-            CloseHandle(processHandle);
-        }
-        else
-        {
-            // Fallback checking in case OpenProcess fails
-            while (IsGameRunning(L"RobloxPlayerBeta.exe"))
-            {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
 
         // Turn off features so threads exit cleanly

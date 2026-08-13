@@ -38,9 +38,21 @@ public:
 		return address != 0;
 	}
 
+	inline uintptr_t NameAddress() const
+	{
+		if (address == 0)
+			return 0;
+
+		const uintptr_t nameContainer = Memory->read<uintptr_t>(address + Offsets::Instance::NameContainer);
+		if (nameContainer == 0)
+			return 0;
+
+		return nameContainer + Offsets::Instance::Name;
+	}
+
 	inline std::string Name() const
 	{
-		return Memory->readString(Memory->read<uintptr_t>(address + Offsets::Instance::Name));
+		return Memory->readString(NameAddress());
 	}
 
 	inline std::string Class() const

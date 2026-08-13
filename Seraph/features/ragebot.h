@@ -86,6 +86,9 @@ inline RobloxPlayer GetRagebotTarget()
         if (Options::Ragebot::DownedCheck && player.Health > 0 && player.Health <= 5.0f)
             continue;
 
+        if (Globals::Roblox::isRivals && Options::Rivals::AntiKatana && IsHoldingKatana(player))
+            continue;
+
         if (Options::Ragebot::WallCheck && Visibility::IsPlayerOccluded(player))
             continue;
 

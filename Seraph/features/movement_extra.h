@@ -6,9 +6,14 @@
 #include <chrono>
 #include <cmath>
 
-// ── Click TP: teleport the local character to the point under the cursor ─────
+// ── Click TP: teleport the local character to the ground point under the cursor ─
+// Unprojects the cursor through the real view-projection matrix and intersects
+// the ray with the ground plane (same Y as the character), then hammers the
+// primitive position so the game accepts the teleport.
 inline void ClickTPLoop()
 {
+    bool lastClick = false;
+
     while (Globals::running)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(8));
@@ -16,79 +21,108 @@ inline void ClickTPLoop()
         if (!Options::ClickTP::Enabled || Options::ClickTP::Key == 0)
             continue;
 
-        static bool wasDown = false;
-        bool isDown = (GetAsyncKeyState(Options::ClickTP::Key) & 0x8000) != 0;
-        if (!isDown || wasDown)
-        {
-            wasDown = isDown;
+        // Optional hold key: clicking only teleports while it is held down.
+        if (Options::ClickTP::HoldKey != 0 &&
+            !(GetAsyncKeyState(Options::ClickTP::HoldKey) & 0x8000))
             continue;
-        }
-        wasDown = isDown;
+
+        // Block while typing in a text field / using the menu.
+        if (ImGui::GetIO().WantTextInput)
+            continue;
+
+        bool curClick = (GetAsyncKeyState(Options::ClickTP::Key) & 0x8000) != 0;
+        bool justClicked = curClick && !lastClick;
+        lastClick = curClick;
+        if (!justClicked)
+            continue;
 
         try
         {
             auto localPlayer = Globals::Roblox::LocalPlayer;
-            if (!localPlayer.address)
-                continue;
+            if (!localPlayer.address) continue;
             auto character = localPlayer.Character();
-            if (!character.address)
-                continue;
+            if (!character.address) continue;
             auto hrp = character.FindFirstChild("HumanoidRootPart");
-            if (!hrp.address)
-                continue;
-            auto camera = Globals::Roblox::Camera;
-            if (!camera.address)
+            if (!hrp.address) continue;
+            uintptr_t prim = Memory->read<uintptr_t>(hrp.address + Offsets::BasePart::Primitive);
+            if (!prim) continue;
+
+            const Vectors::Vector2 dims = Globals::Viewport::Dimensions;
+            if (dims.x < 1.f || dims.y < 1.f || !Globals::Viewport::Valid)
                 continue;
 
-            sCFrame camCFrame = camera.CFrame();
-            Vectors::Vector3 camPos = camera.Position();
-            Vectors::Vector3 look = camCFrame.GetLookVector();
-
-            // Aim a ray through the current cursor position (use mouse-based
-            // direction when available, otherwise straight forward).
             POINT cursor;
             GetCursorPos(&cursor);
-            Vectors::Vector2 dims = Memory->read<Vectors::Vector2>(
-                Globals::Roblox::VisualEngine + Offsets::VisualEngine::Dimensions);
-            Vectors::Vector2 mouse = Memory->read<Vectors::Vector2>(
-                Globals::Roblox::Camera.address + Offsets::Camera::Viewport);
-            Vectors::Vector2 screen((float)cursor.x, (float)cursor.y);
-            // Reconstruct a forward ray biased by the cursor offset from screen center.
-            Vectors::Vector3 dir = look;
-            if (dims.x > 1.0f && dims.y > 1.0f)
+            float cx = (float)cursor.x - (float)Globals::Viewport::ScreenPos.x;
+            float cy = (float)cursor.y - (float)Globals::Viewport::ScreenPos.y;
+            float ndc_x = (2.f * cx / dims.x) - 1.f;
+            float ndc_y = -(2.f * cy / dims.y) + 1.f;
+
+            const float* m = Globals::Viewport::ViewMatrix.data;
+
+            // Invert the view-projection matrix (row-major, 4x4).
+            float inv[16];
+            inv[0]  =  m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10];
+            inv[4]  = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10];
+            inv[8]  =  m[4]*m[9]*m[15]  - m[4]*m[11]*m[13] - m[8]*m[5]*m[15] + m[8]*m[7]*m[13] + m[12]*m[5]*m[11] - m[12]*m[7]*m[9];
+            inv[12] = -m[4]*m[9]*m[14]  + m[4]*m[10]*m[13] + m[8]*m[5]*m[14] - m[8]*m[6]*m[13] - m[12]*m[5]*m[10] + m[12]*m[6]*m[9];
+            inv[1]  = -m[1]*m[10]*m[15] + m[1]*m[11]*m[14] + m[9]*m[2]*m[15] - m[9]*m[3]*m[14] - m[13]*m[2]*m[11] + m[13]*m[3]*m[10];
+            inv[5]  =  m[0]*m[10]*m[15] - m[0]*m[11]*m[14] - m[8]*m[2]*m[15] + m[8]*m[3]*m[14] + m[12]*m[2]*m[11] - m[12]*m[3]*m[10];
+            inv[9]  = -m[0]*m[9]*m[15]  + m[0]*m[11]*m[13] + m[8]*m[1]*m[15] - m[8]*m[3]*m[13] - m[12]*m[1]*m[11] + m[12]*m[3]*m[9];
+            inv[13] =  m[0]*m[9]*m[14]  - m[0]*m[10]*m[13] - m[8]*m[1]*m[14] + m[8]*m[2]*m[13] + m[12]*m[1]*m[10] - m[12]*m[2]*m[9];
+            inv[2]  =  m[1]*m[6]*m[15]  - m[1]*m[7]*m[14] - m[5]*m[2]*m[15] + m[5]*m[3]*m[14] + m[13]*m[2]*m[7]  - m[13]*m[3]*m[6];
+            inv[6]  = -m[0]*m[6]*m[15]  + m[0]*m[7]*m[14] + m[4]*m[2]*m[15] - m[4]*m[3]*m[14] - m[12]*m[2]*m[7]  + m[12]*m[3]*m[6];
+            inv[10] =  m[0]*m[5]*m[15]  - m[0]*m[7]*m[13] - m[4]*m[1]*m[15] + m[4]*m[3]*m[13] + m[12]*m[1]*m[7]  - m[12]*m[3]*m[5];
+            inv[14] = -m[0]*m[5]*m[14]  + m[0]*m[6]*m[13] + m[4]*m[1]*m[14] - m[4]*m[2]*m[13] - m[12]*m[1]*m[6]  + m[12]*m[2]*m[5];
+            inv[3]  = -m[1]*m[6]*m[11]  + m[1]*m[7]*m[10] + m[5]*m[2]*m[11] - m[5]*m[3]*m[10] - m[9]*m[2]*m[7]   + m[9]*m[3]*m[6];
+            inv[7]  =  m[0]*m[6]*m[11]  - m[0]*m[7]*m[10] - m[4]*m[2]*m[11] + m[4]*m[3]*m[10] + m[8]*m[2]*m[7]   - m[8]*m[3]*m[6];
+            inv[11] = -m[0]*m[5]*m[11]  + m[0]*m[7]*m[9]  + m[4]*m[1]*m[11] - m[4]*m[3]*m[9]  - m[8]*m[1]*m[7]   + m[8]*m[3]*m[5];
+            inv[15] =  m[0]*m[5]*m[10]  - m[0]*m[6]*m[9]  - m[4]*m[1]*m[10] + m[4]*m[2]*m[9]  + m[8]*m[1]*m[6]   - m[8]*m[2]*m[5];
+
+            float det = m[0]*inv[0] + m[1]*inv[4] + m[2]*inv[8] + m[3]*inv[12];
+            if (std::abs(det) < 1e-8f)
+                continue;
+            float invDet = 1.f / det;
+            for (int i = 0; i < 16; ++i)
+                inv[i] *= invDet;
+
+            auto unproj = [&](float nx, float ny, float nz) -> Vectors::Vector3
             {
-                float nx = (screen.x - dims.x * 0.5f) / (dims.x * 0.5f);
-                float ny = (screen.y - dims.y * 0.5f) / (dims.y * 0.5f);
-                // Build a right/up basis from the look vector.
-                Vectors::Vector3 worldUp(0, 1, 0);
-                Vectors::Vector3 right = {
-                    look.z, 0, -look.x
+                float cw = inv[12]*nx + inv[13]*ny + inv[14]*nz + inv[15];
+                if (std::abs(cw) < 1e-8f)
+                    return { 0.f, 0.f, 0.f };
+                return {
+                    (inv[0]*nx + inv[1]*ny + inv[2]*nz + inv[3]) / cw,
+                    (inv[4]*nx + inv[5]*ny + inv[6]*nz + inv[7]) / cw,
+                    (inv[8]*nx + inv[9]*ny + inv[10]*nz + inv[11]) / cw
                 };
-                float rl = sqrtf(right.x * right.x + right.z * right.z);
-                if (rl > 1e-4f) { right.x /= rl; right.z /= rl; }
-                Vectors::Vector3 up = {
-                    right.y * look.z - right.z * look.y,
-                    right.z * look.x - right.x * look.z,
-                    right.x * look.y - right.y * look.x
-                };
-                float ul = sqrtf(up.x * up.x + up.y * up.y + up.z * up.z);
-                if (ul > 1e-4f) { up.x /= ul; up.y /= ul; up.z /= ul; }
-                dir = {
-                    look.x + right.x * nx * 0.6f + up.x * -ny * 0.6f,
-                    look.y + right.y * nx * 0.6f + up.y * -ny * 0.6f,
-                    look.z + right.z * nx * 0.6f + up.z * -ny * 0.6f
-                };
-                float dl = sqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
-                if (dl > 1e-4f) { dir.x /= dl; dir.y /= dl; dir.z /= dl; }
+            };
+
+            Vectors::Vector3 nearPt = unproj(ndc_x, ndc_y, 0.f);
+            Vectors::Vector3 farPt  = unproj(ndc_x, ndc_y, 1.f);
+            Vectors::Vector3 rayDir = (farPt - nearPt).Normalize();
+            if (std::abs(rayDir.y) < 1e-6f)
+                continue;
+
+            Vectors::Vector3 curPos = Memory->read<Vectors::Vector3>(prim + Offsets::Primitive::Position);
+            float t = (curPos.y - nearPt.y) / rayDir.y;
+            if (t < 0.f)
+                continue;
+
+            Vectors::Vector3 target = nearPt + rayDir * t;
+            target.y += Options::ClickTP::YOffset;
+
+            if (Options::ClickTP::MaxDistanceCheck)
+            {
+                float dx = curPos.x - target.x, dz = curPos.z - target.z;
+                if (std::sqrt(dx * dx + dz * dz) > Options::ClickTP::MaxDist)
+                    continue;
             }
 
-            Vectors::Vector3 dest = camPos + dir * Options::ClickTP::MaxDistance;
-
-            uintptr_t primitive = Memory->read<uintptr_t>(hrp.address + Offsets::BasePart::Primitive);
-            if (primitive)
+            for (int i = 0; i < 10000; ++i)
             {
-                Memory->write<Vectors::Vector3>(primitive + Offsets::Primitive::Position, dest);
-                Memory->write<Vectors::Vector3>(primitive + Offsets::Primitive::AssemblyLinearVelocity, { 0,0,0 });
+                Memory->write<Vectors::Vector3>(prim + Offsets::Primitive::Position, target);
+                Memory->write<Vectors::Vector3>(prim + Offsets::Primitive::AssemblyLinearVelocity, { 0.f, 0.f, 0.f });
             }
         }
         catch (...)
@@ -145,11 +179,21 @@ inline void HipHeightLoop()
 }
 
 // ── Free Cam: detach the camera from the player and fly it freely ───────────
+// Reference-style implementation: locks CameraType to 7, holds walkspeed at 0,
+// RMB drag to look, WASD/space/ctrl to move, and hammers the camera transform
+// continuously (~14ms bursts) so the game's camera script can never win the race.
 inline void FreeCamLoop()
 {
     static Vectors::Vector3 savedPos{ 0,0,0 };
     static Matrixes::Matrix3x3 savedRot{};
     static bool hasSaved = false;
+    static float yaw = 0.f, pitch = 0.f;
+    static bool initialized = false;
+    static bool wasRmb = false;
+    static bool movementLocked = false;
+    static float savedWalkSpeed = 16.f;
+    static float savedFOV = 0.f;
+    static bool wasActive = false;
 
     while (Globals::running)
     {
@@ -189,45 +233,146 @@ inline void FreeCamLoop()
         if (!cam.address)
             continue;
 
-        if (!Options::FreeCam::Enabled || !Options::FreeCam::Toggled)
+        bool active = Options::FreeCam::Enabled && Options::FreeCam::Toggled;
+
+        if (!active)
         {
             // Restore the real camera when turning off.
-            if (hasSaved && Options::FreeCam::SaveRealCamera)
+            if (wasActive)
             {
-                Memory->write<Vectors::Vector3>(cam.address + Offsets::Camera::Position, savedPos);
-                Memory->write<Matrixes::Matrix3x3>(cam.address + Offsets::Camera::Rotation, savedRot);
-                hasSaved = false;
+                Globals::freecamOwnsCamera = false;
+                if (hasSaved && Options::FreeCam::SaveRealCamera)
+                {
+                    Memory->write<Vectors::Vector3>(cam.address + Offsets::Camera::Position, savedPos);
+                    Memory->write<Matrixes::Matrix3x3>(cam.address + Offsets::Camera::Rotation, savedRot);
+                    hasSaved = false;
+                }
+                if (initialized && savedFOV > 0.f && Options::FreeCam::FOVOverride)
+                {
+                    Memory->write<float>(cam.address + Offsets::Camera::FieldOfView, savedFOV);
+                    savedFOV = 0.f;
+                }
+                if (movementLocked)
+                {
+                    auto character = Globals::Roblox::LocalPlayer.Character();
+                    auto hum = character.FindFirstChildWhichIsA("Humanoid");
+                    if (hum.address)
+                    {
+                        hum.SetWalkspeed(savedWalkSpeed);
+                    }
+                    movementLocked = false;
+                }
+                Memory->write<int>(cam.address + Offsets::Camera::CameraType, 0);
+                initialized = false;
+                wasActive = false;
+                wasRmb = false;
             }
             continue;
         }
 
-        // Save once on activation.
+        wasActive = true;
+        Globals::freecamOwnsCamera = true;
+
+        // Save the real camera once on activation.
         if (!hasSaved && Options::FreeCam::SaveRealCamera)
         {
             savedPos = Memory->read<Vectors::Vector3>(cam.address + Offsets::Camera::Position);
             savedRot = Memory->read<Matrixes::Matrix3x3>(cam.address + Offsets::Camera::Rotation);
             hasSaved = true;
         }
+        if (!initialized)
+        {
+            yaw = 0.f;
+            pitch = 0.f;
+            if (Options::FreeCam::FOVOverride)
+                savedFOV = Memory->read<float>(cam.address + Offsets::Camera::FieldOfView);
+            wasRmb = false;
+            initialized = true;
+        }
 
-        Matrixes::Matrix3x3 rot = Memory->read<Matrixes::Matrix3x3>(cam.address + Offsets::Camera::Rotation);
-        Vectors::Vector3 pos = Memory->read<Vectors::Vector3>(cam.address + Offsets::Camera::Position);
-        Vectors::Vector3 fwd(rot.r02, rot.r12, rot.r22);
-        Vectors::Vector3 right(fwd.z, 0, -fwd.x);
-        float rl = sqrtf(right.x * right.x + right.z * right.z);
-        if (rl > 1e-4f) { right.x /= rl; right.z /= rl; }
-        Vectors::Vector3 up(0, 1, 0);
-        float sp = Options::FreeCam::Speed;
+        // Lock walkspeed so the character can't walk away.
+        if (Globals::Roblox::LocalPlayer.address)
+        {
+            auto character = Globals::Roblox::LocalPlayer.Character();
+            auto hum = character.FindFirstChildWhichIsA("Humanoid");
+            if (hum.address)
+            {
+                if (!movementLocked)
+                {
+                    savedWalkSpeed = hum.GetWalkspeed();
+                    movementLocked = true;
+                }
+                Memory->write<float>(hum.address + Offsets::Humanoid::Walkspeed, 0.f);
+            }
+        }
 
-        Vectors::Vector3 vel(0, 0, 0);
-        if (GetAsyncKeyState('W') & 0x8000) vel = vel - fwd * sp;
-        if (GetAsyncKeyState('S') & 0x8000) vel = vel + fwd * sp;
-        if (GetAsyncKeyState('A') & 0x8000) vel = vel - right * sp;
-        if (GetAsyncKeyState('D') & 0x8000) vel = vel + right * sp;
-        if (GetAsyncKeyState(VK_SPACE) & 0x8000) vel = vel + up * sp;
-        if (GetAsyncKeyState(VK_SHIFT) & 0x8000) vel = vel - up * sp;
+        // ── Mouse look: hold RMB and drag to rotate (cursor-delta based) ─────
+        bool rmb = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+        if (rmb)
+        {
+            static POINT lastCursor{};
+            if (!wasRmb)
+            {
+                GetCursorPos(&lastCursor);
+            }
+            else
+            {
+                POINT cur;
+                GetCursorPos(&cur);
+                float dx = (float)(cur.x - lastCursor.x);
+                float dy = (float)(cur.y - lastCursor.y);
+                yaw -= dx * Options::FreeCam::Sensitivity;
+                pitch -= dy * Options::FreeCam::Sensitivity;
+                pitch = std::clamp(pitch, -1.5f, 1.5f);
+                SetCursorPos(cur.x, cur.y);
+                lastCursor = cur;
+            }
+        }
+        wasRmb = rmb;
 
-        pos = pos + vel * 0.016f;
-        Memory->write<Vectors::Vector3>(cam.address + Offsets::Camera::Position, pos);
+        // ── Build rotation (Roblox left-handed convention) ───────────────────
+        float cy = std::cos(yaw),  sy = std::sin(yaw);
+        float cp = std::cos(pitch), sp = std::sin(pitch);
+        Matrixes::Matrix3x3 rot;
+        rot.r00 = cy;    rot.r01 = sy * sp;  rot.r02 = sy * cp;
+        rot.r10 = 0.f;   rot.r11 = cp;       rot.r12 = -sp;
+        rot.r20 = -sy;   rot.r21 = cy * sp;  rot.r22 = cy * cp;
+
+        // ── Movement ─────────────────────────────────────────────────────────
+        Vectors::Vector3 move(0.f, 0.f, 0.f);
+        if (GetAsyncKeyState('W') & 0x8000) move.z -= 1.f;
+        if (GetAsyncKeyState('S') & 0x8000) move.z += 1.f;
+        if (GetAsyncKeyState('A') & 0x8000) move.x -= 1.f;
+        if (GetAsyncKeyState('D') & 0x8000) move.x += 1.f;
+        if (GetAsyncKeyState(VK_SPACE) & 0x8000) move.y += 1.f;
+        if (GetAsyncKeyState(VK_LCONTROL) & 0x8000) move.y -= 1.f;
+
+        if (move.x != 0.f || move.y != 0.f || move.z != 0.f)
+        {
+            move = move.Normalize();
+            float spd = Options::FreeCam::Speed;
+            if (GetAsyncKeyState(VK_SHIFT) & 0x8000)
+                spd *= Options::FreeCam::ShiftMultiplier;
+
+            Vectors::Vector3 right{ rot.r00, rot.r10, rot.r20 };
+            Vectors::Vector3 up{ rot.r01, rot.r11, rot.r21 };
+            Vectors::Vector3 forward{ -rot.r02, -rot.r12, -rot.r22 };
+
+            savedPos = savedPos
+                + (right * move.x + up * move.y + forward * -move.z) * (spd * 0.016f);
+        }
+
+        // ── Hammer the camera transform (~14ms burst) so nothing can override ─
+        auto writeStart = std::chrono::high_resolution_clock::now();
+        do {
+            Memory->write<int>(cam.address + Offsets::Camera::CameraType, 7);
+            Memory->write<Vectors::Vector3>(cam.address + Offsets::Camera::Position, savedPos);
+            Memory->write<Matrixes::Matrix3x3>(cam.address + Offsets::Camera::Rotation, rot);
+        } while (std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::high_resolution_clock::now() - writeStart).count() < 14000);
+
+        if (Options::FreeCam::FOVOverride)
+            Memory->write<float>(cam.address + Offsets::Camera::FieldOfView, Options::FreeCam::FOVValue);
     }
 }
 

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <d3d11.h>
 #include "avatar3d.h"
+#include "hud_editor.h"
 
 #pragma comment(lib, "urlmon.lib")
 #pragma comment(lib, "wininet.lib")
@@ -187,6 +188,33 @@ inline float EspMax(float a, float b)
     return a > b ? a : b;
 }
 
+// World-space trail point used by the motion-trail system.
+struct EspTrailPoint
+{
+    Vectors::Vector3 pos;
+    float timestamp = 0.f;
+};
+
+// Catmull-Rom spline interpolation for smooth trail curves. Returns the point
+// at parameter t in [0,1] between p1 and p2, guided by p0 and p3.
+inline Vectors::Vector3 EspCatmullRom(const Vectors::Vector3& p0, const Vectors::Vector3& p1,
+                                      const Vectors::Vector3& p2, const Vectors::Vector3& p3, float t)
+{
+    const float t2 = t * t;
+    const float t3 = t2 * t;
+    Vectors::Vector3 r;
+    r.x = 0.5f * ((2.f * p1.x) + (-p0.x + p2.x) * t +
+        (2.f * p0.x - 5.f * p1.x + 4.f * p2.x - p3.x) * t2 +
+        (-p0.x + 3.f * p1.x - 3.f * p2.x + p3.x) * t3);
+    r.y = 0.5f * ((2.f * p1.y) + (-p0.y + p2.y) * t +
+        (2.f * p0.y - 5.f * p1.y + 4.f * p2.y - p3.y) * t2 +
+        (-p0.y + 3.f * p1.y - 3.f * p2.y + p3.y) * t3);
+    r.z = 0.5f * ((2.f * p1.z) + (-p0.z + p2.z) * t +
+        (2.f * p0.z - 5.f * p1.z + 4.f * p2.z - p3.z) * t2 +
+        (-p0.z + 3.f * p1.z - 3.f * p2.z + p3.z) * t3);
+    return r;
+}
+
 inline void GetPlayerHealth(const RobloxPlayer& player, float& health, float& maxHealth)
 {
     health = player.Health;
@@ -280,8 +308,10 @@ inline void RenderESP(ImDrawList* drawList)
 
     Visibility::BeginFrame();
 
-    // Per-player screen-position history for motion trails.
-    static std::unordered_map<uint64_t, std::vector<ImVec2>> s_TrailHistory;
+    // Per-player world-space position history for motion trails. World-space
+    // (not screen-space) so points survive cache rebuilds and camera moves.
+    static std::unordered_map<uint64_t, std::vector<EspTrailPoint>> s_TrailHistory;
+    static std::unordered_map<uint64_t, float> s_TrailLastUpdate;
     if (Options::ESP::Trails)
     {
         // Prune dead players occasionally to avoid unbounded growth.
@@ -605,18 +635,55 @@ inline void RenderESP(ImDrawList* drawList)
         // ---- Rings (horizontal ellipse on the ground under the player, breathing) ----
         if (Options::ESP::Rings)
         {
-            auto feet = targetHRP.address ? targetHRP.Position() : targetHead.Position();
+            Vectors::Vector3 feet = targetHRP.address ? targetHRP.Position() : targetHead.Position();
+
+            // Follow point: 0 = HumanoidRootPart, 1 = Feet (average of left/right foot)
+            if (Options::ESP::RingFollow == 1)
+            {
+                auto character = player.Character;
+                auto leftFoot = character.FindFirstChild("LeftFoot");
+                auto rightFoot = character.FindFirstChild("RightFoot");
+                if (leftFoot.address && rightFoot.address)
+                {
+                    Vectors::Vector3 lp = leftFoot.Position();
+                    Vectors::Vector3 rp = rightFoot.Position();
+                    feet = {
+                        (lp.x + rp.x) * 0.5f,
+                        (lp.y + rp.y) * 0.5f,
+                        (lp.z + rp.z) * 0.5f
+                    };
+                }
+            }
+            feet.y += Options::ESP::RingHeightOffset;
+
+            // Color mode: 0 = Box color, 1 = Health gradient, 2 = Visibility colors
+            ImU32 ringCol;
+            if (Options::ESP::RingHealthGradient || Options::ESP::RingColorMode == 1)
+            {
+                float hpPct = liveMaxHealth > 0.f ? liveHealth / liveMaxHealth : 1.f;
+                hpPct = (std::max)(0.0f, (std::min)(1.0f, hpPct));
+                ringCol = IM_COL32(
+                    static_cast<int>((1.f - hpPct) * 255.f),
+                    static_cast<int>(hpPct * 255.f),
+                    0, 200);
+            }
+            else if (Options::ESP::RingColorMode == 2)
+            {
+                ringCol = playerVisible ? Visibility::GetVisibleColor() : Visibility::GetHiddenColor();
+            }
+            else
+            {
+                ringCol = IM_COL32(
+                    static_cast<int>(Options::ESP::BoxColor[0] * 255.f),
+                    static_cast<int>(Options::ESP::BoxColor[1] * 255.f),
+                    static_cast<int>(Options::ESP::BoxColor[2] * 255.f), 200);
+            }
+
             float breath = 1.0f + 0.08f * sinf(ImGui::GetTime() * 2.5f);
             float r = Options::ESP::RingRadius * scale * breath;
             const int segments = 32;
             ImVec2 pts[segments];
             int validPts = 0;
-            ImU32 ringCol = Options::ESP::VisibilityCheck
-                ? (playerVisible ? Visibility::GetVisibleColor() : Visibility::GetHiddenColor())
-                : IM_COL32(
-                    static_cast<int>(Options::ESP::BoxColor[0] * 255.f),
-                    static_cast<int>(Options::ESP::BoxColor[1] * 255.f),
-                    static_cast<int>(Options::ESP::BoxColor[2] * 255.f), 200);
             for (int i = 0; i < segments; i++)
             {
                 float a = (6.2831855f / segments) * i;
@@ -629,28 +696,186 @@ inline void RenderESP(ImDrawList* drawList)
                 drawList->AddPolyline(pts, validPts, ringCol, 0, 2.0f);
         }
 
-        // ---- Trails (motion history) ----
+        // ---- Trails (world-space motion history) ----
         if (Options::ESP::Trails)
         {
+            const float now = ImGui::GetTime();
             auto& hist = s_TrailHistory[player.address];
-            const auto hrScreen = WorldToScreen(targetHRP.address ? targetHRP.Position() : targetHead.Position());
-            if (hrScreen.x != -1.f && hrScreen.y != -1.f)
+            float& lastUpdate = s_TrailLastUpdate[player.address];
+
+            // Remove expired points first so stale history can't linger.
+            for (auto it = hist.begin(); it != hist.end(); )
             {
-                hist.push_back(ImVec2(hrScreen.x, hrScreen.y));
-                if ((int)hist.size() > Options::ESP::TrailLength)
-                    hist.erase(hist.begin());
+                if ((now - it->timestamp) > Options::ESP::TrailDuration)
+                    it = hist.erase(it);
+                else
+                    ++it;
             }
-            if (hist.size() >= 2)
+
+            // Current position based on the chosen follow point.
+            Vectors::Vector3 hrpPos = targetHRP.address ? targetHRP.Position() : targetHead.Position();
+            Vectors::Vector3 currentPos = hrpPos;
+            if (Options::ESP::TrailFollow == 1 && player.Left_Foot.address && player.Right_Foot.address)
             {
-                ImU32 trailCol = Options::ESP::VisibilityCheck
-                    ? (playerVisible ? Visibility::GetVisibleColor() : Visibility::GetHiddenColor())
-                    : activeBoxColor;
-                for (size_t i = 1; i < hist.size(); i++)
+                const Vectors::Vector3 lp = player.Left_Foot.Position();
+                const Vectors::Vector3 rp = player.Right_Foot.Position();
+                currentPos = {
+                    (lp.x + rp.x) * 0.5f,
+                    (lp.y + rp.y) * 0.5f,
+                    (lp.z + rp.z) * 0.5f
+                };
+            }
+
+            // only_moving: skip recording while the player is stationary.
+            if (!Options::ESP::TrailOnlyMoving ||
+                player.Velocity.x * player.Velocity.x +
+                player.Velocity.y * player.Velocity.y +
+                player.Velocity.z * player.Velocity.z > 0.5f)
+            {
+                // Throttle new points to the update interval.
+                if ((now - lastUpdate) >= Options::ESP::TrailUpdateInterval)
                 {
-                    float a = static_cast<float>(i) / static_cast<float>(hist.size());
-                    ImU32 seg = (trailCol & 0x00FFFFFF) | (static_cast<int>(a * 180) << 24);
-                    drawList->AddLine(hist[i - 1], hist[i], seg, 2.0f);
+                    // Minimum movement before recording a new point.
+                    bool enoughMovement = hist.empty();
+                    if (!enoughMovement)
+                    {
+                        const Vectors::Vector3& lastPos = hist.back().pos;
+                        const float dx = currentPos.x - lastPos.x;
+                        const float dy = currentPos.y - lastPos.y;
+                        const float dz = currentPos.z - lastPos.z;
+                        enoughMovement = (dx * dx + dy * dy + dz * dz) >=
+                            Options::ESP::TrailMinMovement * Options::ESP::TrailMinMovement;
+                    }
+
+                    if (enoughMovement)
+                    {
+                        hist.push_back({ currentPos, now });
+                        lastUpdate = now;
+                        if ((int)hist.size() > Options::ESP::TrailLength)
+                            hist.erase(hist.begin());
+                    }
                 }
+            }
+
+            if (hist.size() < 2)
+                continue;
+
+            // Base color by mode: 0 = custom, 1 = team, 2 = health, 3 = rainbow.
+            ImU32 baseColor;
+            switch (Options::ESP::TrailColorMode)
+            {
+            case 1:
+            {
+                baseColor = IsTeammate(player)
+                    ? IM_COL32(0, 200, 120, 255)
+                    : IM_COL32(255, 70, 70, 255);
+                break;
+            }
+            case 2:
+            {
+                float hpPct = liveMaxHealth > 0.f ? liveHealth / liveMaxHealth : 1.f;
+                hpPct = (std::max)(0.f, (std::min)(hpPct, 1.f));
+                baseColor = IM_COL32(
+                    (int)((1.f - hpPct) * 255.f),
+                    (int)(hpPct * 255.f), 0, 255);
+                break;
+            }
+            case 3:
+            {
+                const float hue = std::fmod(now * 0.5f, 1.0f);
+                baseColor = ImGui::ColorConvertFloat4ToU32(
+                    ImVec4(ImColor::HSV(hue, 0.8f, 1.f)));
+                break;
+            }
+            default:
+                baseColor = IM_COL32(
+                    static_cast<int>(Options::ESP::TrailColor[0] * 255.f),
+                    static_cast<int>(Options::ESP::TrailColor[1] * 255.f),
+                    static_cast<int>(Options::ESP::TrailColor[2] * 255.f), 255);
+                break;
+            }
+
+            const int baseR = (baseColor >> IM_COL32_R_SHIFT) & 0xFF;
+            const int baseG = (baseColor >> IM_COL32_G_SHIFT) & 0xFF;
+            const int baseB = (baseColor >> IM_COL32_B_SHIFT) & 0xFF;
+
+            // Build the point curve (linear or Catmull-Rom spline).
+            std::vector<Vectors::Vector3> curve;
+            if (Options::ESP::TrailSmoothingMode == 1 && hist.size() >= 4)
+            {
+                for (size_t i = 0; i < hist.size() - 1; ++i)
+                {
+                    const Vectors::Vector3& p0 = (i == 0) ? hist[i].pos : hist[i - 1].pos;
+                    const Vectors::Vector3& p1 = hist[i].pos;
+                    const Vectors::Vector3& p2 = hist[i + 1].pos;
+                    const Vectors::Vector3& p3 = (i + 2 < hist.size()) ? hist[i + 2].pos : hist[i + 1].pos;
+                    for (int seg = 0; seg < Options::ESP::TrailSplineSegments; ++seg)
+                    {
+                        const float t = static_cast<float>(seg) / static_cast<float>(Options::ESP::TrailSplineSegments);
+                        curve.push_back(EspCatmullRom(p0, p1, p2, p3, t));
+                    }
+                }
+                curve.push_back(hist.back().pos);
+            }
+            else
+            {
+                curve.reserve(hist.size());
+                for (const auto& pt : hist)
+                    curve.push_back(pt.pos);
+            }
+
+            // Distance-based thickness: closer = thicker, farther = thinner.
+            float distScale = 1.0f;
+            if (distance3D > 0.f)
+            {
+                const float minScale = 0.3f;
+                const float maxScale = 1.0f;
+                const float distanceFactor = 100.0f;
+                distScale = maxScale - (distance3D / distanceFactor) * (maxScale - minScale);
+                distScale = (std::max)(minScale, (std::min)(distScale, maxScale));
+            }
+            const float scaledThickness = Options::ESP::TrailThickness * distScale;
+
+            for (size_t i = 0; i + 1 < curve.size(); ++i)
+            {
+                const auto w1 = curve[i];
+                const auto w2 = curve[i + 1];
+                const auto s1 = WorldToScreen(w1);
+                const auto s2 = WorldToScreen(w2);
+                if (s1.x == -1.f && s1.y == -1.f) continue;
+                if (s2.x == -1.f && s2.y == -1.f) continue;
+                const ImVec2 p1(s1.x, s1.y);
+                const ImVec2 p2(s2.x, s2.y);
+
+                // Age-based fade for this segment.
+                size_t histIdx = (Options::ESP::TrailSmoothingMode == 1 && hist.size() >= 4)
+                    ? (i / static_cast<size_t>(Options::ESP::TrailSplineSegments))
+                    : i;
+                histIdx = (std::min)(histIdx, hist.size() - 1);
+                const float age = now - hist[histIdx].timestamp;
+                float lifePct = 1.f - (age / Options::ESP::TrailDuration);
+                lifePct = (std::max)(0.f, (std::min)(lifePct, 1.f));
+
+                float alpha = 1.f;
+                if (Options::ESP::TrailFade && lifePct < Options::ESP::TrailFadeStart)
+                    alpha = lifePct / Options::ESP::TrailFadeStart;
+                alpha = (std::max)(0.f, (std::min)(alpha, 1.f));
+                const int segAlpha = static_cast<int>(alpha * 255.f);
+
+                // Glow layers (outermost first).
+                if (Options::ESP::TrailGlow)
+                {
+                    for (int glow = Options::ESP::TrailGlowLayers; glow >= 1; --glow)
+                    {
+                        const float glowThickness = scaledThickness + glow * 1.5f * distScale;
+                        const float glowFactor = std::pow(Options::ESP::TrailGlowIntensity, static_cast<float>(glow));
+                        const int glowAlpha = static_cast<int>(segAlpha * glowFactor);
+                        drawList->AddLine(p1, p2, IM_COL32(baseR, baseG, baseB, glowAlpha), glowThickness);
+                    }
+                }
+
+                // Main line.
+                drawList->AddLine(p1, p2, IM_COL32(baseR, baseG, baseB, segAlpha), scaledThickness);
             }
         }
 
@@ -1038,7 +1263,7 @@ inline void RenderESP(ImDrawList* drawList)
 
             const float fontSize = (12.f * scale > 10.f) ? 12.f * scale : 10.f;
             const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, distText);
-            const ImVec2 distPos((left + right) * 0.5f - textSize.x * 0.5f, bottom + 4.f);
+            const ImVec2 distPos((left + right) * 0.5f - textSize.x * 0.5f + Options::ESP::DistanceOffsetX, bottom + 4.f + Options::ESP::DistanceOffsetY);
             const ImU32 activeDistanceColor = Options::ESP::VisibilityCheck
                 ? (playerVisible ? Visibility::GetVisibleColor() : Visibility::GetHiddenColor())
                 : distanceColor;
@@ -1048,8 +1273,24 @@ inline void RenderESP(ImDrawList* drawList)
             {
                 const float wpnFontSize = (11.f * scale > 9.f) ? 11.f * scale : 9.f;
                 const ImVec2 wpnTextSize = font->CalcTextSizeA(wpnFontSize, FLT_MAX, 0.f, player.ToolName.c_str());
-                const ImVec2 wpnPos((left + right) * 0.5f - wpnTextSize.x * 0.5f, distPos.y + textSize.y + 2.f);
-                drawList->AddText(font, wpnFontSize, wpnPos, IM_COL32(255, 200, 100, 220), player.ToolName.c_str());
+                const float chipH = wpnTextSize.y + 5.f;
+                const float chipW = wpnTextSize.x + 12.f;
+                const float chipX = (left + right) * 0.5f - chipW * 0.5f;
+                const float chipY = distPos.y + textSize.y + 2.f;
+
+                const ImU32 chipBg = IM_COL32(16, 16, 20, 205);
+                const ImU32 chipBorder = IM_COL32(
+                    static_cast<int>(Options::Misc::MenuAccentColor[0] * 255.f),
+                    static_cast<int>(Options::Misc::MenuAccentColor[1] * 255.f),
+                    static_cast<int>(Options::Misc::MenuAccentColor[2] * 255.f),
+                    220);
+                const ImU32 chipText = IM_COL32(255, 210, 150, 235);
+
+                drawList->AddRectFilled(ImVec2(chipX, chipY), ImVec2(chipX + chipW, chipY + chipH), chipBg, chipH * 0.5f);
+                drawList->AddRect(ImVec2(chipX, chipY), ImVec2(chipX + chipW, chipY + chipH), chipBorder, chipH * 0.5f, 0, 1.0f);
+                drawList->AddText(font, wpnFontSize,
+                    ImVec2(chipX + (chipW - wpnTextSize.x) * 0.5f, chipY + (chipH - wpnTextSize.y) * 0.5f),
+                    chipText, player.ToolName.c_str());
             }
         }
 
@@ -1154,7 +1395,7 @@ inline void RenderESP(ImDrawList* drawList)
             {
                 const float fontSize = (11.f * scale > 10.0f) ? 11.f * scale : 10.0f;
                 const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, rigStr);
-                const ImVec2 rigPos(right + 10.f, top + (bottom - top) * 0.5f - textSize.y * 0.5f);
+                const ImVec2 rigPos(right + 10.f + Options::ESP::RigTypeOffsetX, top + (bottom - top) * 0.5f - textSize.y * 0.5f + Options::ESP::RigTypeOffsetY);
                 const ImU32 rigColor = IM_COL32(
                     static_cast<int>(Options::ESP::RigTypeColor[0] * 255.f),
                     static_cast<int>(Options::ESP::RigTypeColor[1] * 255.f),
@@ -1223,7 +1464,7 @@ inline void RenderESP(ImDrawList* drawList)
     }
 }
 
-inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
+inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, bool espEdit = false)
 {
     const ImVec2 rectMin = origin;
     const ImVec2 rectMax(origin.x + size.x, origin.y + size.y);
@@ -1354,32 +1595,44 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
     const float top = origin.y + pad + 15.0f;
     const float bottom = origin.y + size.y - pad - 10.0f;
 
-    // --- Rotation state ---
+     // --- Rotation state ---
     static float s_RotAngle = 0.0f;
     static float s_DragOffX = 0.0f;
     static float s_DragOffY = 0.0f;
     static bool  s_WasDrag = false;
     static ImVec2 s_LastM = {};
     {
-        // Rotation disabled — preview stays at 0°
-
         const ImVec2 pMin(origin.x, origin.y);
         const ImVec2 pMax(origin.x + size.x, origin.y + size.y);
-        const bool hover = ImGui::IsMouseHoveringRect(pMin, pMax);
+        // owner=false so the preview stays interactive even when the menu
+        // window overlaps it (otherwise the menu captures the mouse and the
+        // preview can never be grabbed).
+        const bool hover = ImGui::IsMouseHoveringRect(pMin, pMax, false);
 
-        // Rotation disabled
-
-        // Middle-drag = move
+        // Right-drag = rotate the avatar model
         {
             static ImVec2 s_RM = {}; static bool s_RD = false;
-            if (hover && ImGui::IsMouseDown(2))
+            if (hover && ImGui::IsMouseDown(1))
             {
                 ImVec2 m = ImGui::GetIO().MousePos;
                 if (!s_RD) { s_RM = m; s_RD = true; }
-                else { s_DragOffX += m.x - s_RM.x; s_DragOffY += m.y - s_RM.y; s_RM = m; }
+                else { s_RotAngle += (m.x - s_RM.x) * 0.4f; s_RM = m; }
             }
             else s_RD = false;
         }
+
+        // Middle-drag = move
+        {
+            static ImVec2 s_RM2 = {}; static bool s_RD2 = false;
+            if (hover && ImGui::IsMouseDown(2))
+            {
+                ImVec2 m = ImGui::GetIO().MousePos;
+                if (!s_RD2) { s_RM2 = m; s_RD2 = true; }
+                else { s_DragOffX += m.x - s_RM2.x; s_DragOffY += m.y - s_RM2.y; s_RM2 = m; }
+            }
+            else s_RD2 = false;
+        }
+
 
         // Clamp
         float mx = (right - left) * 0.35f, my = (bottom - top) * 0.35f;
@@ -1607,7 +1860,18 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
     {
         const char* distText = "42 studs";
         const ImVec2 ts = ImGui::CalcTextSize(distText);
-        drawList->AddText(ImVec2(cx - ts.x * 0.5f, bBot + 4.0f), IM_COL32(200, 200, 200, 255), distText);
+        float distX = cx - ts.x * 0.5f + Options::ESP::DistanceOffsetX;
+        float distY = bBot + 4.0f + Options::ESP::DistanceOffsetY;
+        if (espEdit)
+        {
+            float hx = distX, hy = distY;
+            HudEditor::Handle("##esp_preview_dist", hx, hy, drawList, true);
+            Options::ESP::DistanceOffsetX = hx - (cx - ts.x * 0.5f);
+            Options::ESP::DistanceOffsetY = hy - (bBot + 4.0f);
+            distX = hx;
+            distY = hy;
+        }
+        drawList->AddText(ImVec2(distX, distY), IM_COL32(200, 200, 200, 255), distText);
     }
 
     if (Options::ESP::RigType)
@@ -1619,7 +1883,18 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size)
             static_cast<int>(Options::ESP::RigTypeColor[1] * 255.f),
             static_cast<int>(Options::ESP::RigTypeColor[2] * 255.f),
             255);
-        drawList->AddText(ImVec2(bRight + 10.0f, bTop + (bBot - bTop) * 0.5f - ts.y * 0.5f), rigCol, rigStr);
+        float rigX = bRight + 10.0f + Options::ESP::RigTypeOffsetX;
+        float rigY = bTop + (bBot - bTop) * 0.5f - ts.y * 0.5f + Options::ESP::RigTypeOffsetY;
+        if (espEdit)
+        {
+            float hx = rigX, hy = rigY;
+            HudEditor::Handle("##esp_preview_rig", hx, hy, drawList, true);
+            Options::ESP::RigTypeOffsetX = hx - (bRight + 10.0f);
+            Options::ESP::RigTypeOffsetY = hy - (bTop + (bBot - bTop) * 0.5f - ts.y * 0.5f);
+            rigX = hx;
+            rigY = hy;
+        }
+        drawList->AddText(ImVec2(rigX, rigY), rigCol, rigStr);
     }
 
     // Head circle

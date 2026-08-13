@@ -6,6 +6,8 @@
 #include <functional>
 #include <atomic>
 #include <algorithm>
+#include <string>
+#include <cctype>
 
 #include "../../Memory/MemoryManager.h"
 #include "../SDK/sdk.h"
@@ -47,6 +49,20 @@ struct RobloxPlayer
     std::string ToolName = "";
     Vectors::Vector3 Velocity = {0.f, 0.f, 0.f};
 };
+
+// True when the player's equipped tool is a katana (Rivals). Matches the tool
+// name case-insensitively so "Katana", "Katanas", etc. all count.
+inline bool IsHoldingKatana(const RobloxPlayer& player)
+{
+    if (player.ToolName.empty())
+        return false;
+
+    std::string hay = player.ToolName;
+    for (auto& ch : hay)
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+
+    return hay.find("katana") != std::string::npos;
+}
 
 namespace Globals
 {
@@ -191,6 +207,9 @@ namespace Globals
     inline bool running = true;
     inline std::atomic<bool> overlayDone = true;
     inline std::atomic<bool> overlayShouldShutdown = false;
+    // Set by the FreeCam loop while it owns the camera; Third Person checks this
+    // so the two features never fight over the Camera object.
+    inline std::atomic<bool> freecamOwnsCamera = false;
 
     namespace HitSounds
     {

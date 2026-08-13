@@ -589,9 +589,12 @@ namespace Avatar3D
         float maxExt = fmaxf(extX, fmaxf(extY, extZ));
         if (maxExt < 0.01f) maxExt = 1.0f;
 
-        float fitSize = fminf(size.x, size.y) * 0.42f;
+        // MUST match RenderModel's projection (fitSize/fov) so the ESP overlay
+        // bounding box lines up with the rendered avatar — otherwise the skeleton
+        // and ESP boxes drift relative to the model on screen.
+        float fitSize = fminf(size.x, size.y) * 0.65f;
         float scale = fitSize / maxExt;
-        float fov = 3.0f;
+        float fov = 4.5f;
         ImVec2 scr(center.x + size.x * 0.5f, center.y + size.y * 0.5f);
 
         float minSX = 1e9f, maxSX = -1e9f, minSY = 1e9f, maxSY = -1e9f;

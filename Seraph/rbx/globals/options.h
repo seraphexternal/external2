@@ -5,6 +5,7 @@ namespace Options
 {
 	namespace Misc
 	{
+		inline bool HUDEditMode = false;
 		inline int MenuFont = 0; // index into the pre-loaded font array in renderer.cpp
 		inline bool FOVEnabled = false;
 		inline float FOV = 70.f;
@@ -14,6 +15,11 @@ namespace Options
 		inline float KeybindListY = 80.0f;
 		inline bool StreamProof = true;
 		inline int MenuKey = VK_RSHIFT;
+		inline bool DebugLog = false;
+		inline float ESPPreviewOffsetX = 0.0f;
+		inline float ESPPreviewOffsetY = 0.0f;
+		inline int SaveInterval = 60;
+		inline int VelocityThreshold = 0;
 		inline float MenuAccentColor[3] = {0.300f, 0.550f, 1.0f};
 		inline bool RainbowAccent = false;
 		inline float RainbowSpeed = 1.0f;
@@ -55,6 +61,7 @@ namespace Options
 		inline float HitboxTransparency = 0.5f;
 		inline bool WalkThrough = false;
 	}
+
 	namespace ESP
 	{
 		inline bool Enabled = true;
@@ -94,6 +101,11 @@ namespace Options
 		inline bool ShowWeapon = true;
 		inline bool RigType = false;
 		inline float RigTypeColor[3] = { 1.0f, 1.0f, 1.0f };
+		inline float DistanceOffsetX = 0.0f;
+		inline float DistanceOffsetY = 0.0f;
+		inline float RigTypeOffsetX = 0.0f;
+		inline float RigTypeOffsetY = 0.0f;
+		inline int ESPEditKey = 0;
 
 		inline float Color[3] = {1.0f, 1.0f, 1.0f};
 		inline float BoxColor[3] = {1.0f, 1.0f, 1.0f};
@@ -156,22 +168,53 @@ namespace Options
         inline bool CustomImage = false;     // draw a custom PNG near the player
 		inline char CustomImagePath[256] = { 0 };
 		inline float CustomImageScale = 1.0f;
+
+		// Re-adding lost Ring/Trail ESP properties for configs.h compatibility
+		inline int RingColorMode = 0;
+		inline bool RingHealthGradient = false;
+		inline float TrailDuration = 1.0f;
+		inline float TrailUpdateInterval = 0.05f;
+		inline float TrailMinMovement = 1.0f;
+		inline bool TrailOnlyMoving = false;
+		inline bool TrailFollow = false;
+		inline int TrailColorMode = 0;
+		inline float TrailColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+		inline int TrailSmoothingMode = 0;
+		inline int TrailSplineSegments = 4;
+		inline float TrailThickness = 2.0f;
+		inline bool TrailGlow = false;
+		inline int TrailGlowLayers = 2;
+		inline bool RingFollow = false;
+		inline float RingHeightOffset = 0.0f;
+		inline float TrailGlowIntensity = 1.0f;
+		inline bool TrailFade = false;
+		inline float TrailFadeStart = 0.0f;
 	}
 	namespace Aimbot
 	{
+		inline bool Enabled = false;
 		inline int AimbotKey = 0;
-		inline int AimingType = 0;
-
 		inline int ToggleType = 0;
-
-		inline bool Aimbot = false;
+		inline bool Aimbot = false; // re-adding since it was in configs
+		inline bool TargetHud = false;
+		inline int TargetHudPositionMode = 0;
+		inline float TargetHudPos[2] = {100.0f, 100.0f};
+		inline bool TargetHudName = true;
+		inline bool TargetHudHealth = true;
+		inline bool TargetHudDistance = true;
+		inline bool TargetHudTool = true;
+		inline bool TargetHudOutline = true;
+		inline int TargetHudBarStyle = 0;
+		inline int TargetHudBarDirection = 0;
 		inline bool TeamCheck = false;
 		inline bool DownedCheck = false;
-		inline bool WallCheck = false;
+		inline bool WallCheck = true;
+		inline float Range = 150.f;
+		inline float FOV = 180.f;
+		inline int AimingType = 0;
 		inline bool StickyAim = false;
 		inline bool IgnoreJump = false;
 		inline float JumpThreshold = 20.0f;
-		inline float FOV = 100.f;
 		inline float Smoothness = 0.f;
 		inline int SmoothnessCurve = 0; // 0=Linear, 1=Ease In, 2=Ease Out, 3=Ease In-Out, 4=Custom
 		inline bool CustomCurveEnabled = false;
@@ -193,7 +236,6 @@ namespace Options
 		// No crosshair movement, but may flick for ~1 frame and can desync if the
 		// game's hit detection isn't character-position based.
 		inline bool SilentAimTeleport = false;
-		inline float Range = 100.f;
 
 		// Silent Lock: hold to silently keep the camera aimed at the locked target
 		// without moving the real cursor or flicking the view (camera-rotation write).
@@ -416,6 +458,16 @@ namespace Options
 		
 		inline bool Toggled = false;
 	}
+	namespace Autoclicker
+	{
+		inline int Key = 0;
+		inline int ToggleType = 0; // 0 = hold, 1 = toggle, 2 = always on
+		inline bool Enabled = false;
+		inline bool Toggled = false;
+		inline float CPS = 10.0f;
+		inline bool RightClick = false;
+		inline bool OnlyOnHold = false; // only click while physically holding LMB
+	}
 	namespace WalkSpeed
 	{
 		inline int WalkSpeedKey = 0;
@@ -429,6 +481,8 @@ namespace Options
 
 	namespace Combat
 	{
+		inline float HitNotificationsX = 100.0f;
+		inline float HitNotificationsY = 100.0f;
 		inline bool HitSounds = false;
 		inline int HitSoundType = 0; // 0 = Custom file, 1 = click, 2 = bell, 3 = bass, 4 = skeet, 5 = neverlose, 6 = rust, 7 = quake, 8 = cod, 9 = bubble, 10 = minecraft, 11 = fatality
 		inline char HitSoundFile[256] = "";
@@ -586,16 +640,35 @@ namespace Chams
 		inline bool Toggled = false;
 	}
 
+	namespace AntiFling
+	{
+		inline bool Enabled = false;
+		inline int VelocityThreshold = 0;
+		inline int SaveInterval = 60;
+	}
+
 	namespace Orbit
 	{
-		inline bool Enabled    = false;
-		inline float Speed     = 2.0f;
-		inline float Radius    = 8.0f;
-		inline int  OrbitKey   = 0;
-		inline int  ToggleType = 2;
-		inline bool Toggled    = false;
-		inline int  TargetMode = 0;
-		inline char TargetPlayer[32] = "";
+		inline bool Enabled = false;
+		inline int OrbitKey = 0;
+		inline int ToggleType = 0;
+		inline bool Toggled = false;
+		inline float Radius = 10.0f;
+		inline float Speed = 2.0f;
+		inline int TargetMode = 0; // 0 = Aimed At, 1 = Selected Player
+		inline char TargetPlayer[256] = ""; // Used for selected player mode
+		inline bool ShowRadius = false;
+		inline float RadiusColor[3] = {1.0f, 1.0f, 1.0f};
+		inline float RadiusAlpha = 1.0f;
+		inline float RadiusThickness = 1.0f;
+
+		// Lock behaviour: "Lock Until Death" mode grabs a target when orbit turns on
+		// and keeps orbiting exactly that player until they die (or you turn off).
+		inline bool OrbitUntilDeath = false; // when the locked target dies, grab a new one and keep going
+		inline float Follow = 18.0f;       // how aggressively we glide to the orbit point (studs/sec per stud)
+		inline float Height = 0.0f;        // vertical offset of the orbit ring from the target
+		inline bool WallCheck = false;     // only lock / orbit targets that aren't behind walls
+		inline bool KnockedCheck = false;  // skip downed/knocked (low-health) targets
 	}
 
 	namespace ArsenalGunmods
@@ -610,6 +683,7 @@ namespace Chams
 	{
 		inline bool IgnoreSmoke = false;
 		inline bool IgnoreFlash = false;
+		inline bool AntiKatana = false;
 	}
 
 	namespace RivalsSkinChanger
@@ -672,6 +746,10 @@ namespace Chams
 		inline bool Enabled = false;
 		inline int Key = VK_LBUTTON; // click to teleport (default LMB)
 		inline float MaxDistance = 1000.0f;
+		inline bool HoldKey = false;
+		inline float MaxDist = 500.0f;
+		inline bool MaxDistanceCheck = false;
+		inline float YOffset = 5.0f;
 	}
 
 	namespace HipHeight
@@ -690,6 +768,10 @@ namespace Chams
 		inline int Key = 0;
 		inline int ToggleType = 0; // 0 = hold, 1 = toggle, 2 = always
 		inline float Speed = 50.0f;
+		inline float Sensitivity = 1.0f;
+		inline float ShiftMultiplier = 2.0f;
+		inline bool FOVOverride = false;
+		inline float FOVValue = 70.0f;
 		inline bool SaveRealCamera = true;
 	}
 
@@ -698,5 +780,41 @@ namespace Chams
 		inline bool Enabled = false;
 		inline float ScaleX = 1.0f;
 		inline float ScaleY = 1.0f;
+	}
+
+	namespace ThirdPerson
+	{
+		inline int ToggleType = 0;
+		inline bool Toggled = false;
+		inline int Key = 0;
+		inline bool UseHeadTracking = false;
+		inline bool PortraitMode = false;
+		inline bool CinematicMode = false;
+		inline float CinematicSmoothing = 1.0f;
+		inline float OffsetForward = 0.0f;
+		inline float OffsetRight = 0.0f;
+		inline float OffsetUp = 0.0f;
+		inline float LookHeight = 0.0f;
+	}
+
+	namespace Rewind
+	{
+		inline bool Enabled = false;
+		inline int Key = 0;
+		inline int ToggleType = 0;
+		inline float YOffset = 0.0f;
+		inline bool AutoClearOnTP = false;
+		inline bool ShowOverlay = false;
+		inline bool ShowWorldMarker = false;
+		inline int MarkerStyle = 0;
+		inline float MarkerSize = 1.0f;
+		inline float MarkerPulseSpeed = 1.0f;
+		inline bool MarkerGlow = false;
+		inline bool MarkerFilled = false;
+		inline float MarkerThickness = 1.0f;
+		inline float MarkerColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+		inline bool ShowMarkerText = false;
+		inline bool MarkerTextOutline = false;
+		inline float MarkerTextColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 	}
 }

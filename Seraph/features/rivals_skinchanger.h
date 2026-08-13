@@ -25,22 +25,25 @@ namespace RivalsSkinChanger
 
     inline bool CopyContent(uintptr_t fromPart, uintptr_t toPart, uintptr_t offset)
     {
-        HANDLE h = Memory->getHandle();
-        if (!h || !fromPart || !toPart) return false;
+        if (!fromPart || !toPart) return false;
+
+        HANDLE h = Memory->openTransientHandle(true);
+        if (!h) return false;
 
         ContentBlock fromC, toC;
         ReadProcessMemory(h, (LPCVOID)(fromPart + offset), &fromC, sizeof(fromC), nullptr);
         ReadProcessMemory(h, (LPCVOID)(toPart + offset), &toC, sizeof(toC), nullptr);
 
-        if (!fromC.dataPtr || !toC.dataPtr || fromC.size == 0 || fromC.size >= 500) return false;
-        if (toC.capacity < fromC.size) return false;
+        if (!fromC.dataPtr || !toC.dataPtr || fromC.size == 0 || fromC.size >= 500) { CloseHandle(h); return false; }
+        if (toC.capacity < fromC.size) { CloseHandle(h); return false; }
 
         std::string buf; buf.resize(fromC.size);
-        if (!ReadProcessMemory(h, (LPCVOID)fromC.dataPtr, &buf[0], fromC.size, nullptr)) return false;
+        if (!ReadProcessMemory(h, (LPCVOID)fromC.dataPtr, &buf[0], fromC.size, nullptr)) { CloseHandle(h); return false; }
 
-        if (!WriteProcessMemory(h, (LPVOID)toC.dataPtr, buf.data(), buf.size(), nullptr)) return false;
-        if (!WriteProcessMemory(h, (LPVOID)(toPart + offset + 16), &fromC.size, sizeof(fromC.size), nullptr)) return false;
+        if (!WriteProcessMemory(h, (LPVOID)toC.dataPtr, buf.data(), buf.size(), nullptr)) { CloseHandle(h); return false; }
+        if (!WriteProcessMemory(h, (LPVOID)(toPart + offset + 16), &fromC.size, sizeof(fromC.size), nullptr)) { CloseHandle(h); return false; }
 
+        CloseHandle(h);
         return true;
     }
 

@@ -1,4 +1,4 @@
-﻿// Windows headers define the `min` / `max` preprocessor macros
+// Windows headers define the `min` / `max` preprocessor macros
 // which clash with `std::max` / `std::min` used by the
 // MenuWeather particle engine. Defining NOMINMAX FIRST ensures
 // every windows-family header (transitively pulled in by the
@@ -11,6 +11,8 @@
 #include "../rbx/configs/configs.h"
 #include "../features/desync.h"
 #include "../features/ragebot.h"
+#include "../features/aimbot.h"
+#include "../features/orbit.h"
 #include <shobjidl.h>
 #pragma comment(lib, "ole32.lib")
 #include "../seraph_log.h"
@@ -2702,15 +2704,30 @@ UI::card::end();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-if (UI::card::begin("##fly_settings", ImVec2(halfW, 470 * sc), "SETTINGS"))
-{
-UI::labelsection("PARAMETERS");
-UI::SliderFloat("Fly Speed", &Options::Fly::Speed, 10.f, 200.f, "%.0f");
+        if (UI::card::begin("##fly_settings", ImVec2(halfW, 470 * sc), "SETTINGS"))
+        {
+            UI::labelsection("PARAMETERS");
+            UI::SliderFloat("Fly Speed", &Options::Fly::Speed, 10.f, 200.f, "%.0f");
 
-UI::labelsection("KEYBIND");
-UI::Bind("##fly_key", &Options::Fly::FlyKey, &Options::Fly::ToggleType);
-}
-UI::card::end();
+            UI::labelsection("KEYBIND");
+            UI::Bind("##fly_key", &Options::Fly::FlyKey, &Options::Fly::ToggleType);
+        }
+        UI::card::end();
+
+        ImGui::SetCursorPosY(panelY + 476 * sc);
+        ImGui::SetCursorPosX(ctX);
+        if (UI::card::begin("##autoclicker_main", ImVec2(halfW, 250 * sc), "AUTOCLICKER"))
+        {
+            UI::labelsection("MAIN");
+            UI::Checkbox("Enabled", &Options::Autoclicker::Enabled);
+            UI::SliderFloat("CPS", &Options::Autoclicker::CPS, 1.f, 100.f, "%.0f");
+            UI::Checkbox("Right Click", &Options::Autoclicker::RightClick);
+            UI::Checkbox("Only On Hold (LMB)", &Options::Autoclicker::OnlyOnHold);
+
+            UI::labelsection("KEYBIND");
+            UI::Bind("##ac_key", &Options::Autoclicker::Key, &Options::Autoclicker::ToggleType);
+        }
+        UI::card::end();
 }
 else if (tab2 == 1) {
 const float panelY = ImGui::GetCursorPosY();
@@ -3125,35 +3142,33 @@ line.c_str());
 
 if (IsGameOnTop("Roblox"))
 {
-CombatFeedback::Update();
+	CombatFeedback::Update();
+	if (!menu_open)
+	{
+		RunAimCore(ImGui::GetBackgroundDrawList());
+		RunTriggerbot();
+		RunMacro();
+	}
+	else if (Options::Aimbot::ShowFOV)
+	{
+		RunAimCore(ImGui::GetBackgroundDrawList());
+	}
 
-RenderESP(ImGui::GetBackgroundDrawList());
-
-if (!menu_open)
-{
-RunAimbot(ImGui::GetBackgroundDrawList());
-RunTriggerbot();
-RunMacro();
-}
-else if (Options::Aimbot::ShowFOV)
-{
-RunAimbot(ImGui::GetBackgroundDrawList());
-}
-
-RenderAdvancedFOV(ImGui::GetBackgroundDrawList());
-RenderCrosshair(ImGui::GetBackgroundDrawList());
-
-CombatFeedback::Render(ImGui::GetBackgroundDrawList());
-RenderAimInfo();
-
-if (Options::ESP::Arrows)
-RenderArrows(ImGui::GetBackgroundDrawList());
-if (Options::ESP::Radar)
-RenderRadar(ImGui::GetBackgroundDrawList());
-
-if (Options::Desync::Enabled && Options::Desync::ShowVisual)
-DesyncVisual::RenderDesyncVisual(ImGui::GetBackgroundDrawList());
-RenderRageGhost(ImGui::GetBackgroundDrawList());
+	RenderAdvancedFOV(ImGui::GetBackgroundDrawList());
+	RenderCrosshair(ImGui::GetBackgroundDrawList());
+	CombatFeedback::Render(ImGui::GetBackgroundDrawList());
+	RenderESP(ImGui::GetBackgroundDrawList());
+	
+	if (Options::ESP::Arrows) RenderArrows(ImGui::GetBackgroundDrawList());
+	if (Options::ESP::Radar) RenderRadar(ImGui::GetBackgroundDrawList());
+	
+	if (Options::Desync::Enabled && Options::Desync::ShowVisual)
+		DesyncVisual::RenderDesyncVisual(ImGui::GetBackgroundDrawList());
+	
+	RenderRageGhost(ImGui::GetBackgroundDrawList());
+	
+	if (Options::Orbit::Enabled && Options::Orbit::ShowRadius)
+		RenderOrbitRadiusVisual(ImGui::GetBackgroundDrawList());
 
 if (menu_open && MenuWeather::Enabled)
 {

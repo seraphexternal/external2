@@ -5,7 +5,7 @@ param(
     [string]$OutputPath
 )
 
-$Url = "https://offsets.imtheo.lol/Offsets.hpp"
+$Url = "https://offsets.imtheo.lol/version-d584fb6c717a43d9/offsets.hpp"
 $MaxRetries = 2
 
 for ($i = 0; $i -le $MaxRetries; $i++) {

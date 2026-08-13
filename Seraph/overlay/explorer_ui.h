@@ -334,6 +334,18 @@ namespace ExplorerUI
         return Memory->writeString(strPtr, value);
     }
 
+    inline std::string SafeReadStringAt(uintptr_t strAddr)
+    {
+        if (strAddr == 0) return std::string();
+        return Memory->readString(strAddr);
+    }
+
+    inline bool SafeWriteStringAt(uintptr_t strAddr, const std::string& value)
+    {
+        if (strAddr == 0) return false;
+        return Memory->writeString(strAddr, value);
+    }
+
     inline uintptr_t PrimitiveOf(uintptr_t inst)
     {
         if (inst == 0) return 0;
@@ -356,6 +368,36 @@ namespace ExplorerUI
             // miss so the user knows their edit didn't commit instead of
             // wondering why the texture in-game didn't change.
             ed.lastCommitOk = SafeWritePropertyString(inst, off, ed.buf);
+            ed.justCommitted = true;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Enter to commit. Must fit original Roblox string capacity.");
+        if (ed.justCommitted)
+        {
+            ImGui::SameLine();
+            if (ed.lastCommitOk)
+                ImGui::TextColored(ImVec4(0.35f, 1.f, 0.45f, 1.f), "  committed");
+            else
+                ImGui::TextColored(ImVec4(1.f, 0.45f, 0.45f, 1.f), "  too long for Roblox string capacity");
+            ed.justCommitted = false;
+        }
+    }
+
+    // Variant for strings stored inline at a fixed address (e.g. Instance
+    // name lives inside its NameContainer, so the caller passes the resolved
+    // string address rather than an (instance, offset) pointer field).
+    inline void RenderStringPropertyAt(const char* label, StringEditor& ed, uintptr_t strAddr)
+    {
+        if (ed.lastInst != strAddr)
+        {
+            ed.lastInst = strAddr;
+            const std::string cur = SafeReadStringAt(strAddr);
+            strncpy_s(ed.buf, cur.c_str(), _TRUNCATE);
+        }
+        ImGui::InputText(label, ed.buf, sizeof(ed.buf));
+        if (ImGui::IsItemDeactivatedAfterEdit())
+        {
+            ed.lastCommitOk = SafeWriteStringAt(strAddr, ed.buf);
             ed.justCommitted = true;
         }
         if (ImGui::IsItemHovered())
@@ -760,7 +802,7 @@ namespace ExplorerUI
 
         ImGui::Separator();
         static StringEditor nameEditor;
-        RenderStringProperty("Name##rename", nameEditor, inst, Offsets::Instance::Name);
+        RenderStringPropertyAt("Name##rename", nameEditor, RobloxInstance(inst).NameAddress());
     }
 
     // =========================================================================

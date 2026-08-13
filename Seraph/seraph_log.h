@@ -1,16 +1,37 @@
 #pragma once
 #include <cstdio>
+#include <cstdlib>
 #include <chrono>
 #include <string>
 #include <windows.h>
+#include "rbx/globals/options.h"
 
-// File + debugger trace helper. Appends a timestamped line to
-// C:\Users\ncomp\seraph_log.txt (fixed path regardless of stealth rename)
-// and also emits it via OutputDebugStringA.
+// Debug trace helper. Always emits via OutputDebugStringA (visible only to a
+// debugger); the file log is written only when the loader's "Debug Logging"
+// toggle is enabled. Logs go to %LOCALAPPDATA%\Seraph\seraph_log.txt so the
+// path is portable across machines/users.
+inline std::string GetSeraphLogPath()
+{
+    char* env = nullptr;
+    size_t sz = 0;
+    std::string base = ".";
+    if (_dupenv_s(&env, &sz, "LOCALAPPDATA") == 0 && env)
+    {
+        base = env;
+        free(env);
+    }
+    std::string dir = base + "\\Seraph";
+    CreateDirectoryA(dir.c_str(), nullptr);
+    return dir + "\\seraph_log.txt";
+}
+
 inline void SeraphLog(const std::string& msg)
 {
+    OutputDebugStringA(msg.c_str());
+    if (!Options::Misc::DebugLog)
+        return;
     FILE* f = nullptr;
-    fopen_s(&f, "C:\\Users\\ncomp\\seraph_log.txt", "a");
+    fopen_s(&f, GetSeraphLogPath().c_str(), "a");
     if (f)
     {
         auto now = std::chrono::system_clock::now();
@@ -22,5 +43,4 @@ inline void SeraphLog(const std::string& msg)
         fprintf(f, "[%s] %s\n", ts, msg.c_str());
         fclose(f);
     }
-    OutputDebugStringA(msg.c_str());
 }

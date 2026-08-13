@@ -31,7 +31,7 @@ static LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM l
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
-// Add the tray icon with the tooltip "Seraph - Running"
+// Add the tray icon with the tooltip "Fleasion - Running"
 static void AddTrayIcon()
 {
     // Register a minimal message-only window class
@@ -39,12 +39,12 @@ static void AddTrayIcon()
     wc.cbSize        = sizeof(wc);
     wc.lpfnWndProc   = TrayWndProc;
     wc.hInstance     = GetModuleHandleW(NULL);
-    wc.lpszClassName = L"SeraphTrayClass";
+    wc.lpszClassName = L"FleasionTrayClass";
     RegisterClassExW(&wc);
 
     // Create a message-only window (invisible, no taskbar entry)
     g_TrayMsgWnd = CreateWindowExW(
-        0, L"SeraphTrayClass", L"SeraphTray",
+        0, L"FleasionTrayClass", L"FleasionTray",
         0, 0, 0, 0, 0,
         HWND_MESSAGE, NULL, GetModuleHandleW(NULL), NULL);
 
@@ -62,8 +62,8 @@ static void AddTrayIcon()
     // Use the embedded application icon from seraph.ico
     g_TrayIconData.hIcon = LoadIconW(GetModuleHandle(NULL), MAKEINTRESOURCEW(IDI_ICON1));
 
-    // Tooltip shown in the hidden icons menu – max 128 wide chars (NOTIFYICONDATA v2)
-    wcscpy_s(g_TrayIconData.szTip, L"Seraph - Running");
+    // Tooltip shown in the hidden icons menu – max 128 wide chars (NOTIFYICONADATA v2)
+    wcscpy_s(g_TrayIconData.szTip, L"Fleasion - Running");
 
     Shell_NotifyIconW(NIM_ADD, &g_TrayIconData);
 }

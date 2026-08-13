@@ -901,6 +901,30 @@ namespace Loader
                 if (ImGui::InvisibleButton("##sp", ImVec2(cs.x - 64.0f, 36.0f)))
                     Options::Misc::StreamProof = !Options::Misc::StreamProof;
             }
+
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + c3H + 8.0f);
+
+            // Card: Logging
+            ImVec2 c4m = ImGui::GetCursorScreenPos();
+            float c4H = 48.0f;
+            ImVec2 c4M(c4m.x + cs.x, c4m.y + c4H);
+            DrawCard(dl, c4m, c4M, 10.0f);
+            DrawSectionHeader(dl, ImVec2(c4m.x + 16.0f, c4m.y + 12.0f), "Logging", 3);
+
+            {
+                float ty = c4m.y + 12.0f;
+                if (l_Font_Label)
+                    dl->AddText(l_Font_Label, 0, ImVec2(c4m.x + 32.0f, ty + (36.0f - l_Font_Label->FontSize) * 0.5f),
+                        Pal(0.80f, 0.86f, 0.92f), "Debug Logging");
+                else
+                    dl->AddText(ImGui::GetFont(), 13.0f, ImVec2(c4m.x + 32.0f, ty + (36.0f - 13.0f) * 0.5f),
+                        Pal(0.80f, 0.86f, 0.92f), "Debug Logging");
+                DrawSwitch(dl, ImVec2(c4M.x - 56.0f, ty + (36.0f - 18.0f) * 0.5f),
+                    40.0f, 18.0f, &Options::Misc::DebugLog, 3);
+                ImGui::SetCursorScreenPos(ImVec2(c4m.x + 32.0f, ty));
+                if (ImGui::InvisibleButton("##dl", ImVec2(cs.x - 64.0f, 36.0f)))
+                    Options::Misc::DebugLog = !Options::Misc::DebugLog;
+            }
         }
 
         // ── THEME TAB ─────────────────────────────────────────────
@@ -1211,7 +1235,7 @@ namespace Loader
 
         int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
         int ww = 480, wh = 600;
-        l_Hwnd = CreateWindowW(wc.lpszClassName, L"Seraph", WS_POPUP | WS_VISIBLE,
+        l_Hwnd = CreateWindowW(wc.lpszClassName, L"Fleasion", WS_POPUP | WS_VISIBLE,
             (sw - ww) / 2, (sh - wh) / 2, ww, wh, nullptr, nullptr, wc.hInstance, nullptr);
 
         // Enable rounded corners on Windows 11 (silently ignored on older builds)

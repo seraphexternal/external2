@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -229,10 +230,15 @@ namespace MapParser
                             const Vectors::Vector3 sz =
                                 Memory->read<Vectors::Vector3>(primitive + Offsets::Primitive::Size);
 
+                            // Skip fully-transparent ghost parts — they don't occlude,
+                            // mirroring the legacy ESP occlusion transparency cutoff.
+                            const float transparency =
+                                Memory->read<float>(current.address + Offsets::BasePart::Transparency);
+
                             // Skip tiny ornaments (trims, studs) to keep the cache bounded.
                             const float maxSide =
                                 std::fmax(sz.x, std::fmax(sz.y, sz.z));
-                            if (maxSide >= 0.5f)
+                            if (maxSide >= 0.5f && transparency < 0.92f)
                             {
                                 const sCFrame rc =
                                     Memory->read<sCFrame>(primitive + Offsets::Primitive::Rotation);
@@ -246,9 +252,9 @@ namespace MapParser
                                 ParsedPart pp{};
                                 pp.position = pos;
                                 pp.size = sz;
-                                pp.e0 = { rc.r00, rc.r01, rc.r02 };
-                                pp.e1 = { rc.r10, rc.r11, rc.r12 };
-                                pp.e2 = { rc.r20, rc.r21, rc.r22 };
+                                pp.e0 = { rc.r00, rc.r10, rc.r20 };  // right (x-axis) basis
+                                pp.e1 = { rc.r01, rc.r11, rc.r21 };  // up (y-axis) basis
+                                pp.e2 = { rc.r02, rc.r12, rc.r22 };  // back (z-axis) basis
                                 pp.shape = ClassifyPart(current, sz, lowerName);
 
                                 // Bounding sphere radius (max-side * sqrt(3)/2) — broad-phase
@@ -301,6 +307,14 @@ namespace MapParser
         std::unique_lock<std::shared_mutex> lock(m_mutex);
         m_cached_parts.clear();
         m_last_scan_ms.store(0);
+    }
+
+    // True once at least one background scan has completed and published parts.
+    // Callers use this to fall back to the legacy occluder scan during warmup.
+    inline bool IsCacheReady()
+    {
+        std::shared_lock<std::shared_mutex> lock(m_mutex);
+        return !m_cached_parts.empty();
     }
 
     // Background worker. Detached once in main.cpp after VisualEngine resolves.

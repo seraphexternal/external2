@@ -775,6 +775,7 @@ CODE
 
 // Custom includes for keybind system
 #include "../../rbx/globals/options.h"
+#include "../../obfuscate.h"
 
 // System includes
 #include <ctype.h>      // toupper
@@ -11651,9 +11652,9 @@ void KeybindSelector(const char* label, int* key) {
         
         // Determine which toggle type to use based on the label
         int* toggleType = nullptr;
-        if (strstr(label, "Aimbot") != nullptr) {
+        if (strstr(label, OBS("Aim", "bot")) != nullptr) {
             toggleType = &Options::Aimbot::ToggleType;
-        } else if (strstr(label, "Triggerbot") != nullptr) {
+        } else if (strstr(label, OBS("Trigger", "bot")) != nullptr) {
             toggleType = &Options::Triggerbot::ToggleType;
         } else if (strstr(label, "Macro") != nullptr) {
             toggleType = &Options::Macro::ToggleType;
