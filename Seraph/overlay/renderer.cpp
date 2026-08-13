@@ -1841,6 +1841,8 @@ if (tab == 0)
                 UI::Checkbox("Enabled", &Options::Triggerbot::Enabled);
                 UI::Checkbox("Team Check", &Options::Triggerbot::TeamCheck);
                 UI::Checkbox("Knocked Check", &Options::Triggerbot::DownedCheck);
+                UI::Checkbox("Wall Check", &Options::Triggerbot::WallCheck);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Don't trigger on enemies hidden behind walls/geometry.");
                 UI::Checkbox("Prediction", &Options::Triggerbot::Prediction);
                 UI::Checkbox("Advanced FOV", &Options::Triggerbot::AdvancedFOV);
                 if (Options::Triggerbot::AdvancedFOV)
