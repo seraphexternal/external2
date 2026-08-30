@@ -12,6 +12,8 @@
 
 #include "../offsets.h"            // Offsets::SetOffset, Offsets::ClientVersion
 #include "../configs/json.hpp"            // nlohmann::json
+#include "../../features/obfuscate.h"
+#include "../../rbx/globals/options.h"
 
 using json = nlohmann::json;
 
@@ -44,7 +46,7 @@ namespace OffsetsFetcher {
             std::wstring url = ToWide(urlUtf8);
             std::string result;
 
-            HINTERNET hInet = InternetOpen("Seraph/1.0", INTERNET_OPEN_TYPE_PRECONFIG,
+            HINTERNET hInet = InternetOpen("Mozilla/5.0 (Windows NT 10.0; Win64; x64)", INTERNET_OPEN_TYPE_PRECONFIG,
                 NULL, NULL, 0);
             if (!hInet) {
                 lastError = "InternetOpen failed (err=" + std::to_string(GetLastError()) + ")";
@@ -73,8 +75,15 @@ namespace OffsetsFetcher {
 
         inline void Log(const std::string& msg)
         {
-            // Best-effort diagnostic log so the user can see what the fetch did.
-            std::ofstream f("C:\\Users\\ncomp\\AppData\\Local\\Temp\\seraph_offsets.log", std::ios::out | std::ios::app);
+            // Best-effort diagnostic log, only written when Debug Logging is
+            // enabled. Uses a runtime %TEMP% path (no hardcoded home dir / no
+            // identifying filename) so it leaves no username trace by default.
+            if (!Options::Misc::DebugLog)
+                return;
+            char tmp[MAX_PATH] = { 0 };
+            if (GetTempPathA(MAX_PATH, tmp) == 0)
+                return;
+            std::ofstream f(std::string(tmp) + SX("offs_diag.log"), std::ios::out | std::ios::app);
             if (f) f << msg << "\n";
         }
     }

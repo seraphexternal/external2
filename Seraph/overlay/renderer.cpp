@@ -12,7 +12,10 @@
 #include "../features/desync.h"
 #include "../features/ragebot.h"
 #include "../features/aimbot.h"
+#include "../features/playerfilter.h"
 #include "../features/orbit.h"
+#include "animation.h"
+#include "explorer/explorer_window.h"
 #include <shobjidl.h>
 #pragma comment(lib, "ole32.lib")
 #include "../seraph_log.h"
@@ -353,6 +356,8 @@ void HideFromTaskbar(HWND hwnd);
 
 void ApplyOverlayWindowStyle(HWND hwnd, bool clickThrough)
 {
+(void)clickThrough; // no longer used: this is a normal clickable window
+
 LONG exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
 
 if (Options::Misc::HideFromTabs)
@@ -364,11 +369,6 @@ else
 {
 exStyle &= ~WS_EX_TOOLWINDOW;
 }
-
-if (clickThrough)
-exStyle |= WS_EX_TRANSPARENT;
-else
-exStyle &= ~WS_EX_TRANSPARENT;
 
 SetWindowLong(hwnd, GWL_EXSTYLE, exStyle);
 SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
@@ -436,7 +436,7 @@ listInitialized = true;
 
 const float panelY = ImGui::GetCursorPosY();
 ImGui::SetCursorPosX(UI::ContentX);
-if (UI::card::begin("##configs_manage", ImVec2(UI::CardW, 470 * sc), "MANAGE CONFIGS"))
+if (UI::CollapsibleSection("MANAGE CONFIGS", UI::CardW))
 {
 UI::labelsection("AUTOLOAD");
 if (ImGui::Checkbox("Autoload on startup", &autoloadEnabled))
@@ -508,11 +508,11 @@ ImGui::PopID();
 ImGui::EndChild();
 ImGui::PopStyleVar();
 }
-UI::card::end();
+UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(UI::ContentX + UI::CardW + 6.0f * sc);
-if (UI::card::begin("##configs_actions", ImVec2(UI::CardW, 470 * sc), "ACTIONS"))
+if (UI::CollapsibleSection("ACTIONS", UI::CardW))
 {
 if (!configStatusMessage.empty())
 {
@@ -526,7 +526,7 @@ ImGui::Dummy(ImVec2(0, 4));
 }
 
 UI::labelsection("CONFIG NAME");
-ImGui::InputText("##seraph_configname", configNameBuffer, IM_ARRAYSIZE(configNameBuffer));
+ImGui::InputText("##config_name_edit", configNameBuffer, IM_ARRAYSIZE(configNameBuffer));
 ImGui::Dummy(ImVec2(0, 6));
 
 if (ImGui::Button("Load", ImVec2(-1, 24)))
@@ -670,7 +670,7 @@ UI::labelsection("FILE ACTIONS");
 if (ImGui::Button("Import Config...", ImVec2(-1, 24)))
 {
 std::string pickedPath;
-if (OpenWindowsFileDialog(true, pickedPath, "*.json\0*.json\0All Files\0*.*\0", "Import Seraph config"))
+if (OpenWindowsFileDialog(true, pickedPath, "*.json\0*.json\0All Files\0*.*\0", SX("Import Seraph config").c_str()))
 {
 const bool ok = ImportConfigFromFile(std::filesystem::path(pickedPath));
 if (ok)
@@ -707,7 +707,7 @@ else
 {
 std::string pickedPath;
 const std::string suggestedName = exportSource;
-if (OpenWindowsFileDialog(false, pickedPath, "*.json\0*.json\0All Files\0*.*\0", "Export Seraph config", suggestedName))
+if (OpenWindowsFileDialog(false, pickedPath, "*.json\0*.json\0All Files\0*.*\0", SX("Export Seraph config").c_str(), suggestedName))
 {
 const bool ok = ExportConfigToFile(exportSource, std::filesystem::path(pickedPath));
 if (ok)
@@ -724,7 +724,7 @@ configStatusMessage = Config::lastError.empty() ? "Export failed" : Config::last
 }
 }
 }
-UI::card::end();
+UI::CollapsibleEnd();
 }
 
 // (OpenWindowsFileDialog + UTF8ToWide / WideToUTF8 live in
@@ -846,8 +846,8 @@ yOffset += lineHeight;
 
 void ShowImgui()
 {
-    OutputDebugStringA("[Seraph] ShowImgui: START\n");
-    SeraphLog("[Seraph] ShowImgui: START, resetting overlay flags");
+    OutputDebugStringA("[S] ShowImgui: START\n");
+    SeraphLog("[S] ShowImgui: START, resetting overlay flags");
     Globals::overlayShouldShutdown = false;
     Globals::overlayDone = false;
     InitializeConfigPaths();
@@ -855,23 +855,45 @@ void ShowImgui()
     ImGui_ImplWin32_EnableDpiAwareness();
     float main_scale = ImGui_ImplWin32_GetDpiScaleForMonitor(::MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY));
 
-    size_t width = (size_t)GetSystemMetrics(SM_CXSCREEN);
-    size_t height = (size_t)GetSystemMetrics(SM_CYSCREEN);
+    // Size the overlay to the Roblox client window instead of the whole virtual
+    // screen. A fullscreen "screen+1px" layered popup is a textbook overlay
+    // tell; binding to the game client rect is far less conspicuous.
+    // Globals::Viewport::ScreenPos / Dimensions are populated once the game is
+    // attached; fall back to the primary screen until then.
+    LONG winX = 0, winY = 0, winW = 0, winH = 0;
+    {
+        size_t width = (size_t)GetSystemMetrics(SM_CXSCREEN);
+        size_t height = (size_t)GetSystemMetrics(SM_CYSCREEN);
+        if (Globals::Viewport::Valid && Globals::Viewport::Dimensions.x > 0 && Globals::Viewport::Dimensions.y > 0)
+        {
+            winX = Globals::Viewport::ScreenPos.x;
+            winY = Globals::Viewport::ScreenPos.y;
+            winW = (LONG)(Globals::Viewport::Dimensions.x);
+            winH = (LONG)(Globals::Viewport::Dimensions.y);
+        }
+        else
+        {
+            winX = 0; winY = 0;
+            winW = (LONG)width;
+            winH = (LONG)height;
+        }
+    }
 
-    WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"ImGui Example", nullptr };
+    // Benign, non-descript window class + title so the overlay doesn't advertise
+    // itself. The old "ImGui Example" class name is a widely-flagged signature.
+    WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"Windows.UI.Core.CoreWindow", nullptr };
     ::RegisterClassExW(&wc);
 
-    // Benign, non-descript window title so the overlay doesn't advertise itself.
     HWND hwnd = ::CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TOOLWINDOW,
+        WS_EX_TOOLWINDOW,
         wc.lpszClassName,
         L"",
-        WS_POPUP,
-        0, 0, (int)width + 1, (int)height + 1,
+        0,
+        winX, winY, winW, winH,
         nullptr, nullptr, wc.hInstance, nullptr);
 
-    OutputDebugStringA("[Seraph] ShowImgui: Window created\n");
-    SeraphLog("[Seraph] ShowImgui: Window created, hwnd=0x" + std::to_string((uintptr_t)hwnd));
+    OutputDebugStringA("[S] ShowImgui: Window created\n");
+    SeraphLog("[S] ShowImgui: Window created, hwnd=0x" + std::to_string((uintptr_t)hwnd));
 
     // Publish the overlay HWND so the file-dialog helpers (configs.h)
     // can present Import/Export as modal-to-owner dialogs. This is what
@@ -879,10 +901,6 @@ void ShowImgui()
     // ownership forces Windows to route mouse + focus through the
     // dialog above our WS_EX_LAYERED + WS_EX_TOPMOST overlay.
     g_OverlayHWND = hwnd;
-
-    SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 255, LWA_ALPHA);
-    MARGINS Margin = { -1 };
-    DwmExtendFrameIntoClientArea(hwnd, &Margin);
 
     HideFromTaskbar(hwnd);
 
@@ -894,7 +912,7 @@ void ShowImgui()
 
     if (!CreateDeviceD3D(hwnd))
     {
-        OutputDebugStringA("[Seraph] ShowImgui: CreateDeviceD3D FAILED\n");
+        OutputDebugStringA("[S] ShowImgui: CreateDeviceD3D FAILED\n");
         CleanupDeviceD3D();
         ::DestroyWindow(hwnd);
         ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
@@ -902,17 +920,17 @@ void ShowImgui()
         return;
     }
 
-    OutputDebugStringA("[Seraph] ShowImgui: D3D device created\n");
-    SeraphLog("[Seraph] ShowImgui: D3D device created");
+    OutputDebugStringA("[S] ShowImgui: D3D device created\n");
+    SeraphLog("[S] ShowImgui: D3D device created");
 
-    ::ShowWindow(hwnd, SW_SHOWDEFAULT);
+    ::ShowWindow(hwnd, SW_HIDE);
     ::UpdateWindow(hwnd);
     HideFromTaskbar(hwnd);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
 
-    OutputDebugStringA("[Seraph] ShowImgui: ImGui context created\n");
+    OutputDebugStringA("[S] ShowImgui: ImGui context created\n");
 
     ImGuiIO& io = ImGui::GetIO();
     ImGui::StyleColorsDark();
@@ -970,7 +988,7 @@ ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
     ImGui_ImplDX11_CreateDeviceObjects();
 
-    OutputDebugStringA("[Seraph] ShowImgui: ImGui backends initialized\n");
+    OutputDebugStringA("[S] ShowImgui: ImGui backends initialized\n");
 
     ImVec4 clear_color = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
 
@@ -984,15 +1002,14 @@ ImGui_ImplWin32_Init(hwnd);
     static bool menuDragging = false;
     static ImVec2 menuDragOffset = ImVec2(0, 0);
 
-    SetTransparency(hwnd, true);
-
-OutputDebugStringA("[Seraph] ShowImgui: Entering render loop\n");
-    SeraphLog("[Seraph] ShowImgui: Entering render loop");
+    ::ShowWindow(hwnd, SW_HIDE);
+OutputDebugStringA("[S] ShowImgui: Entering render loop\n");
+    SeraphLog("[S] ShowImgui: Entering render loop");
     int frameCount = 0;
     while (!done && Globals::running && !Globals::overlayShouldShutdown)
     {
         if (frameCount == 0) {
-            OutputDebugStringA("[Seraph] ShowImgui: First frame\n");
+            OutputDebugStringA("[S] ShowImgui: First frame\n");
         }
         frameCount++;
         MSG msg;
@@ -1056,30 +1073,33 @@ Globals::Roblox::LocalPlayer = RobloxInstance(Memory->read<uintptr_t>(Globals::R
     {
         menu_open = !menu_open;
         gMenuWasEverOpen = true;
-        SetTransparency(hwnd, !menu_open);
+        ::ShowWindow(hwnd, menu_open ? SW_SHOW : SW_HIDE);
     }
 
-    // Fade animation
-    static float menuAlpha = 0.0f;
-    static float backgroundAlpha = 0.0f;
-    float fadeSpeed = 0.08f;
-
+    // Fade animation (ease-cubic-out time-based, ported from jew-dick-hack
+    // ease utilities) -- smooth, non-linear menu open/close transition.
+    static float fadeProgress = 0.0f;   // 0..1 (open) / 1..0 (close)
+    static bool  fadeWasOpen = false;
+    const float dt = ImGui::GetIO().DeltaTime;
+    const float easeDur = 0.16f;        // seconds for the eased transition
     if (menu_open)
     {
-        if (menuAlpha < 1.0f) menuAlpha += fadeSpeed;
-        if (menuAlpha > 1.0f) menuAlpha = 1.0f;
-
-        if (backgroundAlpha < 0.7f) backgroundAlpha += fadeSpeed;
-        if (backgroundAlpha > 0.7f) backgroundAlpha = 0.7f;
+        fadeWasOpen = true;
+        fadeProgress = std::min(1.0f, fadeProgress + (dt / easeDur));
     }
     else
     {
-        if (menuAlpha > 0.0f) menuAlpha -= fadeSpeed;
-        if (menuAlpha < 0.0f) menuAlpha = 0.0f;
-
-        if (backgroundAlpha > 0.0f) backgroundAlpha -= fadeSpeed;
-        if (backgroundAlpha < 0.0f) backgroundAlpha = 0.0f;
+        if (fadeWasOpen)
+        {
+            // On first frame of close, restart the timing from the current eased value.
+            fadeProgress = (fadeProgress <= 0.f) ? 0.f : fadeProgress;
+        }
+        fadeWasOpen = false;
+        fadeProgress = std::max(0.0f, fadeProgress - (dt / easeDur));
     }
+
+    float menuAlpha = anim::ease_cubic_out(fadeProgress);
+    float backgroundAlpha = 0.7f * anim::ease_cubic_out(fadeProgress);
 
     // Skip weather physics when the menu has never been opened
     if (gMenuWasEverOpen && (menu_open || menuAlpha > 0.0f))
@@ -1309,14 +1329,15 @@ ImVec4(themePanel[0], themePanel[1], themePanel[2], 1.0f));
                 ImVec2(logoX, logoY + 3.0f * sc),
                 ImVec2(logoX + 3.0f * sc, logoY + 25.0f * sc),
                 ImGui::ColorConvertFloat4ToU32(UI::P.accent), 2.0f * sc);
-            // Title text
+            // Title text (XOR-obfuscated so the brand string isn't in the binary)
+            const std::string logoText = SX("SERAPH");
             ImFont* logoFont = (MenuFonts::Count > 0 && Options::Misc::MenuFont >= 0
                 && Options::Misc::MenuFont < MenuFonts::Count && MenuFonts::Fonts[Options::Misc::MenuFont])
                 ? MenuFonts::Fonts[Options::Misc::MenuFont] : io.FontDefault;
             draw->AddText(logoFont, 21.0f * sc,
                 ImVec2(logoX + 8.0f * sc, logoY),
-                IM_COL32(255, 255, 255, 255), "SERAPH");
-            ImVec2 textSize = logoFont->CalcTextSizeA(21.0f * sc, FLT_MAX, 0, "SERAPH");
+                IM_COL32(255, 255, 255, 255), logoText.c_str());
+            ImVec2 textSize = logoFont->CalcTextSizeA(21.0f * sc, FLT_MAX, 0, logoText.c_str());
             draw->AddRectFilled(
                 ImVec2(logoX + 8.0f * sc + textSize.x + 7.0f * sc, logoY + 2.0f * sc),
                 ImVec2(logoX + 8.0f * sc + textSize.x + 7.0f * sc + 36.0f * sc, logoY + 15.0f * sc),
@@ -1512,7 +1533,7 @@ if (tab == 0)
             // ── Aimbot: General + Smoothing (left column) ──
             const float panelY = ImGui::GetCursorPosY();
             ImGui::SetCursorPosX(ctX);
-            if (UI::card::begin("##aim_general", ImVec2(halfW, 485 * sc), "GENERAL"))
+            if (UI::CollapsibleSection("GENERAL", halfW))
             {
                 UI::labelsection("AIMBOT");
                 UI::Checkbox("Enabled", &Options::Aimbot::Aimbot);
@@ -1673,12 +1694,12 @@ if (tab == 0)
                 UI::labelsection("KEYBIND");
                 UI::Bind("##aimbot_key", &Options::Aimbot::AimbotKey, &Options::Aimbot::ToggleType);
             }
-            UI::card::end();
+            UI::CollapsibleEnd();
 
             // ── Aimbot: Targeting + Silent Aim (right column) ──
             ImGui::SetCursorPosY(panelY);
             ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-            if (UI::card::begin("##aim_targeting", ImVec2(halfW, 470 * sc), "TARGETING"))
+            if (UI::CollapsibleSection("TARGETING", halfW))
             {
                 UI::labelsection("HITBOX");
                 static const char* hitboxModes[]{ "Fixed Bone", "Closest Part" };
@@ -1793,12 +1814,12 @@ if (tab == 0)
                     UI::SliderFloat("Prediction Y", &Options::Aimbot::PredictionY, 0.01f, 10.0f, "%.2f");
                 }
             }
-            UI::card::end();
+            UI::CollapsibleEnd();
 
             // ── Aimbot: FOV Visuals (third panel, full width below) ──
             ImGui::SetCursorPosY(panelY + 470 * sc + 12.0f * sc);
             ImGui::SetCursorPosX(ctX);
-            if (UI::card::begin("##aim_fov_visuals", ImVec2(ctW, 200 * sc), "FOV VISUALS"))
+            if (UI::CollapsibleSection("FOV VISUALS", ctW))
             {
                 UI::labelsection("DISPLAY");
                 UI::Checkbox("Show FOV", &Options::Aimbot::ShowFOV);
@@ -1828,14 +1849,14 @@ if (tab == 0)
                 UI::ColorEdit3("FOV Color", Options::Aimbot::FOVColor, ImGuiColorEditFlags_NoInputs);
                 UI::ColorEdit3("FOV Fill", Options::Aimbot::FOVFillColor, ImGuiColorEditFlags_NoInputs);
             }
-            UI::card::end();
+            UI::CollapsibleEnd();
         }
         else if (tab2 == 1)
         {
             // ── Triggerbot: Main (left) ──
             const float panelY = ImGui::GetCursorPosY();
             ImGui::SetCursorPosX(ctX);
-            if (UI::card::begin("##trigger_main", ImVec2(halfW, 470 * sc), "TRIGGERBOT"))
+            if (UI::CollapsibleSection("TRIGGERBOT", halfW))
             {
                 UI::labelsection("MAIN");
                 UI::Checkbox("Enabled", &Options::Triggerbot::Enabled);
@@ -1851,12 +1872,12 @@ if (tab == 0)
                 UI::labelsection("KEYBIND");
                 UI::Bind("##triggerbot_key", &Options::Triggerbot::TriggerbotKey);
             }
-            UI::card::end();
+            UI::CollapsibleEnd();
 
             // ── Triggerbot: Settings (right) ──
             ImGui::SetCursorPosY(panelY);
             ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-            if (UI::card::begin("##trigger_settings", ImVec2(halfW, 470 * sc), "SETTINGS"))
+            if (UI::CollapsibleSection("SETTINGS", halfW))
             {
                 UI::labelsection("BASIC");
                 if (!Options::Triggerbot::AdvancedFOV)
@@ -1934,14 +1955,14 @@ if (tab == 0)
                     UI::SliderFloat("R Foot FOV Y", &Options::Triggerbot::RightFootFOV_Y, 0.f, 100.f, "%.1f");
                 }
             }
-            UI::card::end();
+            UI::CollapsibleEnd();
         }
         else if (tab2 == 2)
         {
             // ── Hitbox Expander ──
             const float panelY = ImGui::GetCursorPosY();
             ImGui::SetCursorPosX(ctX);
-            if (UI::card::begin("##hitbox_main", ImVec2(halfW, 470 * sc), "HITBOX EXPANDER"))
+            if (UI::CollapsibleSection("HITBOX EXPANDER", halfW))
             {
                 UI::labelsection("MAIN");
                 UI::Checkbox("Enabled", &Options::HitboxExpander::Enabled);
@@ -1953,7 +1974,7 @@ if (tab == 0)
                 UI::SliderFloat("Vertical Size", &Options::HitboxExpander::VerticalSize, 1.0f, 50.0f, "%.1f");
                 UI::SliderFloat("Transparency", &Options::HitboxExpander::HitboxTransparency, 0.0f, 1.0f, "%.2f");
             }
-            UI::card::end();
+            UI::CollapsibleEnd();
 
             // Preview panel
             ImGui::SetCursorPosY(panelY);
@@ -2012,7 +2033,7 @@ else if (tab == 1)
 if (tab2 == 0) {
 const float panelY = ImGui::GetCursorPosY();
 ImGui::SetCursorPosX(ctX);
-if (UI::card::begin("##esp_features", ImVec2(halfW, 470 * sc), "ESP FEATURES"))
+if (UI::CollapsibleSection("ESP FEATURES", halfW))
 {
 UI::labelsection("FILTER");
 UI::Checkbox("Master Enable", &Options::ESP::Enabled);
@@ -2020,67 +2041,94 @@ UI::Checkbox("Team Check", &Options::ESP::TeamCheck);
 UI::Checkbox("Visibility Colors", &Options::ESP::VisibilityCheck);
 UI::Checkbox("Visibility Bones", &Options::ESP::VisibilityChams);
 
+UI::labelsection("PLAYER LIST");
+UI::Checkbox("Player Filter", &Options::PlayerFilter::Enabled);
+if (ImGui::IsItemHovered()) ImGui::SetTooltip("Focus / exclude players. Excluded players are hidden from the ESP and skipped by the aimbot.");
+UI::Checkbox("Focus Only", &Options::PlayerFilter::FocusOnly);
+if (ImGui::IsItemHovered()) ImGui::SetTooltip("When at least one player is marked as Focus, the aimbot only targets focused players.");
+UI::Checkbox("Exclude Friends", &Options::PlayerFilter::ExcludeFriends);
+if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hides players in your friend list from the ESP and the aimbot.");
+
+ImGui::Spacing();
+UI::labelsection("CONNECTED");
+{
+    // Gather unique, non-local player names from the live cache.
+    std::vector<std::string> names;
+    for (const auto& p : Globals::Caches::CachedPlayerObjects)
+    {
+        if (!p.address || p.Name.empty()) continue;
+        if (p.address == Globals::Roblox::LocalPlayer.address) continue;
+        if (std::find(names.begin(), names.end(), p.Name) == names.end())
+            names.push_back(p.Name);
+    }
+    std::sort(names.begin(), names.end());
+
+    if (names.empty())
+    {
+        ImGui::TextDisabled("No players connected");
+    }
+    else if (ImGui::BeginChild("##playerList", ImVec2(halfW, 200.0f * sc), true))
+    {
+        for (const auto& n : names)
+        {
+            ImGui::PushID(n.c_str());
+            int mark = PlayerFilter::GetMark(n);
+            bool isFriend = PlayerFilter::IsFriend(n);
+
+            ImVec4 stCol(0.60f, 0.60f, 0.60f, 1.0f);
+            const char* st = "none";
+            if (mark == Options::PlayerFilter::Focus) { st = "FOCUS"; stCol = ImVec4(0.30f, 1.00f, 0.60f, 1.0f); }
+            else if (mark == Options::PlayerFilter::Exclude) { st = "EXCL"; stCol = ImVec4(1.00f, 0.40f, 0.40f, 1.0f); }
+            else if (isFriend) { st = "FRND"; stCol = ImVec4(0.70f, 0.70f, 0.75f, 1.0f); }
+
+            ImGui::TextColored(stCol, "%s", st);
+            ImGui::SameLine();
+            ImGui::TextUnformatted(n.c_str());
+
+            ImGui::SetCursorPosX(ctX + halfW - (46.0f * sc) * 3 - 6.0f * sc);
+            if (ImGui::SmallButton("FOC")) PlayerFilter::SetMark(n, mark == Options::PlayerFilter::Focus ? Options::PlayerFilter::None : Options::PlayerFilter::Focus);
+            ImGui::SameLine(0, 3.0f * sc);
+            if (ImGui::SmallButton("EXC")) PlayerFilter::SetMark(n, mark == Options::PlayerFilter::Exclude ? Options::PlayerFilter::None : Options::PlayerFilter::Exclude);
+            ImGui::SameLine(0, 3.0f * sc);
+            if (ImGui::SmallButton("FRD")) { if (isFriend) PlayerFilter::RemoveFriend(n); else PlayerFilter::AddFriend(n); }
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+}
+
 UI::labelsection("PLAYER INFO");
-CheckboxWithColorPicker("Names", &Options::ESP::Name, Options::ESP::Color);
-CheckboxWithColorPicker("Distance", &Options::ESP::Distance, Options::ESP::DistanceColor);
-UI::Checkbox("Health Bar", &Options::ESP::Health);
-UI::Checkbox("Health Text", &Options::ESP::HealthText);
-UI::Checkbox("HP Above Head", &Options::ESP::EnemyHealthIndicator);
-
-UI::labelsection("EFFECTS");
-UI::Checkbox("Glow", &Options::ESP::Glow);
-UI::Checkbox("Pulse", &Options::ESP::Pulse);
-if (Options::ESP::Pulse)
-UI::SliderFloat("Pulse Speed", &Options::ESP::PulseSpeed, 0.1f, 5.0f, "%.2f");
-UI::Checkbox("Rings", &Options::ESP::Rings);
-if (Options::ESP::Rings)
-UI::SliderFloat("Ring Radius", &Options::ESP::RingRadius, 10.0f, 150.0f, "%.0f");
-UI::Checkbox("Trails", &Options::ESP::Trails);
-if (Options::ESP::Trails)
-UI::SliderInt("Trail Length", &Options::ESP::TrailLength, 4, 60);
-UI::Checkbox("Local Only", &Options::ESP::LocalOnly);
-UI::Checkbox("Avatar Icon", &Options::ESP::AvatarIcon);
-
-static const char* nameModes[]{ "Username", "Health%" };
-UI::Combo("Name Mode", &Options::ESP::NameMode, nameModes, IM_ARRAYSIZE(nameModes));
-
-UI::Checkbox("Custom Image", &Options::ESP::CustomImage);
-	if (Options::ESP::CustomImage)
-	{
-		UI::SliderFloat("Image Scale", &Options::ESP::CustomImageScale, 0.2f, 4.0f, "%.2f");
-		char imgBuf[256]; strncpy_s(imgBuf, Options::ESP::CustomImagePath, sizeof(imgBuf) - 1);
-		if (ImGui::InputText("Image Path", imgBuf, sizeof(imgBuf)))
-			strncpy_s(Options::ESP::CustomImagePath, imgBuf, sizeof(Options::ESP::CustomImagePath) - 1);
-		ImGui::SameLine();
-		if (ImGui::Button("Browse", ImVec2(-1, 20)))
-		{
-			OPENFILENAMEA ofn = { 0 };
-			char szFile[256] = { 0 };
-			ofn.lStructSize = sizeof(ofn);
-			ofn.hwndOwner = GetActiveWindow();
-			ofn.lpstrFile = szFile;
-			ofn.nMaxFile = sizeof(szFile);
-			ofn.lpstrFilter = "Image Files\0*.png;*.jpg;*.jpeg;*.bmp\0All Files\0*.*\0";
-			ofn.nFilterIndex = 1;
-			ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
-			if (GetOpenFileNameA(&ofn))
-			{
-				strncpy_s(Options::ESP::CustomImagePath, szFile, _TRUNCATE);
-			}
-		}
-	}
+	UI::Checkbox("Names", &Options::ESP::Name);
+	UI::Checkbox("Distance", &Options::ESP::Distance);
+	UI::Checkbox("Health Bar", &Options::ESP::Health);
+	UI::Checkbox("Health Text", &Options::ESP::HealthText);
+	UI::Checkbox("HP Above Head", &Options::ESP::EnemyHealthIndicator);
 
 	UI::labelsection("OVERLAYS");
 	UI::Checkbox("Corner ESP", &Options::ESP::CornerESP);
-	CheckboxWithColorPicker("Tracers", &Options::ESP::Tracers, Options::ESP::TracerColor);
-	CheckboxWithColorPicker("Skeleton", &Options::ESP::Skeleton, Options::ESP::SkeletonColor);
-	CheckboxWithColorPicker("Head Circle", &Options::ESP::HeadCircle, Options::ESP::HeadCircleColor);
-	CheckboxWithColorPicker("Head Dot", &Options::ESP::HeadDot, Options::ESP::HeadDotColor);
+	UI::Checkbox("Tracers", &Options::ESP::Tracers);
+	UI::Checkbox("Skeleton", &Options::ESP::Skeleton);
+	UI::Checkbox("Head Circle", &Options::ESP::HeadCircle);
+	UI::Checkbox("Head Dot", &Options::ESP::HeadDot);
+	UI::Checkbox("Arrows", &Options::ESP::Arrows);
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows directional arrows for off-screen players.");
+	UI::Checkbox("Radar", &Options::ESP::Radar);
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows a circular radar overlay with nearby players.");
+	if (Options::ESP::Radar)
+	{
+		static const char* radarThemes[]{ "Classic", "Minimal", "Neon", "Compass" };
+		UI::Combo("Radar Theme", &Options::ESP::RadarTheme, radarThemes, IM_ARRAYSIZE(radarThemes));
+	}
+	UI::Checkbox("Rig Type", &Options::ESP::RigType);
+	UI::Checkbox("Local Only", &Options::ESP::LocalOnly);
+	UI::Checkbox("Avatar Icon", &Options::ESP::AvatarIcon);
 
 	UI::labelsection("BOX FILL");
-	UI::Checkbox("Box Fill", &Options::ESP::BoxFill);
-	if (Options::ESP::BoxFill)
+	UI::Checkbox("Box", &Options::ESP::Box);
+	if (Options::ESP::Box)
 	{
+		static const char* boxTypes[]{ "None", "Normal Box", "3D Box" };
+		UI::Combo("Type", &Options::ESP::BoxType, boxTypes, IM_ARRAYSIZE(boxTypes));
 		UI::Checkbox("Gradient Fill", &Options::ESP::BoxFillGradient);
 		if (Options::ESP::BoxFillGradient)
 		{
@@ -2107,28 +2155,55 @@ UI::Checkbox("Custom Image", &Options::ESP::CustomImage);
 		UI::ColorEdit4("Bottom Color", Options::ESP::HealthbarBottomColor, ImGuiColorEditFlags_NoInputs);
 	}
 
-	UI::labelsection("EXTRAS");
-	CheckboxWithColorPicker("Rig Type", &Options::ESP::RigType, Options::ESP::RigTypeColor);
-	CheckboxWithColorPicker("Arrows", &Options::ESP::Arrows, Options::ESP::ArrowColor);
-if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows directional arrows for off-screen players.");
-CheckboxWithColorPicker("Radar", &Options::ESP::Radar, Options::ESP::RadarEnemyColor);
-if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows a circular radar overlay with nearby players.");
-if (Options::ESP::Radar)
-{
-static const char* radarThemes[]{ "Classic", "Minimal", "Neon", "Compass" };
-UI::Combo("Radar Theme", &Options::ESP::RadarTheme, radarThemes, IM_ARRAYSIZE(radarThemes));
-}
-}
-UI::card::end();
+	UI::labelsection("EFFECTS");
+	UI::Checkbox("Glow", &Options::ESP::Glow);
+	UI::Checkbox("Pulse", &Options::ESP::Pulse);
+	if (Options::ESP::Pulse)
+		UI::SliderFloat("Pulse Speed", &Options::ESP::PulseSpeed, 0.1f, 5.0f, "%.2f");
+	UI::Checkbox("Rings", &Options::ESP::Rings);
+	if (Options::ESP::Rings)
+		UI::SliderFloat("Ring Radius", &Options::ESP::RingRadius, 10.0f, 150.0f, "%.0f");
+	UI::Checkbox("Trails", &Options::ESP::Trails);
+	if (Options::ESP::Trails)
+		UI::SliderInt("Trail Length", &Options::ESP::TrailLength, 4, 60);
+
+	UI::labelsection("NAME & IMAGE");
+	static const char* nameModes[]{ "Username", "Health%" };
+	UI::Combo("Name Mode", &Options::ESP::NameMode, nameModes, IM_ARRAYSIZE(nameModes));
+	UI::Checkbox("Custom Image", &Options::ESP::CustomImage);
+	if (Options::ESP::CustomImage)
+	{
+		UI::SliderFloat("Image Scale", &Options::ESP::CustomImageScale, 0.2f, 4.0f, "%.2f");
+		char imgBuf[256]; strncpy_s(imgBuf, Options::ESP::CustomImagePath, sizeof(imgBuf) - 1);
+		if (ImGui::InputText("Image Path", imgBuf, sizeof(imgBuf)))
+			strncpy_s(Options::ESP::CustomImagePath, imgBuf, sizeof(Options::ESP::CustomImagePath) - 1);
+		ImGui::SameLine();
+		if (ImGui::Button("Browse", ImVec2(-1, 20)))
+		{
+			OPENFILENAMEA ofn = { 0 };
+			char szFile[256] = { 0 };
+			ofn.lStructSize = sizeof(ofn);
+			ofn.hwndOwner = GetActiveWindow();
+			ofn.lpstrFile = szFile;
+			ofn.nMaxFile = sizeof(szFile);
+			ofn.lpstrFilter = "Image Files\0*.png;*.jpg;*.jpeg;*.bmp\0All Files\0*.*\0";
+			ofn.nFilterIndex = 1;
+			ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+			if (GetOpenFileNameA(&ofn))
+			{
+				strncpy_s(Options::ESP::CustomImagePath, szFile, _TRUNCATE);
+			}
+		}
+	}
+	}
+UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-if (UI::card::begin("##esp_settings", ImVec2(halfW, 470 * sc), "ESP SETTINGS"))
+if (UI::CollapsibleSection("ESP SETTINGS", halfW))
 {
-static const char* boxTypes[]{ "None", "Normal Box", "3D Box" };
-UI::labelsection("BOX");
-UI::Combo("Type", &Options::ESP::BoxType, boxTypes, IM_ARRAYSIZE(boxTypes));
-UI::SliderFloat("Box Thickness", &Options::ESP::BoxThickness, 1.0f, 10.0f);
+	UI::labelsection("BOX");
+	UI::SliderFloat("Box Thickness", &Options::ESP::BoxThickness, 1.0f, 10.0f);
 UI::SliderFloat("3D Box Thickness", &Options::ESP::ESP3DThickness, 1.0f, 10.0f);
 
 UI::labelsection("LINES");
@@ -2170,16 +2245,44 @@ UI::Combo("Mode##esp", &Options::ESP::ToggleType, toggleTypes, IM_ARRAYSIZE(togg
             UI::ColorEdit4("Fill Color 2", Options::Chams::FillColor2, ImGuiColorEditFlags_NoInputs);
             UI::ColorEdit4("Outline Color", Options::Chams::OutlineColor, ImGuiColorEditFlags_NoInputs);
             }
-            UI::card::end();
+            UI::CollapsibleEnd();
 }
 else if (tab2 == 1) {
 const float panelY = ImGui::GetCursorPosY();
 ImGui::SetCursorPosX(ctX);
-if (UI::card::begin("##combat_feedback", ImVec2(halfW, 470 * sc), "HIT FEEDBACK"))
+if (UI::CollapsibleSection("HIT FEEDBACK", halfW))
 {
 UI::labelsection("HITS");
 UI::Checkbox("Hit Sounds", &Options::Combat::HitSounds);
 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Plays a sound whenever you hit someone.");
+if (Options::Combat::HitSounds)
+{
+    auto& soundFiles = Globals::HitSounds::Files;
+    if (soundFiles.empty())
+    {
+        ImGui::TextDisabled("No sounds found");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Place audio files in the 'hitsounds' folder next to the exe.");
+    }
+    else
+    {
+        if (Options::Combat::HitSoundType < 0 || Options::Combat::HitSoundType >= (int)soundFiles.size())
+            Options::Combat::HitSoundType = 0;
+        static auto hitSoundGetter = [](void*, int idx, const char** out_text) -> bool
+        {
+            auto& files = Globals::HitSounds::Files;
+            if (idx < 0 || idx >= (int)files.size()) return false;
+            *out_text = files[idx].c_str();
+            return true;
+        };
+        ImGui::Combo("Hit Sound", &Options::Combat::HitSoundType, hitSoundGetter, nullptr, (int)soundFiles.size());
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Select which sound plays on hit.");
+        if (ImGui::Button("Preview", ImVec2(-1, 20)))
+        {
+            std::string path = Globals::HitSounds::FolderPath + "\\" + soundFiles[Options::Combat::HitSoundType];
+            PlaySoundA(path.c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+        }
+    }
+}
 UI::Checkbox("Hit Notifications", &Options::Combat::HitNotifications);
 UI::Checkbox("Hit Chams", &Options::Combat::HitChams);
 UI::Checkbox("Hit Effects", &Options::Combat::HitEffects);
@@ -2192,95 +2295,15 @@ if (Options::Combat::HitEffects)
     UI::SliderFloat("Hitmarker Thickness", &Options::Combat::HitmarkerThickness, 1.0f, 5.0f, "%.1f");
 }
 
-UI::labelsection("SOUND");
-static const char* soundTypes[]{ "Custom File", "Click", "Bell", "Bass", "HVPissy", "HVHKS", "HVHTag", "Skeet", "Neverlose", "Bubble", "Minecraft", "Fatality" };
-UI::Combo("Sound Type", &Options::Combat::HitSoundType, soundTypes, IM_ARRAYSIZE(soundTypes));
-
-if (Options::Combat::HitSoundType == 0)
-{
-    ImGui::InputText("Custom Sound File", Options::Combat::HitSoundFile, IM_ARRAYSIZE(Options::Combat::HitSoundFile));
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Full path to .wav file (e.g. C:\\hitsounds\\hit.wav)");
-    if (ImGui::Button("Browse", ImVec2(-1, 20)))
-    {
-        OPENFILENAMEA ofn = { 0 };
-        char szFile[256] = { 0 };
-        ofn.lStructSize = sizeof(ofn);
-        ofn.hwndOwner = GetActiveWindow();
-        ofn.lpstrFile = szFile;
-        ofn.nMaxFile = sizeof(szFile);
-        ofn.lpstrFilter = "WAV Files\0*.wav\0All Files\0*.*\0";
-        ofn.nFilterIndex = 1;
-        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
-        if (GetOpenFileNameA(&ofn))
-        {
-            strncpy_s(Options::Combat::HitSoundFile, szFile, _TRUNCATE);
-        }
-    }
-    if (ImGui::Button("Preview", ImVec2(-1, 20)))
-    {
-        if (Options::Combat::HitSoundFile[0])
-            PlaySoundA(Options::Combat::HitSoundFile, nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
-    }
-}
-else
-{
-    if (ImGui::Button("Preview", ImVec2(-1, 20)))
-    {
-        // Play built-in tone preview
-        switch (Options::Combat::HitSoundType)
-        {
-            case 1: CombatFeedback::PlayTone(1000, 60, 0.5f); break; // click
-            case 2: CombatFeedback::PlayTone(800, 120, 0.5f); break; // bell
-            case 3: CombatFeedback::PlayTone(150, 200, 0.8f); break; // bass
-            case 4: CombatFeedback::PlayTwoTone(200, 400, 80, 80); break; // hvhpissy
-            case 5: CombatFeedback::PlayTwoTone(600, 800, 50, 50); break; // hvhks
-            case 6: CombatFeedback::PlayTwoTone(400, 600, 100, 50); break; // hvhtag
-            case 7: CombatFeedback::PlayTwoTone(1200, 800, 40, 40); break; // skeet
-            case 8: CombatFeedback::PlayTwoTone(300, 500, 60, 60); break; // neverlose
-            case 9: CombatFeedback::PlayTwoTone(800, 400, 50, 50); break; // bubble
-            case 10: CombatFeedback::PlayTwoTone(220, 440, 100, 100); break; // minecraft
-            case 11: CombatFeedback::PlayTwoTone(50, 200, 200, 50); break; // fatality
-            default: CombatFeedback::PlayTone(1000, 60, 0.5f); break;
-        }
-    }
-}
-
 UI::labelsection("TRACERS");
 UI::Checkbox("Bullet Tracers", &Options::Combat::BulletTracers);
 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Draws tracer lines from your position to the target on hit.");
-
-auto& soundFiles = Globals::HitSounds::Files;
-if (soundFiles.empty())
-{
-    ImGui::TextDisabled("No sounds found");
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Place .wav files in the 'hitsounds' folder next to the exe.");
 }
-else
-{
-    static auto getter = [](void*, int idx, const char** out_text) -> bool
-    {
-        auto& files = Globals::HitSounds::Files;
-        if (idx < 0 || idx >= (int)files.size()) return false;
-        *out_text = files[idx].c_str();
-        return true;
-    };
-    UI::labelsection("HITSOUNDS FOLDER");
-    ImGui::Combo("Folder Sound", &Options::Combat::HitSoundType, getter, nullptr, (int)soundFiles.size());
-    if (Options::Combat::HitSoundType >= 0 && Options::Combat::HitSoundType < (int)soundFiles.size())
-    {
-        if (ImGui::Button("Preview", ImVec2(-1, 20)))
-        {
-            std::string path = Globals::HitSounds::FolderPath + "\\" + soundFiles[Options::Combat::HitSoundType];
-            PlaySoundA(path.c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
-        }
-    }
-}
-}
-UI::card::end();
+UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-if (UI::card::begin("##combat_settings", ImVec2(halfW, 470 * sc), "HIT SETTINGS"))
+if (UI::CollapsibleSection("HIT SETTINGS", halfW))
 {
 UI::labelsection("DAMAGE");
 UI::SliderFloat("Min Damage", &Options::Combat::MinDamage, 1.0f, 50.0f, "%.0f");
@@ -2299,12 +2322,12 @@ static const char* tracerStyles[]{ "Solid", "Glow", "Dashed", "Pulse" };
 UI::Combo("Style##tracer", &Options::Combat::BulletTracerStyle, tracerStyles, IM_ARRAYSIZE(tracerStyles));
 }
 }
-UI::card::end();
+UI::CollapsibleEnd();
 }
 else if (tab2 == 2) {
 const float panelY = ImGui::GetCursorPosY();
 ImGui::SetCursorPosX(ctX);
-if (UI::card::begin("##world_main", ImVec2(halfW, 470 * sc), "WORLD"))
+if (UI::CollapsibleSection("WORLD", halfW))
 {
             UI::labelsection("MAIN");
             UI::Checkbox("Enabled", &Options::World::Enabled);
@@ -2318,11 +2341,11 @@ if (UI::card::begin("##world_main", ImVec2(halfW, 470 * sc), "WORLD"))
             if (Options::World::RotateSkybox)
                 UI::SliderFloat("Rotate Speed", &Options::World::SkyboxRotateSpeed, 0.1f, 10.0f, "%.1f");
             }
-            UI::card::end();
+            UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-if (UI::card::begin("##world_lighting", ImVec2(halfW, 470 * sc), "LIGHTING"))
+if (UI::CollapsibleSection("LIGHTING", halfW))
 {
 	UI::labelsection("TIME & BRIGHTNESS");
 	UI::SliderFloat("Clock Time", &Options::World::ClockTime, 0.0f, 24.0f, "%.1f");
@@ -2358,12 +2381,12 @@ if (UI::card::begin("##world_lighting", ImVec2(halfW, 470 * sc), "LIGHTING"))
 		UI::ColorEdit3("Outdoor Ambient", Options::World::OutdoorAmbient, ImGuiColorEditFlags_NoInputs);
 	}
 }
-UI::card::end();
+UI::CollapsibleEnd();
 }
 else if (tab2 == 3) {
 const float panelY = ImGui::GetCursorPosY();
 ImGui::SetCursorPosX(ctX);
-if (UI::card::begin("##colours_esp", ImVec2(halfW, 470 * sc), "ESP COLOURS"))
+if (UI::CollapsibleSection("ESP COLOURS", halfW))
 {
 UI::labelsection("BOX");
 UI::ColorEdit3("Box Color", Options::ESP::BoxColor, ImGuiColorEditFlags_NoInputs);
@@ -2401,11 +2424,11 @@ UI::ColorEdit3("Distance Color", Options::ESP::DistanceColor, ImGuiColorEditFlag
 UI::ColorEdit3("Visible", Options::ESP::VisibleColor, ImGuiColorEditFlags_NoInputs);
 UI::ColorEdit3("Hidden", Options::ESP::HiddenColor, ImGuiColorEditFlags_NoInputs);
 }
-UI::card::end();
+UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-if (UI::card::begin("##colours_menu", ImVec2(halfW, 470 * sc), "FOV & MENU"))
+if (UI::CollapsibleSection("FOV & MENU", halfW))
 {
 UI::labelsection("THEME");
 {
@@ -2504,13 +2527,13 @@ main_color2 = ImVec4(Options::Misc::MenuAccentColor2[0], Options::Misc::MenuAcce
 UI::labelsection("FOV FILL");
 UI::ColorEdit4("FOV Fill Color", Options::Aimbot::FOVFillColor, ImGuiColorEditFlags_NoInputs);
 }
-UI::card::end();
+UI::CollapsibleEnd();
 }
 
 if (tab2 == 4)
 {
 ImGui::SetCursorPosX(ctX);
-if (UI::card::begin("##crosshair", ImVec2(fullW, 470 * sc), "CROSSHAIR"))
+if (UI::CollapsibleSection("CROSSHAIR", fullW))
 {
 UI::labelsection("MAIN");
 UI::Checkbox("Enabled", &Options::Crosshair::Enabled);
@@ -2554,7 +2577,7 @@ UI::SliderFloat("Vertical Length", &Options::Crosshair::VLength, 0.0f, 40.0f, "%
 UI::labelsection("COLOUR");
 UI::ColorEdit4("Color", Options::Crosshair::Color, ImGuiColorEditFlags_NoInputs);
 }
-UI::card::end();
+UI::CollapsibleEnd();
 }
 }
 else if (tab == 3)
@@ -2563,7 +2586,7 @@ else if (tab == 3)
 UI::ContentHeader("MISC");
 const float panelY = ImGui::GetCursorPosY();
 ImGui::SetCursorPosX(ctX);
-if (UI::card::begin("##misc_main", ImVec2(halfW, 470 * sc), "MAIN"))
+if (UI::CollapsibleSection("MAIN", halfW))
 {
 UI::labelsection("LOCAL");
 UI::Checkbox("Headless",       &Options::ESP::Headless);
@@ -2573,6 +2596,8 @@ UI::Checkbox("Crosshair",      &Options::Crosshair::Enabled);
 	UI::Checkbox("Camera FOV",     &Options::Misc::FOVEnabled);
 	UI::Checkbox("Cache NPCs",     &Options::Misc::CacheNPCs);
 	UI::Checkbox("Keybind List",   &Options::Misc::KeybindList);
+	UI::Checkbox("Explorer",       &Options::Misc::ExplorerEnabled);
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Opens the Roblox instance explorer (datamodel tree + properties / bytecode).");
 	UI::Checkbox("Third Person",   &Options::Misc::ThirdPerson);
 	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Unlocks third-person camera in games that force first-person.");
 
@@ -2582,14 +2607,14 @@ UI::Checkbox("Crosshair",      &Options::Crosshair::Enabled);
 	UI::Checkbox("Hide Process", &Options::Misc::HideProcess);
 	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Relaunches the cheat as a renamed copy in %TEMP% so Task Manager shows a benign name. Applies on next launch.");
 
-	static const char* procPresets[]{ "RuntimeBroker", "svchost", "dwm", "explorer", "SearchIndexer", "SecurityHealthService", "Custom..." };
+	static const char* procPresets[]{ "MicrosoftEdgeUpdate", "OneDriveSetup", "SearchApp", "Widgets", "GameBar", "OneDriveStandaloneUpdater", "Custom..." };
 	static int procSel = 0;
-	if (strcmp(Options::Misc::ProcessName, "RuntimeBroker") == 0) procSel = 0;
-	else if (strcmp(Options::Misc::ProcessName, "svchost") == 0) procSel = 1;
-	else if (strcmp(Options::Misc::ProcessName, "dwm") == 0) procSel = 2;
-	else if (strcmp(Options::Misc::ProcessName, "explorer") == 0) procSel = 3;
-	else if (strcmp(Options::Misc::ProcessName, "SearchIndexer") == 0) procSel = 4;
-	else if (strcmp(Options::Misc::ProcessName, "SecurityHealthService") == 0) procSel = 5;
+	if (strcmp(Options::Misc::ProcessName, "MicrosoftEdgeUpdate") == 0) procSel = 0;
+	else if (strcmp(Options::Misc::ProcessName, "OneDriveSetup") == 0) procSel = 1;
+	else if (strcmp(Options::Misc::ProcessName, "SearchApp") == 0) procSel = 2;
+	else if (strcmp(Options::Misc::ProcessName, "Widgets") == 0) procSel = 3;
+	else if (strcmp(Options::Misc::ProcessName, "GameBar") == 0) procSel = 4;
+	else if (strcmp(Options::Misc::ProcessName, "OneDriveStandaloneUpdater") == 0) procSel = 5;
 	else procSel = 6;
 
 	if (UI::Combo("Process Name", &procSel, procPresets, IM_ARRAYSIZE(procPresets)))
@@ -2632,11 +2657,11 @@ UI::SliderFloat("Rain Thickness", &MenuWeather::RainThickness, 0.5f, 3.0f,  "%.1
 ImGui::ColorEdit3 ("Particle Color", MenuWeather::Color, ImGuiColorEditFlags_NoInputs);
 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Falling snowflakes or rain streaks across the menu background. Settings are saved with your config.");
 }
-UI::card::end();
+UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-if (UI::card::begin("##misc_settings", ImVec2(halfW, 470 * sc), "SETTINGS"))
+if (UI::CollapsibleSection("SETTINGS", halfW))
 {
 if (Options::Misc::FOVEnabled)
 UI::SliderFloat("Camera FOV", &Options::Misc::FOV, 70.f, 120.f, "%.0f");
@@ -2658,7 +2683,7 @@ exit(0);
 }
 ImGui::PopStyleColor(3);
 }
-UI::card::end();
+UI::CollapsibleEnd();
 }
 else if (tab == 4)
 {
@@ -2666,47 +2691,37 @@ else if (tab == 4)
         // Content header + horizontal subtab bar
         UI::ContentHeader("MOVEMENT");
         {
-            static float sa[12] = {};
+            static float sa[7] = {};
             ImGui::SetCursorPosX(ctX);
             if (UI::ContentSubtab("Fly", tab2 == 0, sa[0])) tab2 = 0;
             ImGui::SameLine(0, 4.0f * sc);
             if (UI::ContentSubtab("WalkSpeed", tab2 == 1, sa[1])) tab2 = 1;
             ImGui::SameLine(0, 4.0f * sc);
-            if (UI::ContentSubtab("Anti-Aim", tab2 == 2, sa[2])) tab2 = 2;
+            if (UI::ContentSubtab("TickRate", tab2 == 2, sa[2])) tab2 = 2;
             ImGui::SameLine(0, 4.0f * sc);
-            if (UI::ContentSubtab("TickRate", tab2 == 3, sa[3])) tab2 = 3;
+            if (UI::ContentSubtab("Noclip", tab2 == 3, sa[3])) tab2 = 3;
             ImGui::SameLine(0, 4.0f * sc);
-            if (UI::ContentSubtab("Noclip", tab2 == 4, sa[4])) tab2 = 4;
+            if (UI::ContentSubtab("Ramp Fling", tab2 == 4, sa[4])) tab2 = 4;
             ImGui::SameLine(0, 4.0f * sc);
-            if (UI::ContentSubtab("Orbit", tab2 == 5, sa[5])) tab2 = 5;
+            if (UI::ContentSubtab("360 Spin", tab2 == 5, sa[5])) tab2 = 5;
             ImGui::SameLine(0, 4.0f * sc);
-            if (UI::ContentSubtab("Desync", tab2 == 6, sa[6])) tab2 = 6;
-            ImGui::SameLine(0, 4.0f * sc);
-            if (UI::ContentSubtab("Ramp Fling", tab2 == 7, sa[7])) tab2 = 7;
-            ImGui::SameLine(0, 4.0f * sc);
-            if (UI::ContentSubtab("VoidHide", tab2 == 8, sa[8])) tab2 = 8;
-            ImGui::SameLine(0, 4.0f * sc);
-            if (UI::ContentSubtab("Bhop", tab2 == 9, sa[9])) tab2 = 9;
-            ImGui::SameLine(0, 4.0f * sc);
-            if (UI::ContentSubtab("360 Spin", tab2 == 11, sa[11])) tab2 = 11;
-            ImGui::SameLine(0, 4.0f * sc);
-            if (UI::ContentSubtab("Extra", tab2 == 10, sa[10])) tab2 = 10;
+            if (UI::ContentSubtab("Extra", tab2 == 6, sa[6])) tab2 = 6;
             ImGui::Dummy(ImVec2(0, 8 * sc));
         }
 
 if (tab2 == 0) {
 const float panelY = ImGui::GetCursorPosY();
 ImGui::SetCursorPosX(ctX);
-if (UI::card::begin("##fly_main", ImVec2(halfW, 470 * sc), "FLY"))
+if (UI::CollapsibleSection("FLY", halfW))
 {
 UI::labelsection("MAIN");
 UI::Checkbox("Enabled", &Options::Fly::Enabled);
 }
-UI::card::end();
+UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-        if (UI::card::begin("##fly_settings", ImVec2(halfW, 470 * sc), "SETTINGS"))
+        if (UI::CollapsibleSection("SETTINGS", halfW))
         {
             UI::labelsection("PARAMETERS");
             UI::SliderFloat("Fly Speed", &Options::Fly::Speed, 10.f, 200.f, "%.0f");
@@ -2714,11 +2729,11 @@ ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
             UI::labelsection("KEYBIND");
             UI::Bind("##fly_key", &Options::Fly::FlyKey, &Options::Fly::ToggleType);
         }
-        UI::card::end();
+        UI::CollapsibleEnd();
 
         ImGui::SetCursorPosY(panelY + 476 * sc);
         ImGui::SetCursorPosX(ctX);
-        if (UI::card::begin("##autoclicker_main", ImVec2(halfW, 250 * sc), "AUTOCLICKER"))
+        if (UI::CollapsibleSection("AUTOCLICKER", halfW))
         {
             UI::labelsection("MAIN");
             UI::Checkbox("Enabled", &Options::Autoclicker::Enabled);
@@ -2729,21 +2744,21 @@ ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
             UI::labelsection("KEYBIND");
             UI::Bind("##ac_key", &Options::Autoclicker::Key, &Options::Autoclicker::ToggleType);
         }
-        UI::card::end();
+        UI::CollapsibleEnd();
 }
 else if (tab2 == 1) {
 const float panelY = ImGui::GetCursorPosY();
 ImGui::SetCursorPosX(ctX);
-if (UI::card::begin("##walkspeed_main", ImVec2(halfW, 470 * sc), "WALKSPEED"))
+if (UI::CollapsibleSection("WALKSPEED", halfW))
 {
 UI::labelsection("MAIN");
 UI::Checkbox("Enabled", &Options::WalkSpeed::Enabled);
 }
-UI::card::end();
+UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-if (UI::card::begin("##walkspeed_settings", ImVec2(halfW, 470 * sc), "SETTINGS"))
+if (UI::CollapsibleSection("SETTINGS", halfW))
 {
 UI::labelsection("PARAMETERS");
 UI::SliderFloat("Walk Speed", &Options::WalkSpeed::Speed, 16.f, 1000.f, "%.0f");
@@ -2751,24 +2766,21 @@ UI::SliderFloat("Walk Speed", &Options::WalkSpeed::Speed, 16.f, 1000.f, "%.0f");
 UI::labelsection("KEYBIND");
 UI::Bind("##walkspeed_key", &Options::WalkSpeed::WalkSpeedKey, &Options::WalkSpeed::ToggleType);
 }
-UI::card::end();
+UI::CollapsibleEnd();
 }
 else if (tab2 == 2) {
-RenderAntiAimSubtab(main_color);
-}
-else if (tab2 == 3) {
 const float panelY = ImGui::GetCursorPosY();
 ImGui::SetCursorPosX(ctX);
-if (UI::card::begin("##tickrate_main", ImVec2(halfW, 470 * sc), "TICKRATE"))
+if (UI::CollapsibleSection("TICKRATE", halfW))
 {
 UI::labelsection("MAIN");
 UI::Checkbox("Enabled", &Options::TickRate::Enabled);
 }
-UI::card::end();
+UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-if (UI::card::begin("##tickrate_settings", ImVec2(halfW, 470 * sc), "SETTINGS"))
+if (UI::CollapsibleSection("SETTINGS", halfW))
 {
 UI::labelsection("RATE");
 UI::SliderFloat("Tick Rate", &Options::TickRate::Rate, 10.0f, 1000.0f, "%.0f");
@@ -2780,12 +2792,12 @@ if (ImGui::Button("Ultra (240)", ImVec2(-1, 24))) Options::TickRate::Rate = 240.
 if (ImGui::Button("Extreme (500)", ImVec2(-1, 24))) Options::TickRate::Rate = 500.0f;
 if (ImGui::Button("Max (1000)", ImVec2(-1, 24))) Options::TickRate::Rate = 1000.0f;
 }
-UI::card::end();
+UI::CollapsibleEnd();
 }
-else if (tab2 == 4) {
+else if (tab2 == 3) {
 const float panelY = ImGui::GetCursorPosY();
 ImGui::SetCursorPosX(ctX);
-if (UI::card::begin("##noclip_main", ImVec2(halfW, 470 * sc), "NOCLIP"))
+if (UI::CollapsibleSection("NOCLIP", halfW))
 {
 UI::labelsection("MAIN");
 UI::Checkbox("Enabled", &Options::Noclip::Enabled);
@@ -2796,11 +2808,11 @@ bool noclipActive = Options::Noclip::Enabled &&
 (Options::Noclip::NoclipKey != 0 && Options::Noclip::Toggled));
 UI::Status(noclipActive ? "ACTIVE" : "INACTIVE", noclipActive);
 }
-UI::card::end();
+UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-if (UI::card::begin("##noclip_settings", ImVec2(halfW, 470 * sc), "SETTINGS"))
+if (UI::CollapsibleSection("SETTINGS", halfW))
 {
 UI::labelsection("TOGGLE");
 static const char* noclipModes[]{ "Hold", "Toggle", "Always On" };
@@ -2819,18 +2831,12 @@ Options::Noclip::Toggled = !Options::Noclip::Toggled;
 ImGui::PopStyleColor(2);
 }
 }
-UI::card::end();
+UI::CollapsibleEnd();
 }
-else if (tab2 == 5) {
-RenderOrbitSubtab(main_color);
-}
-else if (tab2 == 6) {
-RenderDesyncSubtab(main_color);
-}
-else if (tab2 == 7) {
+else if (tab2 == 4) {
 const float panelY = ImGui::GetCursorPosY();
 ImGui::SetCursorPosX(ctX);
-if (UI::card::begin("##rampfling_main", ImVec2(halfW, 470 * sc), "RAMP FLING"))
+if (UI::CollapsibleSection("RAMP FLING", halfW))
 {
 UI::labelsection("MAIN");
 UI::Checkbox("Enabled", &Options::RampFling::Enabled);
@@ -2851,11 +2857,11 @@ Options::RampFling::Toggled = !Options::RampFling::Toggled;
 ImGui::PopStyleColor(2);
 }
 }
-UI::card::end();
+UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-if (UI::card::begin("##rampfling_settings", ImVec2(halfW, 470 * sc), "SETTINGS"))
+if (UI::CollapsibleSection("SETTINGS", halfW))
 {
 UI::labelsection("PARAMETERS");
 UI::SliderFloat("Fling Force", &Options::RampFling::FlingForce, 10.f, 300.f, "%.0f");
@@ -2864,40 +2870,34 @@ UI::SliderFloat("Max Angle", &Options::RampFling::MaxAngle, 30.f, 90.f, "%.0f");
 UI::SliderFloat("Cooldown", &Options::RampFling::Cooldown, 0.1f, 2.f, "%.1fs");
 UI::SliderFloat("H. Boost", &Options::RampFling::HorizontalBoost, 0.f, 2.f, "%.1f");
 }
-UI::card::end();
+UI::CollapsibleEnd();
 }
-else if (tab2 == 8) {
-RenderVoidHideSubtab(main_color);
-}
-else if (tab2 == 9) {
-RenderBhopSubtab(main_color);
-}
-else if (tab2 == 11) {
+else if (tab2 == 5) {
 const float panelY = ImGui::GetCursorPosY();
 ImGui::SetCursorPosX(ctX);
-if (UI::card::begin("##spin360_main", ImVec2(halfW, 470 * sc), "360 SPIN"))
+if (UI::CollapsibleSection("360 SPIN", halfW))
 {
 UI::labelsection("MAIN");
                 UI::Checkbox("Enable 360 Spin", &Options::Spin360::Enabled);
 UI::Tooltip("Spins your camera in a full 360 circle while the key is held.");
 }
-UI::card::end();
+UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-if (UI::card::begin("##spin360_settings", ImVec2(halfW, 470 * sc), "SETTINGS"))
+if (UI::CollapsibleSection("SETTINGS", halfW))
 {
 UI::labelsection("CONTROLS");
 UI::SliderFloat("Spin Speed", &Options::Spin360::Speed, 1.0f, 45.0f, "%.1f deg/tick");
 UI::Bind("##spin360_key", &Options::Spin360::HotKey);
 UI::Tooltip("Hold this key to continuously spin your camera.");
 }
-UI::card::end();
+UI::CollapsibleEnd();
 }
-else if (tab2 == 10) {
+else if (tab2 == 6) {
 const float panelY = ImGui::GetCursorPosY();
 ImGui::SetCursorPosX(ctX);
-if (UI::card::begin("##clicktp", ImVec2(halfW, 470 * sc), "CLICK TP"))
+if (UI::CollapsibleSection("CLICK TP", halfW))
 {
 UI::labelsection("MAIN");
 UI::Checkbox("Enabled", &Options::ClickTP::Enabled);
@@ -2905,40 +2905,40 @@ UI::Checkbox("Enabled", &Options::ClickTP::Enabled);
                 UI::Tooltip("Teleports you to the point under the cursor when the key is pressed.");
                 UI::SliderFloat("Max Distance", &Options::ClickTP::MaxDistance, 50.0f, 5000.0f, "%.0f");
 }
-UI::card::end();
+UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-if (UI::card::begin("##extra_misc", ImVec2(halfW, 150 * sc), "HIP HEIGHT"))
+if (UI::CollapsibleSection("HIP HEIGHT", halfW))
 {
 UI::labelsection("MAIN");
 UI::Checkbox("Enabled##hipheight", &Options::HipHeight::Enabled);
 UI::Bind("##hipheight_key", &Options::HipHeight::Key);
 UI::SliderFloat("Height", &Options::HipHeight::Value, 0.0f, 20.0f, "%.1f");
 }
-UI::card::end();
+UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 8.0f * sc);
 ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-if (UI::card::begin("##freecam", ImVec2(halfW, 150 * sc), "FREE CAM"))
+if (UI::CollapsibleSection("FREE CAM", halfW))
 {
 UI::labelsection("MAIN");
 UI::Checkbox("Enabled##freecam", &Options::FreeCam::Enabled);
 UI::Bind("##freecam_key", &Options::FreeCam::Key);
 UI::SliderFloat("Speed", &Options::FreeCam::Speed, 10.0f, 200.0f, "%.0f");
 }
-UI::card::end();
+UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 8.0f * sc);
 ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
-if (UI::card::begin("##stretchres", ImVec2(halfW, 150 * sc), "STRETCH RES"))
+if (UI::CollapsibleSection("STRETCH RES", halfW))
 {
 UI::labelsection("MAIN");
 UI::Checkbox("Enabled##stretchres", &Options::StretchRes::Enabled);
 UI::SliderFloat("Scale X", &Options::StretchRes::ScaleX, 0.5f, 2.0f, "%.2f");
 UI::SliderFloat("Scale Y", &Options::StretchRes::ScaleY, 0.5f, 2.0f, "%.2f");
 }
-UI::card::end();
+UI::CollapsibleEnd();
 }
 }
 else if (tab == 5)
@@ -2949,7 +2949,7 @@ else if (tab == 6)
 {
 UI::ContentHeader("GAME");
 ImGui::SetCursorPosX(ctX);
-if (UI::card::begin("##game_detection", ImVec2(fullW, 470 * sc), "GAME DETECTION"))
+if (UI::CollapsibleSection("GAME DETECTION", fullW))
 {
 UI::labelsection("DETECTED GAME");
 ImGui::TextDisabled("Name:");
@@ -2985,7 +2985,7 @@ UI::Checkbox("All Auto", &Options::ArsenalGunmods::AllAuto);
 UI::Checkbox("Infinite Ammo", &Options::ArsenalGunmods::InfiniteAmmo);
 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows the current curse name on the HUD. Enabled automatically with Infinite Ammo.");
 }
-UI::card::end();
+UI::CollapsibleEnd();
 }
 
 ImGui::PopFont();
@@ -3148,10 +3148,10 @@ if (IsGameOnTop("Roblox"))
 	if (!menu_open)
 	{
 		RunAimCore(ImGui::GetBackgroundDrawList());
-		RunTriggerbot();
 		RunMacro();
 	}
-	else if (Options::Aimbot::ShowFOV)
+	RunTriggerbot();
+	if (Options::Aimbot::ShowFOV)
 	{
 		RunAimCore(ImGui::GetBackgroundDrawList());
 	}
@@ -3159,10 +3159,13 @@ if (IsGameOnTop("Roblox"))
 	RenderAdvancedFOV(ImGui::GetBackgroundDrawList());
 	RenderCrosshair(ImGui::GetBackgroundDrawList());
 	CombatFeedback::Render(ImGui::GetBackgroundDrawList());
-	RenderESP(ImGui::GetBackgroundDrawList());
-	
-	if (Options::ESP::Arrows) RenderArrows(ImGui::GetBackgroundDrawList());
-	if (Options::ESP::Radar) RenderRadar(ImGui::GetBackgroundDrawList());
+	// ESP intentionally disabled: keeping the overlay a normal (non-topmost,
+	// non-transparent) window to clear the overlay-geometry detection layer.
+	// RunTriggerbot() does not depend on ESP or the overlay, so it still works.
+	//RenderESP(ImGui::GetBackgroundDrawList());
+
+	//if (Options::ESP::Arrows) RenderArrows(ImGui::GetBackgroundDrawList());
+	//if (Options::ESP::Radar) RenderRadar(ImGui::GetBackgroundDrawList());
 	
 	if (Options::Desync::Enabled && Options::Desync::ShowVisual)
 		DesyncVisual::RenderDesyncVisual(ImGui::GetBackgroundDrawList());
@@ -3180,12 +3183,15 @@ MenuWeather::Render(ImGui::GetBackgroundDrawList(), ImVec2(0.0f, 0.0f), displayS
 
 RenderKeybindList(ImGui::GetBackgroundDrawList());
 
-std::string str = "Seraph | " + std::to_string(static_cast<int>(io.Framerate)) + " FPS";
+std::string str = SX("S") + std::string(" | ") + std::to_string(static_cast<int>(io.Framerate)) + " FPS";
 ImVec2 textSize = ImGui::CalcTextSize(str.c_str());
 ImVec2 pos = ImVec2(io.DisplaySize.x - textSize.x - 10.0f, 10.0f);
 ImDrawList* drawList = ImGui::GetBackgroundDrawList();
 drawList->AddText(pos, IM_COL32(255, 255, 255, 255), str.c_str());
 }
+
+if (Options::Misc::ExplorerEnabled)
+    gui::render_explorer_window(&Options::Misc::ExplorerEnabled);
 
 ImGui::Render();
 const float clear_color_with_alpha[4] = { clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w };
@@ -3201,13 +3207,15 @@ ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
 
+    gui::explorer_shutdown();
+
     CleanupDeviceD3D();
     ::DestroyWindow(hwnd);
     ::UnregisterClassW(wc.lpszClassName, wc.hInstance);
     CoUninitialize();
 
     Globals::overlayDone = true;
-    SeraphLog("[Seraph] ShowImgui: overlay teardown complete, overlayDone=true");
+    SeraphLog("[S] ShowImgui: overlay teardown complete, overlayDone=true");
 }
 
 bool CreateDeviceD3D(HWND hWnd)

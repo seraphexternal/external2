@@ -257,40 +257,17 @@ namespace CombatFeedback
             return;
         LastHitSoundTime() = now;
 
-        // If custom file is set, use it
-        if (Options::Combat::HitSoundFile[0] != '\0')
-        {
-            std::string path = Options::Combat::HitSoundFile;
-            PlaySoundA(path.c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
-            return;
-        }
-
-        // Auto-use first file from hitsounds folder if available
+        // Play the selected file from the hitsounds folder next to the exe
         auto& files = Globals::HitSounds::Files;
-        if (!files.empty())
-        {
-            std::string path = Globals::HitSounds::FolderPath + "\\" + files[0];
-            PlaySoundA(path.c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+        if (files.empty())
             return;
-        }
 
-        // Built-in presets fallback
-        switch (Options::Combat::HitSoundType)
-        {
-            case 1: PlayTone(800, 120, 0.85f, 10); break;      // bell
-            case 2: PlayTone(150, 200, 1.0f, 20); break;       // bass
-            case 3: PlayTwoTone(200, 400, 80, 80, 0.9f, 15); break; // hvhpissy
-            case 4: PlayTwoTone(600, 800, 50, 50, 0.9f, 15); break; // hvhks
-            case 5: PlayTwoTone(400, 600, 100, 50, 0.9f, 15); break; // hvhtag
-            case 6: PlayTone(1800, 45, 0.85f, 10); break;      // neverlose
-            case 7: PlayTwoTone(1200, 600, 50, 50); break;     // rust
-            case 8: PlayTwoTone(1000, 3000, 30, 30); break;    // quake
-            case 9: PlayTone(1200, 80, 0.8f, 10); break;       // cod
-            case 10: PlayTwoTone(400, 800, 40, 40); break;     // bubble
-            case 11: PlayTone(1000, 80, 0.8f, 10); break;      // minecraft
-            case 12: PlayTwoTone(2000, 1000, 40, 60); break;   // fatality
-            default: PlayTone(1800, 45, 0.85f, 10); break;     // click (default)
-        }
+        int idx = Options::Combat::HitSoundType;
+        if (idx < 0 || idx >= (int)files.size())
+            idx = 0;
+
+        std::string path = Globals::HitSounds::FolderPath + "\\" + files[idx];
+        PlaySoundA(path.c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
     }
 
     inline float ReadLiveHealth(const RobloxPlayer& player)

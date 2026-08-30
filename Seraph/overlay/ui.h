@@ -269,8 +269,10 @@ namespace UI
             ImGui::TextColored(*v ? P.textStrong : P.textMid, "%s", label);
         }
         
-        // Align toggle switch absolutely to the right margin of the card
-        float toggleX = ImGui::GetWindowContentRegionMax().x - w - 4.0f;
+        // Align toggle switch absolutely to the right margin of the card.
+        // Use the fixed window width (not ContentRegionMax) so the position is
+        // not shifted when a vertical scrollbar appears on the card.
+        float toggleX = (ImGui::GetWindowSize().x - ImGui::GetStyle().WindowPadding.x) - w - 4.0f;
         ImGui::SameLine();
         ImGui::SetCursorPosX(toggleX);
         
@@ -799,7 +801,12 @@ namespace UI
         ImDrawList* dl = ImGui::GetWindowDrawList();
         const float avail = ImGui::GetContentRegionAvail().x;
 
-        ImGui::TextColored(P.textDim, "%s", label);
+        // Strip the "##id" suffix for display (it only exists to keep ImGui IDs unique).
+        const char* hash = strstr(label, "##");
+        if (hash)
+            ImGui::TextColored(P.textDim, "%.*s", static_cast<int>(hash - label), label);
+        else
+            ImGui::TextColored(P.textDim, "%s", label);
 
         ImVec2 p = ImGui::GetCursorScreenPos();
         const float w = avail, h = 32.0f;
@@ -885,6 +892,63 @@ namespace UI
         ImGui::PopStyleColor();
         ImGui::Dummy(ImVec2(0.0f, 4.0f));
     }
+
+// Clickable, collapsible group header with card styling.
+// Usage:
+//   if (UI::CollapsibleSection("TITLE", width)) {
+//       // content
+//       UI::CollapsibleEnd();
+//   }
+inline bool CollapsibleSection(const char* label, float width, bool defaultOpen = true)
+{
+    ImGuiID id = ImGui::GetID(label) ^ 0x5151u;
+    ImGuiStorage* store = ImGui::GetStateStorage();
+    bool open = store->GetBool(id, defaultOpen);
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, P.card);
+    ImGui::PushStyleColor(ImGuiCol_Border, P.line);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
+
+    ImGui::BeginChild(label, ImVec2(width, 0), true, ImGuiWindowFlags_None);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    const float hdrH = 26.0f;
+
+    ImGui::InvisibleButton("##csbtn", ImVec2(width, hdrH));
+    if (ImGui::IsItemClicked())
+    {
+        open = !open;
+        store->SetBool(id, open);
+    }
+    bool hov = ImGui::IsItemHovered();
+
+    if (hov)
+        dl->AddRectFilled(p, ImVec2(p.x + width, p.y + hdrH), U(P.surfaceHi), 3.0f);
+    dl->AddRectFilled(p, ImVec2(p.x + 2.0f, p.y + hdrH), U(P.accent), 1.0f);
+    dl->AddText(ImVec2(p.x + 10.0f, p.y + (hdrH - ImGui::GetFontSize()) * 0.5f),
+        U(open ? P.textStrong : P.textDim), label);
+    const char* ind = open ? "-" : "+";
+    float iw = ImGui::CalcTextSize(ind).x;
+    dl->AddText(ImVec2(p.x + width - iw - 8.0f, p.y + (hdrH - ImGui::GetFontSize()) * 0.5f),
+        U(P.textDim), ind);
+
+    ImGui::Dummy(ImVec2(0, 4.0f));
+    ImVec2 sp = ImGui::GetCursorScreenPos();
+    dl->AddLine(ImVec2(sp.x, sp.y), ImVec2(sp.x + width, sp.y), U(P.divider), 1.0f);
+    ImGui::Dummy(ImVec2(0, 6.0f));
+
+    return open;
+}
+
+inline void CollapsibleEnd()
+{
+    ImGui::EndChild();
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(2);
+}
 
     inline void gap(float px = 4.0f) { ImGui::Dummy(ImVec2(0.0f, px)); }
 

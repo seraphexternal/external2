@@ -61,6 +61,8 @@ Globals::Roblox::DataModel = dataModel;
 			Globals::Roblox::isPhantomForces = (Globals::Roblox::lastPlaceID == Globals::Roblox::PHANTOM_FORCES_ID);
 			Globals::Roblox::isRivals = (Globals::Roblox::lastPlaceID == Globals::Roblox::RIVALS_ID);
 			Globals::Roblox::isOverkill = (Globals::Roblox::lastPlaceID == Globals::Roblox::OVERKILL_ID);
+			Globals::Roblox::isMM2 = (Globals::Roblox::lastPlaceID == Globals::Roblox::MM2_ID);
+			Globals::Roblox::isBladeBall = (Globals::Roblox::lastPlaceID == Globals::Roblox::BLADEBALL_ID);
 
 			Globals::Caches::CachedPlayers.clear();
 			Globals::Caches::CachedPlayerObjects.clear();

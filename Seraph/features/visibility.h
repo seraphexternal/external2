@@ -31,11 +31,13 @@ namespace Visibility
     inline std::atomic<int> refreshCooldown{0};
     inline std::unordered_map<uintptr_t, bool> playerVisibleCache;
     inline std::unordered_map<uintptr_t, bool> pointVisibleCache;
+    inline std::unordered_map<uintptr_t, bool> occludedCache;
 
     inline void BeginFrame()
     {
         playerVisibleCache.clear();
         pointVisibleCache.clear();
+        occludedCache.clear();
     }
 
     inline uintptr_t GetModelAncestor(uintptr_t instanceAddress)
@@ -372,8 +374,45 @@ namespace Visibility
 
         if (player.Head.address && IsPointVisible(player.Head.Position(), ignoreModel))
             return true;
-
         if (player.HumanoidRootPart.address && IsPointVisible(player.HumanoidRootPart.Position(), ignoreModel))
+            return true;
+        if (player.Upper_Torso.address && IsPointVisible(player.Upper_Torso.Position(), ignoreModel))
+            return true;
+        if (player.Lower_Torso.address && IsPointVisible(player.Lower_Torso.Position(), ignoreModel))
+            return true;
+        if (player.Torso.address && IsPointVisible(player.Torso.Position(), ignoreModel))
+            return true;
+        if (player.Left_Upper_Arm.address && IsPointVisible(player.Left_Upper_Arm.Position(), ignoreModel))
+            return true;
+        if (player.Left_Lower_Arm.address && IsPointVisible(player.Left_Lower_Arm.Position(), ignoreModel))
+            return true;
+        if (player.Left_Hand.address && IsPointVisible(player.Left_Hand.Position(), ignoreModel))
+            return true;
+        if (player.Left_Arm.address && IsPointVisible(player.Left_Arm.Position(), ignoreModel))
+            return true;
+        if (player.Right_Upper_Arm.address && IsPointVisible(player.Right_Upper_Arm.Position(), ignoreModel))
+            return true;
+        if (player.Right_Lower_Arm.address && IsPointVisible(player.Right_Lower_Arm.Position(), ignoreModel))
+            return true;
+        if (player.Right_Hand.address && IsPointVisible(player.Right_Hand.Position(), ignoreModel))
+            return true;
+        if (player.Right_Arm.address && IsPointVisible(player.Right_Arm.Position(), ignoreModel))
+            return true;
+        if (player.Left_Upper_Leg.address && IsPointVisible(player.Left_Upper_Leg.Position(), ignoreModel))
+            return true;
+        if (player.Left_Lower_Leg.address && IsPointVisible(player.Left_Lower_Leg.Position(), ignoreModel))
+            return true;
+        if (player.Left_Foot.address && IsPointVisible(player.Left_Foot.Position(), ignoreModel))
+            return true;
+        if (player.Left_Leg.address && IsPointVisible(player.Left_Leg.Position(), ignoreModel))
+            return true;
+        if (player.Right_Upper_Leg.address && IsPointVisible(player.Right_Upper_Leg.Position(), ignoreModel))
+            return true;
+        if (player.Right_Lower_Leg.address && IsPointVisible(player.Right_Lower_Leg.Position(), ignoreModel))
+            return true;
+        if (player.Right_Foot.address && IsPointVisible(player.Right_Foot.Position(), ignoreModel))
+            return true;
+        if (player.Right_Leg.address && IsPointVisible(player.Right_Leg.Position(), ignoreModel))
             return true;
 
         return false;
@@ -405,6 +444,18 @@ namespace Visibility
         if (!Globals::Roblox::Camera.address)
             return false;
 
+        // Cache the result per frame so multiple features (aimbot/triggerbot/
+        // ragebot/chams/silentaim/orbit) don't each re-raycast the same player.
+        // BeginFrame() clears this every frame. A player's visibility can't
+        // change on its own within one frame, so this is safe.
+        if (player.address != 0)
+        {
+            const auto it = occludedCache.find(player.address);
+            if (it != occludedCache.end())
+                return it->second;
+        }
+
+        bool result;
         if (MapParser::IsCacheReady())
         {
             const uintptr_t ignoreModel = player.Character.address;
@@ -414,7 +465,7 @@ namespace Visibility
                 origin = Memory->read<Vectors::Vector3>(
                     Globals::Roblox::Camera.address + Offsets::Camera::Position);
             }
-            catch (...) { return false; }
+            catch (...) { result = false; goto store; }
 
             auto pointBlocked = [&](const Vectors::Vector3& target) -> bool
             {
@@ -438,15 +489,47 @@ namespace Visibility
                 return IsMapBlocking(origin, delta, distance, ignoreModel);
             };
 
-            // Occluded only when both the head and the humanoid root are blocked.
-            if (player.Head.address && !pointBlocked(player.Head.Position()))
+            // Occluded only when ALL body parts are blocked.  If any single
+            // part has line-of-sight the player is considered visible so the
+            // aimbot / triggerbot can fire at peeking enemies.
+            auto check = [&](const RobloxInstance& part) -> bool
+            {
+                if (part.address && !pointBlocked(part.Position()))
+                    return true;
                 return false;
-            if (player.HumanoidRootPart.address && !pointBlocked(player.HumanoidRootPart.Position()))
-                return false;
-            return true;
+            };
+            if (check(player.Head)) result = false; else
+            if (check(player.HumanoidRootPart)) result = false; else
+            if (check(player.Upper_Torso)) result = false; else
+            if (check(player.Lower_Torso)) result = false; else
+            if (check(player.Torso)) result = false; else
+            if (check(player.Left_Upper_Arm)) result = false; else
+            if (check(player.Left_Lower_Arm)) result = false; else
+            if (check(player.Left_Hand)) result = false; else
+            if (check(player.Left_Arm)) result = false; else
+            if (check(player.Right_Upper_Arm)) result = false; else
+            if (check(player.Right_Lower_Arm)) result = false; else
+            if (check(player.Right_Hand)) result = false; else
+            if (check(player.Right_Arm)) result = false; else
+            if (check(player.Left_Upper_Leg)) result = false; else
+            if (check(player.Left_Lower_Leg)) result = false; else
+            if (check(player.Left_Foot)) result = false; else
+            if (check(player.Left_Leg)) result = false; else
+            if (check(player.Right_Upper_Leg)) result = false; else
+            if (check(player.Right_Lower_Leg)) result = false; else
+            if (check(player.Right_Foot)) result = false; else
+            if (check(player.Right_Leg)) result = false; else
+                result = true;
+        }
+        else
+        {
+            result = !IsPlayerVisibleImpl(player);
         }
 
-        return !IsPlayerVisibleImpl(player);
+    store:
+        if (player.address != 0)
+            occludedCache[player.address] = result;
+        return result;
     }
 
     inline ImU32 MakeColor(const float rgb[3], int alpha = 255)

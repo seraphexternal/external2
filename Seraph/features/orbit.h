@@ -199,12 +199,29 @@ inline void OrbitLoop()
                 featureOn = true; // No key set — treat as always on when Enabled
         }
 
+        // Hold the character in place (no gravity / humanoid fighting) while we
+        // steer it with velocity, then restore when orbit stops. Without this the
+        // humanoid controller zeroes our velocity between updates and the orbit
+        // looks like it moves in discrete steps.
+        auto setPlatformStand = [](bool on) {
+            try {
+                auto lp = Globals::Roblox::LocalPlayer;
+                if (!lp.address) return;
+                auto ch = lp.Character();
+                if (!ch.address) return;
+                auto h = ch.FindFirstChildWhichIsA("Humanoid");
+                if (h.address)
+                    Memory->write<uint8_t>(h.address + Offsets::Humanoid::PlatformStand, on ? 1 : 0);
+            } catch (...) {}
+        };
+
         if (!featureOn)
         {
             // Reset lock so the next activation grabs a fresh target.
             g_orbitLockedPlayer = 0;
             g_orbitAngle = 0.0;
             g_orbitInitTime = false;
+            setPlatformStand(false);
             continue;
         }
 
@@ -243,10 +260,15 @@ inline void OrbitLoop()
         }
 
         if (!target.address || !target.HumanoidRootPart.address)
+        {
+            setPlatformStand(false);
             continue;
+        }
 
         try
         {
+            setPlatformStand(true);
+
             auto localPlayer = Globals::Roblox::LocalPlayer;
             if (!localPlayer.address)
                 continue;

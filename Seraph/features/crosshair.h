@@ -1,7 +1,8 @@
 #pragma once
 #include "../overlay/imgui/imgui.h"
 #include "../rbx/globals/options.h"
-#include <windows.h>
+#include "obfuscate.h"
+#include <windows.h>               
 #include <cmath>
 #include <algorithm>
 
@@ -122,11 +123,11 @@ inline void RenderCrosshair(ImDrawList* drawList)
 
     // Draw "Seraph.gg" text below crosshair
     if (Options::Crosshair::ShowText) {
-        const char* Seraph = "Seraph";
+        const std::string Seraph = SX("Seraph");
         const char* dotWin = ".gg";
 
         ImFont* font = ImGui::GetFont();
-        float SeraphW = font->CalcTextSizeA(font->FontSize, FLT_MAX, 0.0f, Seraph).x;
+        float SeraphW = font->CalcTextSizeA(font->FontSize, FLT_MAX, 0.0f, Seraph.c_str()).x;
         float dotWinW = font->CalcTextSizeA(font->FontSize, FLT_MAX, 0.0f, dotWin).x;
         float totalW = SeraphW + dotWinW;
 
@@ -140,13 +141,13 @@ inline void RenderCrosshair(ImDrawList* drawList)
         for (int dx = -1; dx <= 1; ++dx) {
             for (int dy = -1; dy <= 1; ++dy) {
                 if (dx || dy) {
-                    drawList->AddText(ImVec2(textPos.x + dx, textPos.y + dy), outlineColor, Seraph);
+                    drawList->AddText(ImVec2(textPos.x + dx, textPos.y + dy), outlineColor, Seraph.c_str());
                 }
             }
         }
 
         // Draw main text for "Seraph"
-        drawList->AddText(textPos, colWhite, Seraph);
+        drawList->AddText(textPos, colWhite, Seraph.c_str());
 
         // Draw outline for ".win"
         for (int dx = -1; dx <= 1; ++dx) {

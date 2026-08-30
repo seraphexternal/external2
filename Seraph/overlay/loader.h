@@ -16,6 +16,7 @@
 #include "imgui/imgui_impl_dx11.h"
 #include "../rbx/globals/options.h"
 #include "../rbx/globals/globals.h"
+#include "../features/obfuscate.h"
 #include "../rbx/configs/configs.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -69,9 +70,8 @@ namespace Loader
     static float                   l_LogoPulse = 0.0f;
 
     static const char* ProcessPresets[] = {
-        "RuntimeBroker", "SearchProtocolHost", "SearchFilterHost",
-        "DllHost", "backgroundTaskHost", "ApplicationFrameHost",
-        "CompPkgSusp", "smartscreen",
+        "MicrosoftEdgeUpdate", "OneDriveSetup", "SearchApp", "Widgets",
+        "GameBar", "OneDriveStandaloneUpdater", "MicrosoftEdge", "OneDrive",
     };
     static const int ProcessPresetCount = 8;
 
@@ -306,7 +306,7 @@ namespace Loader
         static const char* loadingMessages[] = {
             "Initializing...", "Locating Roblox...", "Bypassing Byfron...",
             "Loading Modules...", "Connecting to Client...",
-            "Preparing Interface...", "Finalizing...", "Launching Seraph..."
+            "Preparing Interface...", "Finalizing...", "Launching Modules..."
         };
         const int messageCount = 8;
 
@@ -525,12 +525,12 @@ namespace Loader
 
         // ── Welcome to Seraph ──────────────────────────────────────
         {
-            const char* welcome = "Welcome to Seraph";
+            const std::string welcome = SX("Welcome to Seraph");
             float welcomeSize = 22.0f;
-            float sw = ImGui::GetFont()->CalcTextSizeA(welcomeSize, FLT_MAX, 0.0f, welcome).x;
+            float sw = ImGui::GetFont()->CalcTextSizeA(welcomeSize, FLT_MAX, 0.0f, welcome.c_str()).x;
             dl->AddText(ImGui::GetFont(), welcomeSize,
                 ImVec2(center.x - sw * 0.5f, center.y + 14.0f),
-                Pal(0.88f, 0.92f, 0.96f, l_SplashFade * 0.95f), welcome);
+                Pal(0.88f, 0.92f, 0.96f, l_SplashFade * 0.95f), welcome.c_str());
         }
 
         // ── Loading bar ────────────────────────────────────────────
@@ -704,14 +704,14 @@ namespace Loader
                 sCol, 2.5f, 24);
         }
 
-        // SERAPH title — 22px SemiBold
+        // SERAPH title — 22px SemiBold (XOR-obfuscated so it's not in the binary)
         {
             float tx = wp.x + 42.0f + slideY;
             float ty = wp.y + 7.0f;
             if (l_Font_Display)
-                dl->AddText(l_Font_Display, 0, ImVec2(tx, ty), Pal(0.961f, 0.969f, 0.980f), "SERAPH");
+                dl->AddText(l_Font_Display, 0, ImVec2(tx, ty), Pal(0.961f, 0.969f, 0.980f), SX("SERAPH").c_str());
             else
-                dl->AddText(ImGui::GetFont(), 22.0f, ImVec2(tx, ty), Pal(0.961f, 0.969f, 0.980f), "SERAPH");
+                dl->AddText(ImGui::GetFont(), 22.0f, ImVec2(tx, ty), Pal(0.961f, 0.969f, 0.980f), SX("SERAPH").c_str());
         }
 
         // Version and platform badges — 11px with subtle border
@@ -1227,15 +1227,19 @@ namespace Loader
     // ── Main entry ─────────────────────────────────────────────────────
     static bool Run()
     {
-        // Window class with drop shadow
+        // Window class with drop shadow (XOR-obfuscated class name; persists for the process)
+        static const std::wstring clsName = [] {
+            std::string n = SX("SeraphLoader");
+            return std::wstring(n.begin(), n.end());
+        }();
         WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC | CS_DROPSHADOW, WndProc, 0, 0,
             GetModuleHandleW(nullptr), nullptr, nullptr, nullptr, nullptr,
-            L"SeraphLoader", nullptr };
+            clsName.c_str(), nullptr };
         RegisterClassExW(&wc);
 
         int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
         int ww = 480, wh = 600;
-        l_Hwnd = CreateWindowW(wc.lpszClassName, L"Fleasion", WS_POPUP | WS_VISIBLE,
+        l_Hwnd = CreateWindowW(clsName.c_str(), L"Fleasion", WS_POPUP | WS_VISIBLE,
             (sw - ww) / 2, (sh - wh) / 2, ww, wh, nullptr, nullptr, wc.hInstance, nullptr);
 
         // Enable rounded corners on Windows 11 (silently ignored on older builds)

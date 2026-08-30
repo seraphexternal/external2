@@ -11,6 +11,7 @@
 #include "combatfeedback.h"
 #include "visibility.h"
 #include "silentaim.h"
+#include "playerfilter.h"
 
 namespace RivalsDetect
 {
@@ -418,6 +419,11 @@ inline RobloxPlayer GetClosestPlayer()
         if (Globals::Roblox::isOverkill && Globals::Roblox::LocalPlayer.address &&
             !player.Name.empty() &&
             player.Name == Globals::Roblox::LocalPlayer.Name())
+            continue;
+
+        // Player filter: skip excluded/friends and, when focusing, only keep
+        // players the user marked as Focus.
+        if (!player.Name.empty() && !PlayerFilter::AimbotAllowed(player.Name))
             continue;
 
         if (Options::Aimbot::TeamCheck && IsTeammate(player))

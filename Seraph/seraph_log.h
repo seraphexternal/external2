@@ -4,6 +4,7 @@
 #include <chrono>
 #include <string>
 #include <windows.h>
+#include "features/obfuscate.h"
 #include "rbx/globals/options.h"
 
 // Debug trace helper. Always emits via OutputDebugStringA (visible only to a
@@ -20,9 +21,9 @@ inline std::string GetSeraphLogPath()
         base = env;
         free(env);
     }
-    std::string dir = base + "\\Seraph";
+    std::string dir = base + SX("\\Seraph");
     CreateDirectoryA(dir.c_str(), nullptr);
-    return dir + "\\seraph_log.txt";
+    return dir + SX("\\seraph_log.txt");
 }
 
 inline void SeraphLog(const std::string& msg)

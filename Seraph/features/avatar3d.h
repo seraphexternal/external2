@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "stb_image.h"
 
@@ -60,7 +60,7 @@ namespace Avatar3D
     inline std::string HttpGet(const std::string& url)
     {
         std::string response;
-        HINTERNET hIn = InternetOpenA("Seraph3D", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+        HINTERNET hIn = InternetOpenA("Mozilla/5.0 (Windows NT 10.0; Win64; x64)", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
         if (!hIn) return response;
         HINTERNET hUrl = InternetOpenUrlA(hIn, url.c_str(), NULL, 0,
             INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI, 0);
@@ -82,7 +82,7 @@ namespace Avatar3D
     inline std::vector<unsigned char> HttpGetBinary(const std::string& url)
     {
         std::vector<unsigned char> data;
-        HINTERNET hIn = InternetOpenA("Seraph3D", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+        HINTERNET hIn = InternetOpenA("Mozilla/5.0 (Windows NT 10.0; Win64; x64)", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
         if (!hIn) return data;
         HINTERNET hUrl = InternetOpenUrlA(hIn, url.c_str(), NULL, 0,
             INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI | INTERNET_FLAG_NEED_FILE, 0);
@@ -590,7 +590,7 @@ namespace Avatar3D
         if (maxExt < 0.01f) maxExt = 1.0f;
 
         // MUST match RenderModel's projection (fitSize/fov) so the ESP overlay
-        // bounding box lines up with the rendered avatar — otherwise the skeleton
+        // bounding box lines up with the rendered avatar â€” otherwise the skeleton
         // and ESP boxes drift relative to the model on screen.
         float fitSize = fminf(size.x, size.y) * 0.65f;
         float scale = fitSize / maxExt;

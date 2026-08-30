@@ -5,6 +5,7 @@
 #include "../overlay/utils/W2S.h"
 #include "../overlay/imgui/imgui.h"
 #include "../overlay/imgui/KeyBind.h"
+#include "visibility.h"
 #include <thread>
 #include <chrono>
 #include <mutex>
@@ -85,6 +86,23 @@ namespace DesyncVisual
         // Fallback for missing Globals
         if (!Globals::Roblox::LocalPlayer.address) return;
 
+        auto character = Globals::Roblox::LocalPlayer.Character();
+        if (!character.address) return;
+
+        // Wall Check: hide the ghost when your real character is behind geometry.
+        if (Options::Desync::WallCheck)
+        {
+            auto hrp = character.FindFirstChild("HumanoidRootPart");
+            if (!hrp.address) hrp = character.FindFirstChild("Torso");
+            if (!hrp.address) hrp = character.FindFirstChild("UpperTorso");
+            if (hrp.address)
+            {
+                Vectors::Vector3 localPos = hrp.Position();
+                if (!Visibility::IsPointVisibleForced(localPos, character.address))
+                    return;
+            }
+        }
+
         // Rather than drawing a stickman, let's draw chams for the ghost
         // We will project the player's parts offset by the difference between ghost and real pos
         Vectors::Vector3 offset = gPos - rPos;
@@ -93,7 +111,6 @@ namespace DesyncVisual
         // if too close, don't render to avoid clutter
         if (dist < 1.0f) return;
 
-        auto character = Globals::Roblox::LocalPlayer.Character();
         if (!character.address) return;
 
         std::vector<RobloxInstance> partsToDraw;
@@ -109,17 +126,6 @@ namespace DesyncVisual
             }
         }
         
-        // Also get accessories
-        for (auto& child : children)
-        {
-            std::string cls = child.Class();
-            if (cls == "Accessory" || cls == "Hat" || cls == "Backpack" || cls == "Tool")
-            {
-                auto handle = child.FindFirstChild("Handle");
-                if (handle.address) partsToDraw.push_back(handle);
-            }
-        }
-
         if (partsToDraw.empty()) return;
 
         // Group projected corners by limb so the visualizer renders chams

@@ -5,6 +5,7 @@
 #include "../rbx/math/math.h"
 #include "../overlay/utils/W2S.h"
 #include "../overlay/imgui/imgui.h"
+#include "visibility.h"
 #include <vector>
 #include <algorithm>
 #include <unordered_map>
@@ -211,11 +212,15 @@ namespace Chams
         if (!Options::Chams::Enabled || !player.address) return;
         if (Options::Chams::TeamCheck && IsTeammate(player)) return;
         if (player.address == Globals::Roblox::LocalPlayer.address) return;
+        if (Options::Chams::WallCheck && Visibility::IsPlayerOccluded(player)) return;
 
         auto limbs = Get_LimbGroups(player);
         if (limbs.empty()) return;
 
         g_CurrentFrame++;
+
+        const bool usePerPart = Options::Chams::PerPartColors;
+        const uintptr_t ignoreModel = player.Character.address;
 
         ImU32 outlineColor = IM_COL32(
             static_cast<int>(Options::Chams::OutlineColor[0] * 255.f),
@@ -229,12 +234,36 @@ namespace Chams
             auto hull = GetOrCreateHull(player, limb);
             if (hull.size() < 3) continue;
 
-            ImU32 outlineColor = IM_COL32(
-                static_cast<int>(Options::Chams::OutlineColor[0] * 255.f),
-                static_cast<int>(Options::Chams::OutlineColor[1] * 255.f),
-                static_cast<int>(Options::Chams::OutlineColor[2] * 255.f),
-                static_cast<int>(Options::Chams::OutlineColor[3] * 255.f)
-            );
+            ImU32 limbColor;
+            if (usePerPart)
+            {
+                bool limbVisible = false;
+                for (auto& part : limb.parts)
+                {
+                    if (part.address && Visibility::IsPointVisibleCached(
+                        player.address ^ ((uintptr_t)&limb & 0xFFFF),
+                        part.Position(), ignoreModel))
+                    {
+                        limbVisible = true;
+                        break;
+                    }
+                }
+                const float* col = limbVisible ? Options::Chams::ChamsVisibleColor : Options::Chams::ChamsOccludedColor;
+                limbColor = IM_COL32(
+                    static_cast<int>(col[0] * 255.f),
+                    static_cast<int>(col[1] * 255.f),
+                    static_cast<int>(col[2] * 255.f),
+                    static_cast<int>(col[3] * 255.f));
+            }
+            else
+            {
+                limbColor = ImGui::ColorConvertFloat4ToU32({
+                    Options::Chams::FillColor[0],
+                    Options::Chams::FillColor[1],
+                    Options::Chams::FillColor[2],
+                    Options::Chams::FillColor[3]
+                });
+            }
 
             float minY = hull[0].y, maxY = hull[0].y;
             for (auto& p : hull) { if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y; }
@@ -305,38 +334,16 @@ namespace Chams
             }
             else if (Options::Chams::Wireframe)
             {
-                ImU32 c = ImGui::ColorConvertFloat4ToU32({ 
-                    Options::Chams::FillColor[0], 
-                    Options::Chams::FillColor[1], 
-                    Options::Chams::FillColor[2], 
-                    Options::Chams::FillColor[3] 
-                });
-                drawList->AddPolyline(hull.data(), static_cast<int>(hull.size()), IM_COL32(
-                    static_cast<int>(Options::Chams::OutlineColor[0] * 255.f),
-                    static_cast<int>(Options::Chams::OutlineColor[1] * 255.f),
-                    static_cast<int>(Options::Chams::OutlineColor[2] * 255.f),
-                    static_cast<int>(Options::Chams::OutlineColor[3] * 255.f)
-                ), true, Options::Chams::WireframeThickness);
+                drawList->AddPolyline(hull.data(), static_cast<int>(hull.size()), outlineColor, true, Options::Chams::WireframeThickness);
             }
             else
             {
-                ImU32 c = ImGui::ColorConvertFloat4ToU32({ 
-                    Options::Chams::FillColor[0], 
-                    Options::Chams::FillColor[1], 
-                    Options::Chams::FillColor[2], 
-                    Options::Chams::FillColor[3] 
-                });
-                drawList->AddConvexPolyFilled(hull.data(), static_cast<int>(hull.size()), c);
+                drawList->AddConvexPolyFilled(hull.data(), static_cast<int>(hull.size()), limbColor);
             }
 
             if (!Options::Chams::Wireframe)
             {
-                drawList->AddPolyline(hull.data(), static_cast<int>(hull.size()), IM_COL32(
-                    static_cast<int>(Options::Chams::OutlineColor[0] * 255.f),
-                    static_cast<int>(Options::Chams::OutlineColor[1] * 255.f),
-                    static_cast<int>(Options::Chams::OutlineColor[2] * 255.f),
-                    static_cast<int>(Options::Chams::OutlineColor[3] * 255.f)
-                ), true, 2.0f);
+                drawList->AddPolyline(hull.data(), static_cast<int>(hull.size()), outlineColor, true, 2.0f);
             }
         }
     }

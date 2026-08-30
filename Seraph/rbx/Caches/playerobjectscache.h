@@ -144,8 +144,10 @@ inline void CachePlayerObjects()
 			tempList.push_back(p);
 		}
 
-		Globals::Caches::CachedPlayerObjects.clear();
-		Globals::Caches::CachedPlayerObjects = tempList;
+		{
+			std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
+			Globals::Caches::CachedPlayerObjects = std::move(tempList);
+		}
 
 		if (Globals::Roblox::LocalPlayer.address != 0)
 		{

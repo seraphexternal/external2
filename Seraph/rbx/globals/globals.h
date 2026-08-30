@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <string>
 #include <cctype>
+#include <mutex>
 
 #include "../../Memory/MemoryManager.h"
 #include "../SDK/sdk.h"
@@ -86,6 +87,17 @@ namespace Globals
 		inline constexpr int RIVALS_ID = (int)17625359962;
 		inline bool isOverkill = false;
 		inline constexpr int OVERKILL_ID = (int)124842176624983;
+
+		inline bool isMM2 = false;
+		inline constexpr int MM2_ID = 142823291; // Murder Mystery 2
+		inline bool isBladeBall = false;
+		inline constexpr int BLADEBALL_ID = (int)13772394625; // Blade Ball
+    }
+
+    namespace BladeBall
+    {
+        inline bool isActive = false;     // true while an auto-parry is firing
+        inline std::string status = "idle";
     }
     namespace Viewport
     {
@@ -154,13 +166,34 @@ namespace Globals
     {
         inline std::vector<RobloxInstance> CachedPlayers;
         inline std::vector<RobloxPlayer> CachedPlayerObjects;
+        inline std::mutex CachedPlayerObjectsMutex;
         inline bool forceRefresh = false;
         inline bool playerCacheNeedsRefresh = false;
         inline bool playerObjectsCacheNeedsRefresh = false;
         inline std::unordered_map<uintptr_t, RobloxInstance> CharacterFallbackCache;
     }
     inline std::string executablePath;
+    inline std::string originalExeDir;
     inline std::string configsPath;
+
+    // Returns the directory containing the actual executable, trimmed of any
+    // trailing backslash. This prefers the original exe location because the
+    // process is optionally relaunched as a renamed copy in %TEMP% (Hide Process),
+    // in which case GetModuleFileName/executablePath would point at the temp copy
+    // and not at the folder the user placed files (hitsounds, models, configs) in.
+    inline std::string ResolveExeDir()
+    {
+        std::string dir;
+        if (!originalExeDir.empty())
+            dir = originalExeDir;
+        else
+            dir = executablePath;
+
+        while (!dir.empty() && (dir.back() == '\\' || dir.back() == '/'))
+            dir.pop_back();
+        return dir;
+    }
+
     inline uintptr_t ResolveTeamOffset()
     {
         if (DynamicOffsets::PlayerTeam != 0)

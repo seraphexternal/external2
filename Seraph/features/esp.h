@@ -1,8 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <urlmon.h>
 #include <wininet.h>
 #include <gdiplus.h>
+#include "obfuscate.h"
 #include <vector>
 #include <string>
 #include <unordered_map>
@@ -12,6 +13,8 @@
 #include <d3d11.h>
 #include "avatar3d.h"
 #include "hud_editor.h"
+#include "preview3d/preview3d.h"
+#include "playerfilter.h"
 
 #pragma comment(lib, "urlmon.lib")
 #pragma comment(lib, "wininet.lib")
@@ -57,7 +60,7 @@ namespace ESPPreviewAvatar
     inline std::string FetchUrl(const std::string& url)
     {
         std::string response;
-        HINTERNET hInternet = InternetOpenA("Seraph", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+        HINTERNET hInternet = InternetOpenA("Mozilla/5.0 (Windows NT 10.0; Win64; x64)", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
         if (hInternet)
         {
             HINTERNET hConnect = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0, INTERNET_FLAG_RELOAD, 0);
@@ -164,6 +167,7 @@ namespace ESPPreviewAvatar
 #include "../overlay/imgui/imgui.h"
 #include "../overlay/imgui/KeyBind.h"
 #include "../rbx/globals/options.h"
+#include "../overlay/ui.h"
 #include "../rbx/globals/globals.h"
 #include "combatfeedback.h"
 #include "visibility.h"
@@ -226,7 +230,7 @@ inline void GetPlayerHealth(const RobloxPlayer& player, float& health, float& ma
 
 inline bool EspAnyEnabled()
 {
-    return Options::ESP::BoxType != 0
+    return (Options::ESP::Box && Options::ESP::BoxType != 0)
         || Options::ESP::BoxFill
         || Options::ESP::Tracers
         || Options::ESP::Skeleton
@@ -328,8 +332,7 @@ inline void RenderESP(ImDrawList* drawList)
         }
     }
 
-    if (Options::ESP::VisibilityCheck || Options::ESP::VisibilityChams)
-        Visibility::RefreshOccludersIfNeeded();
+    Visibility::RefreshOccludersIfNeeded();
 
     ImFont* font = ImGui::GetFont();
     const ImGuiIO& io = ImGui::GetIO();
@@ -404,6 +407,10 @@ inline void RenderESP(ImDrawList* drawList)
     for (const auto& player : Globals::Caches::CachedPlayerObjects)
     {
         if (!player.address || player.address == Globals::Roblox::LocalPlayer.address)
+            continue;
+
+        // Player filter: hide excluded players and friends from the ESP.
+        if (!player.Name.empty() && !PlayerFilter::EspVisible(player.Name))
             continue;
 
         float skipHealth = 0.f;
@@ -502,27 +509,36 @@ inline void RenderESP(ImDrawList* drawList)
         const float scale = EspClamp(450.f / EspClamp(distance3D, 1.f, 4500.f), 0.65f, 2.5f);
 
         const bool playerVisible = Visibility::IsPlayerVisible(player);
-        const ImU32 activeBoxColor = Options::ESP::VisibilityCheck
-            ? (playerVisible ? Visibility::GetVisibleColor() : Visibility::GetHiddenColor())
-            : boxColor;
-        const ImU32 activeSkeletonColor = Options::ESP::VisibilityCheck
-            ? (playerVisible ? Visibility::GetVisibleColor() : Visibility::GetHiddenColor())
-            : skeletonColor;
-        const ImU32 activeTracerColor = Options::ESP::VisibilityCheck
-            ? (playerVisible ? Visibility::GetVisibleColor() : Visibility::GetHiddenColor())
-            : tracerColor;
-        const ImU32 activeNameColor = Options::ESP::VisibilityCheck
-            ? (playerVisible ? Visibility::GetVisibleColor() : Visibility::GetHiddenColor())
-            : nameColor;
-        const ImU32 activeHeadCircleColor = Options::ESP::VisibilityCheck
-            ? (playerVisible ? Visibility::GetVisibleColor() : Visibility::GetHiddenColor())
-            : headCircleColor;
-        const ImU32 activeHeadDotColor = Options::ESP::VisibilityCheck
-            ? (playerVisible ? Visibility::GetVisibleColor() : Visibility::GetHiddenColor())
-            : headDotColor;
+        const ImU32 activeBoxColor = Visibility::MakeColor(Options::ESP::BoxColor);
+        const ImU32 activeSkeletonColor = playerVisible
+            ? Visibility::MakeColor(Options::ESP::SkeletonVisibleColor) : Visibility::MakeColor(Options::ESP::SkeletonOccludedColor);
+        const ImU32 activeTracerColor = Visibility::MakeColor(Options::ESP::TracerColor);
+        const ImU32 activeNameColor = Visibility::MakeColor(Options::ESP::Color);
+        const ImU32 activeHeadCircleColor = playerVisible
+            ? Visibility::MakeColor(Options::ESP::HeadCircleVisibleColor) : Visibility::MakeColor(Options::ESP::HeadCircleOccludedColor);
+        const ImU32 activeHeadDotColor = Visibility::MakeColor(Options::ESP::HeadDotColor);
 
         if (Options::ESP::VisibilityChams)
             Visibility::DrawPlayerVisibilityChams(drawList, player, distance3D);
+
+        if (Options::ESP::CornerESP)
+        {
+            const ImU32 cornerColor = Visibility::MakeColor(Options::ESP::CornerColor);
+
+            const float cornerLen = EspClamp((right - left) * 0.22f, 6.0f, 24.0f);
+            const float t = Options::ESP::BoxThickness;
+
+            auto corner = [&](ImVec2 a, ImVec2 b, ImVec2 c)
+            {
+                drawList->AddLine(a, b, cornerColor, t);
+                drawList->AddLine(a, c, cornerColor, t);
+            };
+
+            corner(ImVec2(left, top), ImVec2(left + cornerLen, top), ImVec2(left, top + cornerLen));
+            corner(ImVec2(right, top), ImVec2(right - cornerLen, top), ImVec2(right, top + cornerLen));
+            corner(ImVec2(left, bottom), ImVec2(left + cornerLen, bottom), ImVec2(left, bottom - cornerLen));
+            corner(ImVec2(right, bottom), ImVec2(right - cornerLen, bottom), ImVec2(right, bottom - cornerLen));
+        }
 
         const auto headScreen = WorldToScreen(targetHead.Position());
         const ImVec2 head2D(headScreen.x, headScreen.y);
@@ -548,7 +564,7 @@ inline void RenderESP(ImDrawList* drawList)
             drawList->AddRect(ImVec2(left, top), ImVec2(right, bottom), hitOutline, 0.f, 0, 2.0f);
         }
 
-        if (Options::ESP::BoxFill && Options::ESP::BoxType == 1)
+        if (Options::ESP::Box && Options::ESP::BoxFill && Options::ESP::BoxType == 1)
         {
             if (Options::ESP::BoxFillGradient)
             {
@@ -604,7 +620,7 @@ inline void RenderESP(ImDrawList* drawList)
             }
         }
 
-        if (Options::ESP::BoxType == 1)
+        if (Options::ESP::Box && Options::ESP::BoxType == 1)
         {
             ImU32 boxCol = activeBoxColor;
             // Pulse: modulate the box alpha with a sine wave.
@@ -879,32 +895,7 @@ inline void RenderESP(ImDrawList* drawList)
             }
         }
 
-        if (Options::ESP::CornerESP)
-        {
-            const ImU32 cornerColor = Options::ESP::VisibilityCheck
-                ? (playerVisible ? Visibility::GetVisibleColor() : Visibility::GetHiddenColor())
-                : IM_COL32(
-                    static_cast<int>(Options::ESP::CornerColor[0] * 255.f),
-                    static_cast<int>(Options::ESP::CornerColor[1] * 255.f),
-                    static_cast<int>(Options::ESP::CornerColor[2] * 255.f),
-                    255);
-
-            const float cornerLen = EspClamp((right - left) * 0.22f, 6.0f, 24.0f);
-            const float t = Options::ESP::BoxThickness;
-
-            auto corner = [&](ImVec2 a, ImVec2 b, ImVec2 c)
-            {
-                drawList->AddLine(a, b, cornerColor, t);
-                drawList->AddLine(a, c, cornerColor, t);
-            };
-
-            corner(ImVec2(left, top), ImVec2(left + cornerLen, top), ImVec2(left, top + cornerLen));
-            corner(ImVec2(right, top), ImVec2(right - cornerLen, top), ImVec2(right, top + cornerLen));
-            corner(ImVec2(left, bottom), ImVec2(left + cornerLen, bottom), ImVec2(left, bottom - cornerLen));
-            corner(ImVec2(right, bottom), ImVec2(right - cornerLen, bottom), ImVec2(right, bottom - cornerLen));
-        }
-
-        if (Options::ESP::BoxType == 2)
+        if (Options::ESP::Box && Options::ESP::BoxType == 2)
         {
             const auto& hrp = player.HumanoidRootPart;
             const Vectors::Vector3 partPos = hrp.Position();
@@ -942,9 +933,7 @@ inline void RenderESP(ImDrawList* drawList)
             if (corners2D.size() >= 8)
             {
                 const float thickness = Options::ESP::ESP3DThickness;
-                const ImU32 active3DColor = Options::ESP::VisibilityCheck
-                    ? (playerVisible ? Visibility::GetVisibleColor() : Visibility::GetHiddenColor())
-                    : esp3DColor;
+                const ImU32 active3DColor = Visibility::MakeColor(Options::ESP::ESP3DColor);
 
                 drawList->AddLine(corners2D[0], corners2D[1], active3DColor, thickness);
                 drawList->AddLine(corners2D[1], corners2D[3], active3DColor, thickness);
@@ -1003,6 +992,8 @@ inline void RenderESP(ImDrawList* drawList)
                 255);
             const ImU32 outlineCol = IM_COL32(0, 0, 0, 255);
             const float thickness = Options::ESP::SkeletonThickness;
+            const bool perBone = true;
+            const uintptr_t skelIgnore = player.Character.address;
 
             auto W2S = [&](const Vectors::Vector3& worldPos, ImVec2& out) -> bool
             {
@@ -1013,35 +1004,57 @@ inline void RenderESP(ImDrawList* drawList)
                 return true;
             };
 
-            auto DrawPoly = [&](const ImVec2* points, int count)
+            auto DrawSeg = [&](const ImVec2& a, const ImVec2& b, const Vectors::Vector3& wa, const Vectors::Vector3& wb)
+            {
+                if (perBone)
+                {
+                    Vectors::Vector3 mid = { (wa.x + wb.x) * 0.5f, (wa.y + wb.y) * 0.5f, (wa.z + wb.z) * 0.5f };
+                    const uintptr_t key = (wa.x != 0.f) ? (uintptr_t)(wa.x * 1000.f) ^ ((uintptr_t)(wa.z * 1000.f) << 3) : 0;
+                    bool vis = Visibility::IsPointVisibleCached(key, mid, skelIgnore);
+                    ImU32 segCol = vis
+                        ? Visibility::MakeColor(Options::ESP::SkeletonVisibleColor)
+                        : Visibility::MakeColor(Options::ESP::SkeletonOccludedColor);
+                    drawList->AddLine(a, b, outlineCol, thickness + 2.f);
+                    drawList->AddLine(a, b, segCol, thickness);
+                }
+                else
+                {
+                    drawList->AddLine(a, b, outlineCol, thickness + 2.f);
+                    drawList->AddLine(a, b, skelCol, thickness);
+                }
+            };
+
+            auto DrawPoly = [&](const ImVec2* points, const Vectors::Vector3* worldPts, int count)
             {
                 if (count < 2) return;
-                drawList->AddPolyline(points, count, outlineCol, false, thickness + 2.f);
-                drawList->AddPolyline(points, count, skelCol, false, thickness);
+                for (int i = 0; i + 1 < count; ++i)
+                    DrawSeg(points[i], points[i + 1], worldPts[i], worldPts[i + 1]);
             };
 
             auto ProcessR6Chain = [&](const RobloxInstance* instances, int count)
             {
                 ImVec2 screenPoints[8];
+                Vectors::Vector3 worldPoints[8];
                 int validCount = 0;
                 for (int i = 0; i < count; ++i)
                 {
                     if (!instances[i].address)
                     {
-                        DrawPoly(screenPoints, validCount);
+                        DrawPoly(screenPoints, worldPoints, validCount);
                         validCount = 0;
                         continue;
                     }
                     ImVec2 screenPos;
                     if (!W2S(instances[i].Position(), screenPos))
                     {
-                        DrawPoly(screenPoints, validCount);
+                        DrawPoly(screenPoints, worldPoints, validCount);
                         validCount = 0;
                         continue;
                     }
+                    worldPoints[validCount] = instances[i].Position();
                     screenPoints[validCount++] = screenPos;
                 }
-                DrawPoly(screenPoints, validCount);
+                DrawPoly(screenPoints, worldPoints, validCount);
             };
 
             auto ProcessR15Chain = [&](const Vectors::Vector3* points, int count)
@@ -1054,7 +1067,24 @@ inline void RenderESP(ImDrawList* drawList)
                     if (W2S(points[i], screenPos))
                         screenPoints[validCount++] = screenPos;
                 }
-                DrawPoly(screenPoints, validCount);
+                if (perBone && validCount >= 2)
+                {
+                    for (int i = 0; i + 1 < validCount; ++i)
+                    {
+                        Vectors::Vector3 mid = { (points[i].x + points[i+1].x) * 0.5f, (points[i].y + points[i+1].y) * 0.5f, (points[i].z + points[i+1].z) * 0.5f };
+                        const uintptr_t key = (points[i].x != 0.f) ? (uintptr_t)(points[i].x * 1000.f) ^ ((uintptr_t)(points[i].z * 1000.f) << 3) : 0;
+                        bool vis = Visibility::IsPointVisibleCached(key, mid, skelIgnore);
+                        ImU32 segCol = vis
+                            ? Visibility::MakeColor(Options::ESP::SkeletonVisibleColor)
+                            : Visibility::MakeColor(Options::ESP::SkeletonOccludedColor);
+                        drawList->AddLine(screenPoints[i], screenPoints[i + 1], outlineCol, thickness + 2.f);
+                        drawList->AddLine(screenPoints[i], screenPoints[i + 1], segCol, thickness);
+                    }
+                }
+                else
+                {
+                    DrawPoly(screenPoints, points, validCount);
+                }
             };
 
             if (player.Upper_Torso.address && player.Lower_Torso.address)
@@ -1196,7 +1226,7 @@ inline void RenderESP(ImDrawList* drawList)
             const float baseSize = Options::ESP::NameSize;
             const float fontSize = (baseSize * scale > 11.f) ? baseSize * scale : 11.f;
             const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, displayName.c_str());
-            const ImVec2 namePos(head2D.x - textSize.x * 0.5f, top - textSize.y - 2.f);
+            const ImVec2 namePos(head2D.x - textSize.x * 0.5f + Options::ESP::NameOffsetX, top - textSize.y - 2.f + Options::ESP::NameOffsetY);
             newHeadName = namePos;
 
             float t = Options::ESP::NameThickness;
@@ -1236,11 +1266,11 @@ inline void RenderESP(ImDrawList* drawList)
                 if (!ESPPreviewAvatar::LoadTextureWithGDIPlus(g_pd3dDevice, widePath, &s_CustomImg, &w, &h))
                 {
                     // Debug output
-                    OutputDebugStringA(("[Seraph] Failed to load custom image: " + s_CustomImgPath + "\n").c_str());
+                    OutputDebugStringA(("[S] Failed to load custom image: " + s_CustomImgPath + "\n").c_str());
                 }
                 else
                 {
-                    OutputDebugStringA(("[Seraph] Loaded custom image: " + s_CustomImgPath + " (" + std::to_string(w) + "x" + std::to_string(h) + ")\n").c_str());
+                    OutputDebugStringA(("[S] Loaded custom image: " + s_CustomImgPath + " (" + std::to_string(w) + "x" + std::to_string(h) + ")\n").c_str());
                 }
             }
             if (s_CustomImg)
@@ -1261,12 +1291,19 @@ inline void RenderESP(ImDrawList* drawList)
             char distText[32];
             snprintf(distText, sizeof(distText), "%.0f studs", studs);
 
-            const float fontSize = (12.f * scale > 10.f) ? 12.f * scale : 10.f;
+            const float fontSize = (Options::ESP::DistanceSize * scale > 10.f) ? Options::ESP::DistanceSize * scale : 10.f;
             const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, distText);
             const ImVec2 distPos((left + right) * 0.5f - textSize.x * 0.5f + Options::ESP::DistanceOffsetX, bottom + 4.f + Options::ESP::DistanceOffsetY);
-            const ImU32 activeDistanceColor = Options::ESP::VisibilityCheck
-                ? (playerVisible ? Visibility::GetVisibleColor() : Visibility::GetHiddenColor())
-                : distanceColor;
+            const ImU32 activeDistanceColor = Visibility::MakeColor(Options::ESP::DistanceColor);
+            float dt = Options::ESP::DistanceThickness;
+            if (dt > 0.0f)
+            {
+                ImU32 dob = IM_COL32(0, 0, 0, 180);
+                drawList->AddText(font, fontSize, ImVec2(distPos.x + dt, distPos.y + dt), dob, distText);
+                drawList->AddText(font, fontSize, ImVec2(distPos.x - dt, distPos.y - dt), dob, distText);
+                drawList->AddText(font, fontSize, ImVec2(distPos.x + dt, distPos.y - dt), dob, distText);
+                drawList->AddText(font, fontSize, ImVec2(distPos.x - dt, distPos.y + dt), dob, distText);
+            }
             drawList->AddText(font, fontSize, distPos, activeDistanceColor, distText);
 
             if (Options::ESP::ShowWeapon && !player.ToolName.empty())
@@ -1297,11 +1334,13 @@ inline void RenderESP(ImDrawList* drawList)
         if (Options::ESP::Health)
         {
             const float healthPercent = EspClamp(liveHealth / liveMaxHealth, 0.f, 1.f);
-            const float barWidth = 4.f;
+            const float barWidth = Options::ESP::HealthBarWidth;
             const float boxHeight = bottom - top;
 
-            const ImVec2 barTopLeft(right + 3.f, top);
-            const ImVec2 barBottomRight(right + 3.f + barWidth, bottom);
+            const float hbOX = Options::ESP::HealthOffsetX;
+            const float hbOY = Options::ESP::HealthOffsetY;
+            const ImVec2 barTopLeft(right + 3.f + hbOX, top + hbOY);
+            const ImVec2 barBottomRight(right + 3.f + barWidth + hbOX, bottom + hbOY);
 
             drawList->AddRectFilled(barTopLeft, barBottomRight, IM_COL32(30, 30, 30, 200));
 
@@ -1393,7 +1432,7 @@ inline void RenderESP(ImDrawList* drawList)
 
             if (rigStr)
             {
-                const float fontSize = (11.f * scale > 10.0f) ? 11.f * scale : 10.0f;
+                const float fontSize = (Options::ESP::RigTypeSize * scale > 10.0f) ? Options::ESP::RigTypeSize * scale : 10.0f;
                 const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, rigStr);
                 const ImVec2 rigPos(right + 10.f + Options::ESP::RigTypeOffsetX, top + (bottom - top) * 0.5f - textSize.y * 0.5f + Options::ESP::RigTypeOffsetY);
                 const ImU32 rigColor = IM_COL32(
@@ -1401,6 +1440,15 @@ inline void RenderESP(ImDrawList* drawList)
                     static_cast<int>(Options::ESP::RigTypeColor[1] * 255.f),
                     static_cast<int>(Options::ESP::RigTypeColor[2] * 255.f),
                     255);
+                float rt = Options::ESP::RigTypeThickness;
+                if (rt > 0.0f)
+                {
+                    ImU32 rob = IM_COL32(0, 0, 0, 180);
+                    drawList->AddText(font, fontSize, ImVec2(rigPos.x + rt, rigPos.y + rt), rob, rigStr);
+                    drawList->AddText(font, fontSize, ImVec2(rigPos.x - rt, rigPos.y - rt), rob, rigStr);
+                    drawList->AddText(font, fontSize, ImVec2(rigPos.x + rt, rigPos.y - rt), rob, rigStr);
+                    drawList->AddText(font, fontSize, ImVec2(rigPos.x - rt, rigPos.y + rt), rob, rigStr);
+                }
                 drawList->AddText(font, fontSize, rigPos, rigColor, rigStr);
             }
         }
@@ -1513,6 +1561,203 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
             1.2f);
     }
 
+    // ?????? Interactive 3D model controls overlay (drawn on top in both modes) ??????
+    static ImVec2 s_LastDrag = ImVec2(0, 0);
+    static bool   s_Dragging = false;
+    static bool   s_SettingsOpen = false;
+    static double s_SettingsOpenAt = 0.0;   // ImGui time when the settings panel opened (for entrance anim)
+
+    // ?????? Draggable feature state (always-on drag in the preview) ??????
+    // Dragging a feature in the preview writes the global offset options, so the
+    // moved position also drives the real in-game ESP. Hovering outlines the
+    // feature in white; right-clicking opens a per-feature customize popup.
+    enum PreviewFeat : int { kName = 0, kDistance = 1, kHealth = 2, kRigType = 3 };
+    static int s_DragFeat = -1;
+    static double s_FeatOpenAt = 0.0;   // ImGui time when the feature popup opened (for entrance anim)
+    static ImVec2 s_DragOrigin;
+    static int s_PopupFeat = -1;
+    static int s_HoverFeat = -1;
+
+    const float barH = 26.0f * UI::sc;   // top title / settings bar
+
+    auto DrawControls = [&]()
+    {
+        ImDrawList* fdl = drawList;
+        const float gap = 6.0f * UI::sc;
+
+        const ImVec2 barMin(rectMin.x, rectMin.y);
+        const ImVec2 barMax(rectMax.x, rectMin.y + barH);
+
+        // Top bar background
+        fdl->AddRectFilled(barMin, barMax, IM_COL32(12, 14, 18, 240), 4.0f);
+        fdl->AddLine(ImVec2(barMin.x, barMax.y), ImVec2(barMax.x, barMax.y), IM_COL32(34, 43, 53, 255), 1.0f);
+
+        // Title (left)
+        {
+            const char* t = "3D MODEL PREVIEW";
+            ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0f, t);
+            fdl->AddText(ImVec2(barMin.x + gap, barMin.y + (barH - ts.y) * 0.5f),
+                         IM_COL32(180, 190, 205, 255), t);
+        }
+
+        // Settings button (top-right)
+        const float sbW = 78.0f * UI::sc;
+        const ImVec2 sbMin(rectMax.x - sbW - gap, barMin.y + gap);
+        const ImVec2 sbMax(rectMax.x - gap, barMax.y - gap);
+        const bool sbHov = ImGui::IsMouseHoveringRect(sbMin, sbMax, false);
+        fdl->AddRectFilled(sbMin, sbMax, sbHov ? IM_COL32(28, 36, 45, 255) : IM_COL32(18, 23, 29, 240), 4.0f);
+        fdl->AddRect(sbMin, sbMax, s_SettingsOpen ? IM_COL32(59, 157, 255, 255) : IM_COL32(34, 43, 53, 255), 4.0f, 0, 1.0f);
+        {
+            const ImVec2 c(sbMin.x + sbW * 0.5f, sbMin.y + (sbMax.y - sbMin.y) * 0.5f);
+            const float rs = 5.5f * UI::sc;
+            const float rt = 8.0f * UI::sc;
+            const ImU32 col = s_SettingsOpen ? IM_COL32(241, 245, 250, 255) : IM_COL32(139, 150, 165, 255);
+            fdl->AddCircle(c, rs, col, 24, 1.5f * UI::sc);
+            for (int i = 0; i < 6; ++i)
+            {
+                const float a = (float)i / 6.f * 6.2832f;
+                const float a1 = a - .24f, a2 = a + .24f;
+                fdl->AddQuadFilled(
+                    ImVec2(c.x + cosf(a1) * rs, c.y + sinf(a1) * rs),
+                    ImVec2(c.x + cosf(a2) * rs, c.y + sinf(a2) * rs),
+                    ImVec2(c.x + cosf(a2) * rt, c.y + sinf(a2) * rt),
+                    ImVec2(c.x + cosf(a1) * rt, c.y + sinf(a1) * rt), col);
+            }
+        }
+        if (sbHov && !s_SettingsOpen && ImGui::IsMouseClicked(0))
+        {
+            s_SettingsOpen = true;
+            s_SettingsOpenAt = ImGui::GetTime();
+        }
+
+        // Mouse drag-to-rotate (middle-mouse drag over the model viewport, so it
+        // never conflicts with left-drag feature editing) + scroll-to-zoom.
+        if (Options::Preview3D::Enabled)
+        {
+            const ImVec2 vpMin(rectMin.x, barMax.y);
+            const ImVec2 vpMax(rectMax.x, rectMax.y);
+            const bool overBtn = ImGui::IsMouseHoveringRect(sbMin, sbMax, false);
+            const bool hover = ImGui::IsMouseHoveringRect(vpMin, vpMax, false);
+            if (hover && !overBtn && ImGui::IsMouseDown(2))
+            {
+                ImVec2 m = ImGui::GetIO().MousePos;
+                if (!s_Dragging) { s_Dragging = true; s_LastDrag = m; Preview3D::NotifyManual(); }
+                else {
+                    Preview3D::AddRotation((m.x - s_LastDrag.x) * 0.012f, -(m.y - s_LastDrag.y) * 0.012f);
+                    s_LastDrag = m;
+                }
+            }
+            else s_Dragging = false;
+            if (hover && !overBtn && ImGui::GetIO().MouseWheel != 0.0f)
+                Preview3D::AddZoom(-ImGui::GetIO().MouseWheel * 0.18f);
+        }
+    };
+
+    s_HoverFeat = -1;
+
+    auto FeatureDrag = [&](int feat, float x, float y, float w, float h, float& offX, float& offY) -> bool
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        bool hover = ImGui::IsMouseHoveringRect(ImVec2(x, y), ImVec2(x + w, y + h), false);
+        if (hover) s_HoverFeat = feat;
+
+        if (hover && ImGui::IsMouseClicked(1)) { s_PopupFeat = feat; s_FeatOpenAt = ImGui::GetTime(); }
+        if (hover && ImGui::IsMouseClicked(0) && s_DragFeat < 0)
+        {
+            s_DragFeat = feat;
+            s_DragOrigin = io.MousePos;
+        }
+        if (s_DragFeat == feat)
+        {
+            if (io.MouseDown[0])
+            {
+                ImVec2 d(io.MousePos.x - s_DragOrigin.x, io.MousePos.y - s_DragOrigin.y);
+                offX += d.x; offY += d.y;
+                s_DragOrigin = io.MousePos;
+            }
+            else { s_DragFeat = -1; s_HoverFeat = -1; }
+        }
+        return hover;
+    };
+    auto FeatureOutline = [&](float x, float y, float w, float h)
+    {
+        drawList->AddRect(ImVec2(x, y), ImVec2(x + w, y + h), IM_COL32(255, 255, 255, 255), 2.0f, 0, 1.2f);
+    };
+
+    // Shared ESP bounding box, computed by whichever model/avatar is shown
+    // (3D model or 2D avatar image). Cubed so all ESP overlays use it.
+    float bLeft = 0, bRight = 0, bTop = 0, bBot = 0;
+    float cx = (rectMin.x + rectMax.x) * 0.5f;
+    float cy = (rectMin.y + rectMax.y) * 0.5f;
+    float boxW = rectMax.x - rectMin.x;
+    float boxH = rectMax.y - rectMin.y;
+    // Viewport the 3D model is drawn into (== the preview rect offset for the
+    // title bar in 3D mode, == the full preview rect otherwise). Used to place
+    // the projected 3D box corners back onto screen.
+    ImVec2 modelRectMin(rectMin.x, rectMin.y);
+    ImVec2 modelRectMax(rectMax.x, rectMax.y);
+    // Actual 2D avatar image size (set in the 2D branch below). The None
+    // skeleton is anchored to this so it fits the real avatar figure instead of
+    // the larger ESP box or the window.
+    float avW = 0.f, avH = 0.f;
+
+    if (Options::Preview3D::Enabled && (int)Options::Preview3D::Model != (int)Preview3D::Model::None)
+    {
+        // ?????? 3D model path ??????
+        const ImVec2 vpMin(rectMin.x, rectMin.y + barH);
+        const ImVec2 vpMax(rectMax.x, rectMax.y);
+        modelRectMin = vpMin;
+        modelRectMax = vpMax;
+        Preview3D::DrawPreview(drawList, vpMin, vpMax);
+
+        // Map the projected UV bounds of the rendered model onto the viewport
+        // to build the ESP box around the actual 3D model on screen.
+        float u0, v0, u1, v1;
+        bool gotBounds = false;
+        // The union of the model's part AABBs (GetProjectedBounds) encloses the
+        // whole mesh - base, hats, accessories - so the box ends up far larger
+        // than the character. The skeleton silhouette hugs the body, so derive
+        // the box from its projected extent instead, for every 3D model.
+        {
+            std::vector<float> skel;
+            if (Preview3D::GetProjectedSkeleton(skel) && skel.size() >= 4)
+            {
+                float mnU = 1.f, mxU = 0.f, mnV = 1.f, mxV = 0.f;
+                for (size_t i = 0; i + 1 < skel.size(); i += 2)
+                {
+                    mnU = (std::min)(mnU, skel[i]);     mxU = (std::max)(mxU, skel[i]);
+                    mnV = (std::min)(mnV, skel[i + 1]); mxV = (std::max)(mxV, skel[i + 1]);
+                }
+                const float padU = (mxU - mnU) * 0.12f;
+                const float padV = (mxV - mnV) * 0.12f;
+                u0 = mnU - padU; v0 = mnV - padV; u1 = mxU + padU; v1 = mxV + padV;
+                gotBounds = true;
+            }
+        }
+        if (!gotBounds && Preview3D::GetProjectedBounds(u0, v0, u1, v1))
+            gotBounds = true;
+        if (gotBounds)
+        {
+            const float W = vpMax.x - vpMin.x;
+            const float H = vpMax.y - vpMin.y;
+            bLeft  = vpMin.x + u0 * W;
+            bRight = vpMin.x + u1 * W;
+            bTop   = vpMin.y + v0 * H;
+            bBot   = vpMin.y + v1 * H;
+        }
+        else
+        {
+            bLeft = vpMin.x; bRight = vpMax.x;
+            bTop  = vpMin.y; bBot   = vpMax.y;
+        }
+        cx = (bLeft + bRight) * 0.5f;
+        cy = (bTop + bBot) * 0.5f;
+        boxW = bRight - bLeft;
+        boxH = bBot - bTop;
+    }
+    else
+    {
+
     // Dynamic local player avatar updater
     if (Globals::Roblox::LocalPlayer.address)
     {
@@ -1559,7 +1804,7 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
                             std::string imageUrl = response.substr(start, end - start);
                             char tempPath[MAX_PATH];
                             GetTempPathA(MAX_PATH, tempPath);
-                            std::string localFile = std::string(tempPath) + "seraph_avatar.png";
+                            std::string localFile = std::string(tempPath) + SX("seraph_avatar.png");
                             DeleteFileA(localFile.c_str());
                             HRESULT hr = URLDownloadToFileA(NULL, imageUrl.c_str(), localFile.c_str(), 0, NULL);
                             if (SUCCEEDED(hr))
@@ -1651,11 +1896,11 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
         }
     }
 
-    // --- Projected preview center ---
-    const float cx = (left + right) * 0.5f + s_DragOffX;
-    const float cy = (top + bottom) * 0.5f + s_DragOffY;
-    const float boxW = right - left;
-    const float boxH = bottom - top;
+    // --- Projected preview center (2D avatar path overrides the shared box) ---
+    cx = (left + right) * 0.5f + s_DragOffX;
+    cy = (top + bottom) * 0.5f + s_DragOffY;
+    boxW = right - left;
+    boxH = bottom - top;
     const float cosA = cosf(s_RotAngle * 3.14159265f / 180.0f);
 
     // Character half-extents (normalized to box size)
@@ -1671,14 +1916,16 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
     };
 
     // --- Draw avatar: 3D model if available, else 2D fallback ---
-    float bLeft = 0, bRight = 0, bTop = 0, bBot = 0;
     bool has3D = false;
 
     uint64_t curUserId = 0;
     if (Globals::Roblox::LocalPlayer.address)
         curUserId = Memory->read<uint64_t>(Globals::Roblox::LocalPlayer.address + Offsets::Player::UserId);
 
-    const Avatar3D::Model* mdl = Avatar3D::GetModel(curUserId);
+    // When model is None, always show 2D avatar image (skip Avatar3D wireframe).
+    const Avatar3D::Model* mdl = nullptr;
+    if (Options::Preview3D::Model != (int)Preview3D::Model::None)
+        mdl = Avatar3D::GetModel(curUserId);
     if (mdl && mdl->valid)
     {
         has3D = true;
@@ -1702,11 +1949,15 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
             avatarW = avatarH * aspect;
         }
         if (avatarW > boxW * 0.85f) { avatarW = boxW * 0.85f; avatarH = avatarW / (ESPPreviewAvatar::g_LocalPlayerAvatarSRV ? ((float)ESPPreviewAvatar::g_LocalPlayerAvatarWidth / (float)ESPPreviewAvatar::g_LocalPlayerAvatarHeight) : 1.0f); }
+        avW = avatarW;
+        avH = avatarH;
 
-        float bboxHalfW = avatarW * 0.5f + boxW * 0.04f;
-        float bboxHalfH = avatarH * 0.5f + boxH * 0.03f;
         float bboxCX = (left + right) * 0.5f + s_DragOffX;
         float bboxCY = (top + bottom) * 0.5f + s_DragOffY;
+        // Box hugs the character figure (head -> feet), not the whole avatar image
+        // or preview panel, which left it far too large.
+        float bboxHalfW = avatarW * 0.18f;
+        float bboxHalfH = avatarH * 0.42f;
         bLeft = bboxCX - bboxHalfW;
         bRight = bboxCX + bboxHalfW;
         bTop = bboxCY - bboxHalfH;
@@ -1733,6 +1984,7 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
             drawList->AddQuad(tl, tr, br, bl, IM_COL32(60, 60, 65, 80));
         }
     }
+    }
 
     // --- ESP overlays use the bounding box from 3D or 2D ---
 
@@ -1742,21 +1994,49 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
         static_cast<int>(Options::ESP::BoxColor[2] * 255.f),
         255);
 
-    if (Options::ESP::BoxFill && Options::ESP::BoxType == 1)
+    if (Options::ESP::Box && Options::ESP::BoxFill && Options::ESP::BoxType == 1)
     {
         if (Options::ESP::BoxFillGradient)
         {
-            ImU32 col1 = IM_COL32(
-                static_cast<int>(Options::ESP::BoxFillTopColor[0] * 255.f),
-                static_cast<int>(Options::ESP::BoxFillTopColor[1] * 255.f),
-                static_cast<int>(Options::ESP::BoxFillTopColor[2] * 255.f),
-                static_cast<int>(Options::ESP::BoxFillTopColor[3] * 255.f));
-            ImU32 col2 = IM_COL32(
-                static_cast<int>(Options::ESP::BoxFillBottomColor[0] * 255.f),
-                static_cast<int>(Options::ESP::BoxFillBottomColor[1] * 255.f),
-                static_cast<int>(Options::ESP::BoxFillBottomColor[2] * 255.f),
-                static_cast<int>(Options::ESP::BoxFillBottomColor[3] * 255.f));
-            drawList->AddRectFilledMultiColor(ImVec2(bLeft, bTop), ImVec2(bRight, bBot), col1, col1, col2, col2);
+            const float time = Options::ESP::BoxFillGradientRotate
+                ? static_cast<float>(ImGui::GetTime()) * Options::ESP::BoxFillSpeed
+                : 0.0f;
+
+            const float s = sinf(time);
+            const float c = cosf(time);
+            const float t1 = (s + 1.0f) * 0.5f;
+            const float t2 = (c + 1.0f) * 0.5f;
+            const float t3 = (-s + 1.0f) * 0.5f;
+            const float t4 = (-c + 1.0f) * 0.5f;
+
+            auto lerpCol = [](const float a[4], const float b[4], float t) -> ImU32 {
+                return IM_COL32(
+                    static_cast<int>((a[0] + (b[0] - a[0]) * t) * 255.f),
+                    static_cast<int>((a[1] + (b[1] - a[1]) * t) * 255.f),
+                    static_cast<int>((a[2] + (b[2] - a[2]) * t) * 255.f),
+                    static_cast<int>((a[3] + (b[3] - a[3]) * t) * 255.f));
+            };
+
+            ImU32 c_tl, c_tr, c_br, c_bl;
+            if (Options::ESP::BoxFillType == 0)
+            {
+                c_tl = c_bl = lerpCol(Options::ESP::BoxFillTopColor, Options::ESP::BoxFillBottomColor, t1);
+                c_tr = c_br = lerpCol(Options::ESP::BoxFillTopColor, Options::ESP::BoxFillBottomColor, t2);
+            }
+            else if (Options::ESP::BoxFillType == 1)
+            {
+                c_tl = c_tr = lerpCol(Options::ESP::BoxFillTopColor, Options::ESP::BoxFillBottomColor, t1);
+                c_bl = c_br = lerpCol(Options::ESP::BoxFillTopColor, Options::ESP::BoxFillBottomColor, t2);
+            }
+            else
+            {
+                c_tl = lerpCol(Options::ESP::BoxFillTopColor, Options::ESP::BoxFillBottomColor, t1);
+                c_tr = lerpCol(Options::ESP::BoxFillTopColor, Options::ESP::BoxFillBottomColor, t2);
+                c_br = lerpCol(Options::ESP::BoxFillTopColor, Options::ESP::BoxFillBottomColor, t3);
+                c_bl = lerpCol(Options::ESP::BoxFillTopColor, Options::ESP::BoxFillBottomColor, t4);
+            }
+
+            drawList->AddRectFilledMultiColor(ImVec2(bLeft, bTop), ImVec2(bRight, bBot), c_tl, c_tr, c_br, c_bl);
         }
         else
         {
@@ -1769,10 +2049,60 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
         }
     }
 
-    if (Options::ESP::BoxType == 1)
+    if (Options::ESP::Box && Options::ESP::BoxType == 1)
         drawList->AddRect(ImVec2(bLeft, bTop), ImVec2(bRight, bBot), boxColor, 0, 0, Options::ESP::BoxThickness);
 
-    if (Options::ESP::CornerESP || Options::ESP::BoxType == 1)
+    // 3D box (BoxType == 2): project the 3D model's axis-aligned bounding box
+    // through the preview camera and draw its 12 edges in screen space, so the
+    // box tracks the model as it rotates. In 2D avatar mode (or while Edit Mode
+    // is on, so the box stays draggable) fall back to a pseudo-3D offset box.
+    if (Options::ESP::Box && Options::ESP::BoxType == 2)
+    {
+        const ImU32 b3d = IM_COL32(
+            static_cast<int>(Options::ESP::ESP3DColor[0] * 255.f),
+            static_cast<int>(Options::ESP::ESP3DColor[1] * 255.f),
+            static_cast<int>(Options::ESP::ESP3DColor[2] * 255.f),
+            255);
+        const float th = Options::ESP::ESP3DThickness;
+        const bool in3D = Options::Preview3D::Enabled
+            && (int)Options::Preview3D::Model != (int)Preview3D::Model::None;
+        if (in3D && !Options::Preview3D::EditMode)
+        {
+            std::vector<float> corners;
+            if (Preview3D::GetProjectedModelBox(corners) && corners.size() >= 24)
+            {
+                const float W = modelRectMax.x - modelRectMin.x;
+                const float H = modelRectMax.y - modelRectMin.y;
+                auto P = [&](int i) {
+                    return ImVec2(modelRectMin.x + corners[i * 2] * W,
+                                  modelRectMin.y + corners[i * 2 + 1] * H);
+                };
+                static const int edges[24] = {
+                    0,1, 1,2, 2,3, 3,0,   // near face
+                    4,5, 5,6, 6,7, 7,4,   // far face
+                    0,4, 1,5, 2,6, 3,7     // connecting edges
+                };
+                for (int e = 0; e < 24; e += 2)
+                    drawList->AddLine(P(edges[e]), P(edges[e + 1]), b3d, th);
+            }
+        }
+        else
+        {
+            const float dw = boxW * 0.13f;
+            const float dh = boxH * 0.10f;
+            const ImVec2 a1(bLeft, bTop), b1(bRight, bTop), c1(bRight, bBot), d1(bLeft, bBot);
+            const ImVec2 a2(bLeft + dw, bTop + dh), b2(bRight + dw, bTop + dh),
+                         c2(bRight + dw, bBot + dh), d2(bLeft + dw, bBot + dh);
+            drawList->AddLine(a1, b1, b3d, th); drawList->AddLine(b1, c1, b3d, th);
+            drawList->AddLine(c1, d1, b3d, th); drawList->AddLine(d1, a1, b3d, th);
+            drawList->AddLine(a2, b2, b3d, th); drawList->AddLine(b2, c2, b3d, th);
+            drawList->AddLine(c2, d2, b3d, th); drawList->AddLine(d2, a2, b3d, th);
+            drawList->AddLine(a1, a2, b3d, th); drawList->AddLine(b1, b2, b3d, th);
+            drawList->AddLine(c1, c2, b3d, th); drawList->AddLine(d1, d2, b3d, th);
+        }
+    }
+
+    if (Options::ESP::CornerESP || (Options::ESP::Box && Options::ESP::BoxType == 1))
     {
         const float cornerLen = 18.0f;
         const ImU32 cornerColor = IM_COL32(
@@ -1790,12 +2120,35 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
         corner(ImVec2(bRight, bBot), ImVec2(bRight - cornerLen, bBot), ImVec2(bRight, bBot - cornerLen));
     }
 
+    // Projected head screen position (3D model) so head-anchored labels (Name,
+    // RigType) follow the model as it rotates, instead of staying glued to the
+    // axis-aligned box top. Falls back to the box top centre when no 3D model.
+    bool headAvail = false;
+    ImVec2 headAnchor = ImVec2(cx, bTop);
+    {
+        const bool in3D = Options::Preview3D::Enabled
+            && (int)Options::Preview3D::Model != (int)Preview3D::Model::None;
+        float hu = 0.5f, hv = 0.0f;
+        // Edit Mode keeps features on a fixed 2D box overlay (labels don't swim
+        // with the rotating model), so skip the 3D head projection while editing.
+        if (in3D && !Options::Preview3D::EditMode && Preview3D::GetProjectedHead(hu, hv))
+        {
+            const float W = rectMax.x - rectMin.x;
+            const float H = rectMax.y - (rectMin.y + barH);
+            headAnchor = ImVec2(rectMin.x + hu * W, (rectMin.y + barH) + hv * H);
+            headAvail = true;
+        }
+    }
+
     if (Options::ESP::Health)
     {
-        const float barW = 4.0f;
+        const float barW = Options::ESP::HealthBarWidth;
         const float healthPct = 0.65f;
-        drawList->AddRectFilled(ImVec2(bRight + 3.0f, bTop), ImVec2(bRight + 3.0f + barW, bBot), IM_COL32(30, 30, 30, 200));
-        const float filledTop = bBot - (bBot - bTop) * healthPct;
+        const float bx = bRight + 3.0f + Options::ESP::HealthOffsetX;
+        const float by = bTop + Options::ESP::HealthOffsetY;
+        const float bbY = bBot + Options::ESP::HealthOffsetY;
+        drawList->AddRectFilled(ImVec2(bx, by), ImVec2(bx + barW, bbY), IM_COL32(30, 30, 30, 200));
+        const float filledTop = bbY - (bBot - bTop) * healthPct;
 
         if (Options::ESP::GradientHealthbar)
         {
@@ -1815,24 +2168,27 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
                 static_cast<int>(Options::ESP::HealthbarBottomColor[2] * 255.f),
                 static_cast<int>(Options::ESP::HealthbarBottomColor[3] * 255.f));
 
-            float midY = (bTop + bBot) * 0.5f;
+            float midY = (by + bbY) * 0.5f;
             if (filledTop < midY)
             {
                 drawList->AddRectFilledMultiColor(
-                    ImVec2(bRight + 3.0f, filledTop),
-                    ImVec2(bRight + 3.0f + barW, midY),
+                    ImVec2(bx, filledTop),
+                    ImVec2(bx + barW, midY),
                     topCol, topCol, midCol, midCol);
             }
             drawList->AddRectFilledMultiColor(
-                ImVec2(bRight + 3.0f, filledTop < midY ? midY : filledTop),
-                ImVec2(bRight + 3.0f + barW, bBot),
+                ImVec2(bx, filledTop < midY ? midY : filledTop),
+                ImVec2(bx + barW, bbY),
                 midCol, midCol, botCol, botCol);
         }
         else
         {
-            drawList->AddRectFilled(ImVec2(bRight + 3.0f, filledTop), ImVec2(bRight + 3.0f + barW, bBot), IM_COL32(80, 220, 60, 230));
+            drawList->AddRectFilled(ImVec2(bx, filledTop), ImVec2(bx + barW, bbY), IM_COL32(80, 220, 60, 230));
         }
-        drawList->AddRect(ImVec2(bRight + 3.0f, bTop), ImVec2(bRight + 3.0f + barW, bBot), IM_COL32(0, 0, 0, 255));
+        drawList->AddRect(ImVec2(bx, by), ImVec2(bx + barW, bbY), IM_COL32(0, 0, 0, 255));
+        FeatureDrag(kHealth, bx, by, barW, (bBot - bTop), Options::ESP::HealthOffsetX, Options::ESP::HealthOffsetY);
+        if (s_HoverFeat == kHealth || s_DragFeat == kHealth)
+            FeatureOutline(bx - 2.0f, by - 2.0f, barW + 4.0f, (bBot - bTop) + 4.0f);
     }
 
     if (Options::ESP::HealthText)
@@ -1853,51 +2209,72 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
     {
         std::string previewName = Globals::Roblox::LocalPlayer.address ? Globals::Roblox::LocalPlayer.Name() : "Player";
         const ImVec2 ts = ImGui::CalcTextSize(previewName.c_str());
-        drawList->AddText(ImVec2(cx - ts.x * 0.5f, bTop - 34.0f), IM_COL32(255, 255, 255, 255), previewName.c_str());
+        float nax = headAvail ? headAnchor.x : cx;
+        float nay = headAvail ? (headAnchor.y - ts.y - 6.0f) : (bTop - 34.0f);
+        float nx = nax - ts.x * 0.5f + Options::ESP::NameOffsetX;
+        float ny = nay + Options::ESP::NameOffsetY;
+        drawList->AddText(ImVec2(nx, ny), IM_COL32(255, 255, 255, 255), previewName.c_str());
+        FeatureDrag(kName, nx, ny, ts.x, ts.y, Options::ESP::NameOffsetX, Options::ESP::NameOffsetY);
+        if (s_HoverFeat == kName || s_DragFeat == kName)
+            FeatureOutline(nx - 2.0f, ny - 2.0f, ts.x + 4.0f, ts.y + 4.0f);
     }
 
     if (Options::ESP::Distance)
     {
         const char* distText = "42 studs";
-        const ImVec2 ts = ImGui::CalcTextSize(distText);
+        ImFont* df = ImGui::GetFont();
+        const float dsz = Options::ESP::DistanceSize;
+        const ImVec2 ts = df->CalcTextSizeA(dsz, FLT_MAX, 0.0f, distText);
         float distX = cx - ts.x * 0.5f + Options::ESP::DistanceOffsetX;
         float distY = bBot + 4.0f + Options::ESP::DistanceOffsetY;
-        if (espEdit)
-        {
-            float hx = distX, hy = distY;
-            HudEditor::Handle("##esp_preview_dist", hx, hy, drawList, true);
-            Options::ESP::DistanceOffsetX = hx - (cx - ts.x * 0.5f);
-            Options::ESP::DistanceOffsetY = hy - (bBot + 4.0f);
-            distX = hx;
-            distY = hy;
-        }
-        drawList->AddText(ImVec2(distX, distY), IM_COL32(200, 200, 200, 255), distText);
+        drawList->AddText(df, dsz, ImVec2(distX, distY), IM_COL32(200, 200, 200, 255), distText);
+        FeatureDrag(kDistance, distX, distY, ts.x, ts.y, Options::ESP::DistanceOffsetX, Options::ESP::DistanceOffsetY);
+        if (s_HoverFeat == kDistance || s_DragFeat == kDistance)
+            FeatureOutline(distX - 2.0f, distY - 2.0f, ts.x + 4.0f, ts.y + 4.0f);
     }
 
     if (Options::ESP::RigType)
     {
         const char* rigStr = "[R15]";
-        const ImVec2 ts = ImGui::CalcTextSize(rigStr);
+        ImFont* rf = ImGui::GetFont();
+        const float rsz = Options::ESP::RigTypeSize;
+        const ImVec2 ts = rf->CalcTextSizeA(rsz, FLT_MAX, 0.0f, rigStr);
         const ImU32 rigCol = IM_COL32(
             static_cast<int>(Options::ESP::RigTypeColor[0] * 255.f),
             static_cast<int>(Options::ESP::RigTypeColor[1] * 255.f),
             static_cast<int>(Options::ESP::RigTypeColor[2] * 255.f),
             255);
-        float rigX = bRight + 10.0f + Options::ESP::RigTypeOffsetX;
-        float rigY = bTop + (bBot - bTop) * 0.5f - ts.y * 0.5f + Options::ESP::RigTypeOffsetY;
-        if (espEdit)
-        {
-            float hx = rigX, hy = rigY;
-            HudEditor::Handle("##esp_preview_rig", hx, hy, drawList, true);
-            Options::ESP::RigTypeOffsetX = hx - (bRight + 10.0f);
-            Options::ESP::RigTypeOffsetY = hy - (bTop + (bBot - bTop) * 0.5f - ts.y * 0.5f);
-            rigX = hx;
-            rigY = hy;
-        }
-        drawList->AddText(ImVec2(rigX, rigY), rigCol, rigStr);
+        float rax = headAvail ? headAnchor.x : (bRight + 10.0f);
+        float ray = headAvail ? (headAnchor.y + ts.y + 4.0f) : (bTop + (bBot - bTop) * 0.5f - ts.y * 0.5f);
+        float rigX = rax + Options::ESP::RigTypeOffsetX;
+        float rigY = ray + Options::ESP::RigTypeOffsetY;
+        drawList->AddText(rf, rsz, ImVec2(rigX, rigY), rigCol, rigStr);
+        FeatureDrag(kRigType, rigX, rigY, ts.x, ts.y, Options::ESP::RigTypeOffsetX, Options::ESP::RigTypeOffsetY);
+        if (s_HoverFeat == kRigType || s_DragFeat == kRigType)
+            FeatureOutline(rigX - 2.0f, rigY - 2.0f, ts.x + 4.0f, ts.y + 4.0f);
     }
 
-    // Head circle
+    // Tracers ??? drawn from the preview's bottom (or top, per TracersStart) to the
+    // centre of the bounding box. In-game tracer start 3 uses the player's own
+    // screen-space torso, which maps naturally to the bottom of the preview.
+    if (Options::ESP::Tracers)
+    {
+        const ImU32 tracerCol = IM_COL32(
+            static_cast<int>(Options::ESP::TracerColor[0] * 255.f),
+            static_cast<int>(Options::ESP::TracerColor[1] * 255.f),
+            static_cast<int>(Options::ESP::TracerColor[2] * 255.f),
+            255);
+        ImVec2 tStart((rectMin.x + rectMax.x) * 0.5f, rectMax.y);
+        if (Options::ESP::TracersStart == 1)
+            tStart.y = rectMin.y;
+        ImVec2 tEnd((bLeft + bRight) * 0.5f, (bTop + bBot) * 0.5f);
+        drawList->AddLine(tStart, tEnd, tracerCol, Options::ESP::TracerThickness);
+    }
+
+    // Head circle. Anchored to the 3D model's projected head when a 3D model
+    // is active (so it tracks the actual head as the model rotates instead of
+    // sitting at a fixed box-centre-top point); otherwise falls back to the top
+    // of the projected box.
     if (Options::ESP::HeadCircle)
     {
         const ImU32 hcc = IM_COL32(
@@ -1905,13 +2282,36 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
             static_cast<int>(Options::ESP::HeadCircleColor[1] * 255.f),
             static_cast<int>(Options::ESP::HeadCircleColor[2] * 255.f),
             230);
-        const float headR = EspClamp(boxW * Options::ESP::HeadCircleScale * 1.6f, 6.f, 26.f);
-        const float hcX = (bLeft + bRight) * 0.5f;
-        const float hcY = bTop + headR + 2.0f;
+        float headR = EspClamp(boxW * Options::ESP::HeadCircleScale * 1.6f, 6.f, 26.f);
+        float hcX, hcY;
+        const bool in3D = Options::Preview3D::Enabled
+            && (int)Options::Preview3D::Model != (int)Preview3D::Model::None;
+        float headU, headV;
+        if (in3D && Preview3D::GetProjectedHead(headU, headV))
+        {
+            const float W = rectMax.x - rectMin.x;
+            const float H = rectMax.y - (rectMin.y + barH);
+            hcX = rectMin.x + headU * W;
+            hcY = (rectMin.y + barH) + headV * H;
+        }
+        else
+        {
+            hcX = (bLeft + bRight) * 0.5f;
+            // 2D avatar: the character is smaller than the avatar image (empty
+            // grid margin below), so anchor head/body inside the image. Head sits
+            // centred between the image top edge and the neck; radius comes from
+            // the projected head height so it matches the actual head size.
+            float cAvH2 = (avH > 0.f) ? avH : (bBot - bTop);
+            const float hTop   = cy - cAvH2 * 0.36f; // head top
+            const float hHeadH = cAvH2 * 0.22f;      // head height (top -> neck)
+            hcY = hTop + hHeadH * 0.50f;             // head centre (on the face)
+            float hr = hHeadH * 0.5f * 1.05f;        // half the head height
+            headR = EspClamp(hr, 4.f, 30.f);
+        }
         drawList->AddCircle(ImVec2(hcX, hcY), headR, hcc, 32, Options::ESP::HeadCircleThickness);
     }
 
-    // Skeleton — all joints projected through the same rotation
+    // Skeleton ??? all joints projected through the same rotation
     if (Options::ESP::Skeleton)
     {
         const ImU32 skel = IM_COL32(
@@ -1921,43 +2321,75 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
             255);
         const float thick = EspClamp(Options::ESP::SkeletonThickness, 1.0f, 10.0f);
 
-        // Project joints relative to the bounding box (works for both 2D and 3D)
-        auto proj = [&](float jx, float jy) -> ImVec2 {
-            float px = bLeft + (bRight - bLeft) * (jx * 0.5f + 0.5f);
-            float py = bTop + (bBot - bTop) * jy;
-            return ImVec2(px, py);
-        };
+        const bool in3D = Options::Preview3D::Enabled
+            && (int)Options::Preview3D::Model != (int)Preview3D::Model::None;
 
-        const ImVec2 headTop    = proj(0.0f,  0.00f);
-        const ImVec2 headCenter = proj(0.0f,  0.08f);
-        const ImVec2 neck       = proj(0.0f,  0.18f);
-        const ImVec2 lShoulder  = proj(-0.5f, 0.22f);
-        const ImVec2 rShoulder  = proj(0.5f,  0.22f);
-        const ImVec2 lElbow     = proj(-0.5f, 0.38f);
-        const ImVec2 rElbow     = proj(0.5f,  0.38f);
-        const ImVec2 lHand      = proj(-0.5f, 0.52f);
-        const ImVec2 rHand      = proj(0.5f,  0.52f);
-        const ImVec2 hip        = proj(0.0f,  0.55f);
-        const ImVec2 lHip       = proj(-0.28f, 0.55f);
-        const ImVec2 rHip       = proj(0.28f,  0.55f);
-        const ImVec2 lKnee      = proj(-0.28f, 0.75f);
-        const ImVec2 rKnee      = proj(0.28f,  0.75f);
-        const ImVec2 lFoot      = proj(-0.28f, 0.95f);
-        const ImVec2 rFoot      = proj(0.28f,  0.95f);
+        // The single "Skeleton" checkbox on the Visuals tab (ESP::Skeleton)
+        // controls the in-world skeleton, the 3D projected skeleton, and the
+        // skeleton drawn inside the 3D preview box. When a 3D model is active we
+        // draw the projected model-space skeleton; otherwise the 2D avatar.
+        const bool skelIn3D = in3D;
+        if (skelIn3D)
+        {
+            // ?????? 3D model: use the projected R6 skeleton so the bones follow the
+            //    model's 3D rotation (and match the actual geometry proportions,
+            //    avoiding the stretched look of a flat box-relative skeleton).
+            std::vector<float> segs;
+            if (Preview3D::GetProjectedSkeleton(segs))
+            {
+                const float W = rectMax.x - rectMin.x;
+                const float H = rectMax.y - (rectMin.y + barH);
+                const float ox = rectMin.x, oy = rectMin.y + barH;
+                for (size_t i = 0; i + 3 < segs.size(); i += 4)
+                {
+                    drawList->AddLine(ImVec2(ox + segs[i] * W, oy + segs[i + 1] * H),
+                                      ImVec2(ox + segs[i + 2] * W, oy + segs[i + 3] * H),
+                                      skel, thick);
+                }
+            }
+        }
+        else
+        {
+            // 2D avatar portrait: skeleton anchored to the avatar image, drawn as
+            // a clean front-facing stick figure so bones stay connected. jx is the
+            // lateral fraction across the body width, jy the vertical fraction from
+            // the top of the body down to the feet.
+            const float cAvW = (avW > 0.f) ? avW : boxW;
+            const float cAvH = (avH > 0.f) ? avH : boxH;
+            const float halfW = cAvW * 0.22f;
+            const float top   = cy - cAvH * 0.40f;
+            const float bodyH = cAvH * 0.84f;
+            auto proj = [&](float jx, float jy) -> ImVec2 {
+                return ImVec2(cx + jx * halfW, top + jy * bodyH);
+            };
 
-        // Spine
-        drawList->AddLine(headTop, neck, skel, thick);
-        drawList->AddLine(neck, hip, skel, thick);
-        // Arms
-        drawList->AddLine(lShoulder, lElbow, skel, thick);
-        drawList->AddLine(lElbow, lHand, skel, thick);
-        drawList->AddLine(rShoulder, rElbow, skel, thick);
-        drawList->AddLine(rElbow, rHand, skel, thick);
-        // Legs
-        drawList->AddLine(hip, lKnee, skel, thick);
-        drawList->AddLine(lKnee, lFoot, skel, thick);
-        drawList->AddLine(hip, rKnee, skel, thick);
-        drawList->AddLine(rKnee, rFoot, skel, thick);
+            const ImVec2 neck   = proj(0.0f, 0.33f);
+            const ImVec2 hip    = proj(0.0f, 0.62f);
+            const ImVec2 lShoulder = proj(-0.62f, 0.40f);
+            const ImVec2 rShoulder = proj( 0.62f, 0.40f);
+            const ImVec2 lHand     = proj(-0.66f, 0.58f);
+            const ImVec2 rHand     = proj( 0.66f, 0.58f);
+            const ImVec2 lHipJ     = proj(-0.20f, 0.62f);
+            const ImVec2 rHipJ     = proj( 0.20f, 0.62f);
+            const ImVec2 lKnee     = proj(-0.20f, 0.78f);
+            const ImVec2 rKnee     = proj( 0.20f, 0.78f);
+            const ImVec2 lFoot     = proj(-0.20f, 0.92f);
+            const ImVec2 rFoot     = proj( 0.20f, 0.92f);
+
+            // Spine + shoulder bar keep the figure connected end to end.
+            drawList->AddLine(neck, hip, skel, thick);
+            drawList->AddLine(lShoulder, rShoulder, skel, thick);
+            // Straight arms (shoulder -> hand, no bent elbow).
+            drawList->AddLine(lShoulder, lHand, skel, thick);
+            drawList->AddLine(rShoulder, rHand, skel, thick);
+            // Legs: pelvis links the hips back to the spine so they don't float.
+            drawList->AddLine(hip, lHipJ, skel, thick);
+            drawList->AddLine(hip, rHipJ, skel, thick);
+            drawList->AddLine(lHipJ, lKnee, skel, thick);
+            drawList->AddLine(lKnee, lFoot, skel, thick);
+            drawList->AddLine(rHipJ, rKnee, skel, thick);
+            drawList->AddLine(rKnee, rFoot, skel, thick);
+        }
     }
 
     if (Options::Combat::HitChams)
@@ -1977,7 +2409,282 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
             0.f, 0, 2.0f);
     }
 
+    DrawControls();
+
     drawList->PopClipRect();
+
+    // Settings panel - drawn on the SAME (foreground) draw list as the preview so
+    // it always renders on top, opening right under the "3D MODEL PREVIEW" bar.
+    static bool s_ModelOpen = false;
+    if (s_SettingsOpen)
+    {
+        ImVec2 display = ImGui::GetIO().DisplaySize;
+        const float sc = UI::sc;
+        const float pW = 158.0f * sc;
+        // Open under the title bar, aligned to the left edge of the preview.
+        ImVec2 pos(rectMin.x + 8.0f, rectMin.y + barH + 4.0f);
+        if (pos.x + pW > display.x - 8.0f) pos.x = display.x - pW - 8.0f;
+
+        // Entrance animation: fade in + rise over ~0.28s (smoothstep eased).
+        float age = (float)(ImGui::GetTime() - s_SettingsOpenAt);
+        age = age < 0.f ? 0.f : (age > 0.28f ? 1.0f : age / 0.28f);
+        const float easeA = age * age * (3.f - 2.f * age);
+        const float slideY = (1.f - easeA) * 10.f;
+        pos.y += slideY;
+        const float alpha = 0.30f + 0.70f * easeA;
+
+        // Local alias matching ui.h's bare `U` color helper.
+        const auto U = UI::U;
+
+        const float padX = 10.0f * sc;
+        const float rowH = 24.0f * sc;
+
+        const char* models[] = { "None", "Roblox R15", "Tung Tung Sahur", "Mario" };
+        const bool is3D = Options::Preview3D::Model != (int)Preview3D::Model::None;
+
+        // Panel height: model row, enabled, (auto rotate + edit when 3D), reset button
+        float pHeight = padX * 2.0f + rowH + rowH;
+        if (is3D) pHeight += rowH * 2.0f + 6.0f * sc;
+        pHeight += rowH + 8.0f * sc;
+
+        const ImVec2 pMin = pos;
+        const ImVec2 pMax(pos.x + pW, pos.y + pHeight);
+
+        // Panel background + border (drawn like the preview chrome so it sits in front)
+        drawList->AddRectFilled(pMin, pMax, IM_COL32(16, 21, 27, (int)(238.0f * alpha)), 6.0f);
+        drawList->AddRect(pMin, pMax, IM_COL32(42, 53, 66, (int)(255.0f * alpha)), 6.0f, 0, 1.0f);
+
+        float curY = pMin.y + padX;
+
+        auto CenterY = [&]() { return curY + (rowH - ImGui::GetFont()->FontSize) * 0.5f; };
+
+        // ---- Model row (click to expand a dropdown right below) ----
+        {
+            const ImVec2 rmin(pos.x, curY), rmax(pos.x + pW, curY + rowH);
+            const bool hover = ImGui::IsMouseHoveringRect(rmin, rmax, false);
+            if (hover) drawList->AddRectFilled(rmin, rmax, IM_COL32(30, 39, 50, (int)(165.0f * alpha)), 4.0f);
+
+            // Close X (top-right corner) - dismisses the panel.
+            {
+                const float xs = 4.0f * sc;
+                const ImVec2 xc(pMax.x - padX - 5.0f * sc, curY + rowH * 0.5f);
+                const bool xHov = ImGui::IsMouseHoveringRect(ImVec2(xc.x - 8.0f * sc, curY),
+                                                             ImVec2(xc.x + 8.0f * sc, curY + rowH), false);
+                if (xHov)
+                    drawList->AddCircleFilled(xc, 8.0f * sc, IM_COL32(60, 70, 84, 200), 24);
+                const ImU32 xCol = xHov ? U(UI::P.textStrong) : U(UI::P.textDim);
+                drawList->AddLine(ImVec2(xc.x - xs, xc.y - xs), ImVec2(xc.x + xs, xc.y + xs), xCol, 1.6f);
+                drawList->AddLine(ImVec2(xc.x + xs, xc.y - xs), ImVec2(xc.x - xs, xc.y + xs), xCol, 1.6f);
+                if (xHov && ImGui::IsMouseClicked(0)) s_SettingsOpen = false;
+            }
+
+            drawList->AddText(ImVec2(pMin.x + padX, CenterY()), U(UI::P.textMid), "Model");
+            ImVec2 vT = ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0f,
+                                                         models[Options::Preview3D::Model]);
+            // Dropdown arrow (right of the value text, left of the close X)
+            const ImVec2 aC(pMax.x - padX - 24.0f * sc, curY + rowH * 0.5f);
+            const float as = 3.2f * sc;
+            const float arc = 3.0f * sc;
+            drawList->AddTriangleFilled(ImVec2(aC.x - as, aC.y - arc),
+                                        ImVec2(aC.x + as, aC.y - arc),
+                                        ImVec2(aC.x, aC.y + arc),
+                                        U(UI::Mix(UI::P.textDim, UI::P.accent, s_ModelOpen ? 1.0f : 0.0f)));
+            drawList->AddText(ImVec2(aC.x - vT.x - 7.0f * sc, CenterY()), U(UI::P.textStrong),
+                              models[Options::Preview3D::Model]);
+            if (hover && ImGui::IsMouseClicked(0)) s_ModelOpen = !s_ModelOpen;
+            curY += rowH;
+        }
+
+        // ---- Enabled, Auto Rotate, Edit Mode (checkbox rows) ----
+        auto CheckboxRow = [&](const char* label, bool* v) -> bool
+        {
+            const ImVec2 rmin(pos.x, curY), rmax(pos.x + pW, curY + rowH);
+            const bool hover = ImGui::IsMouseHoveringRect(rmin, rmax, false);
+            if (hover) drawList->AddRectFilled(rmin, rmax, IM_COL32(30, 39, 50, (int)(165.0f * alpha)), 4.0f);
+            drawList->AddText(ImVec2(pMin.x + padX, CenterY()), U(*v ? UI::P.textStrong : UI::P.textMid), label);
+            // Checkbox box aligned right
+            const float box = 15.0f * sc;
+            const ImVec2 bMin(pos.x + pW - padX - box, curY + (rowH - box) * 0.5f);
+            const ImVec2 bMax(bMin.x + box, bMin.y + box);
+            if (*v)
+            {
+                drawList->AddRectFilled(bMin, bMax, U(UI::P.accent), 4.0f);
+                const ImVec2 bc((bMin.x + bMax.x) * 0.5f, (bMin.y + bMax.y) * 0.5f);
+                drawList->AddLine(ImVec2(bMin.x + 3.5f * sc, bc.y + 0.5f * sc),
+                                  ImVec2(bMin.x + 6.0f * sc, bc.y + 3.0f * sc), IM_COL32(0, 0, 0, 230), 2.0f);
+                drawList->AddLine(ImVec2(bMin.x + 6.0f * sc, bc.y + 3.0f * sc),
+                                  ImVec2(bMin.x + 10.5f * sc, bc.y - 3.5f * sc), IM_COL32(0, 0, 0, 230), 2.0f);
+            }
+            else
+                drawList->AddRect(bMin, bMax, U(UI::P.borderDim), 4.0f, 0, 1.4f);
+            const bool clicked = hover && ImGui::IsMouseClicked(0);
+            curY += rowH;
+            return clicked;
+        };
+
+        if (CheckboxRow("Enabled", &Options::Preview3D::Enabled)) {}
+
+        if (is3D)
+        {
+            if (Options::Preview3D::EditMode) Options::Preview3D::AutoSpin = false;
+            if (CheckboxRow("Auto Rotate", &Options::Preview3D::AutoSpin)) {}
+            curY += 6.0f * sc; // thin gap before Edit Mode
+            if (CheckboxRow("Edit Mode", &Options::Preview3D::EditMode))
+            {
+                if (Options::Preview3D::EditMode)
+                {
+                    Options::Preview3D::AutoSpin = false;
+                    Preview3D::ResetView();
+                    Preview3D::NotifyManual();
+                }
+            }
+        }
+
+        // ---- Reset View button ----
+        {
+            const float btnW = pW - padX * 2.0f;
+            const ImVec2 r0(pos.x + padX, curY + 2.0f * sc);
+            const ImVec2 r1(r0.x + btnW, r0.y + rowH);
+            const bool hover = ImGui::IsMouseHoveringRect(r0, r1, false);
+            drawList->AddRectFilled(r0, r1,
+                hover ? U(UI::Mix(UI::P.surfaceAlt, UI::P.accentGlow, 0.45f)) : U(UI::P.surfaceAlt), 5.0f);
+            const char* lbl = "Reset View";
+            ImVec2 lT = ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0f, lbl);
+            drawList->AddText(ImVec2((r0.x + r1.x - lT.x) * 0.5f,
+                                     r0.y + (rowH - lT.y) * 0.5f),
+                              U(hover ? UI::P.textStrong : UI::P.textMid), lbl);
+            if (hover && ImGui::IsMouseClicked(0))
+            {
+                Preview3D::ResetView();
+                Preview3D::NotifyManual();
+            }
+            curY += rowH + 4.0f * sc;
+        }
+
+        // ---- Model dropdown (overlay drawn last so it's on top) ----
+        if (s_ModelOpen)
+        {
+            const float dH = 4.0f * rowH;
+            const ImVec2 dMin(pos.x, pMin.y + padX + rowH);
+            const ImVec2 dMax(pos.x + pW, dMin.y + dH);
+            drawList->AddRectFilled(dMin, dMax, IM_COL32(20, 26, 33, (int)(240.0f)), 5.0f);
+            drawList->AddRect(dMin, dMax, U(UI::P.borderDim), 5.0f, 0, 1.0f);
+            for (int i = 0; i < 4; ++i)
+            {
+                const float y0 = dMin.y + i * rowH;
+                const ImVec2 r0(dMin.x, y0), r1(dMax.x, y0 + rowH);
+                const bool sel = Options::Preview3D::Model == i;
+                const bool hover = ImGui::IsMouseHoveringRect(r0, r1, false);
+                if (hover) drawList->AddRectFilled(r0, r1, IM_COL32(32, 42, 54, 255), 4.0f);
+                if (sel) drawList->AddRectFilled(r0, r1, IM_COL32(38, 54, 74, 150), 4.0f);
+                drawList->AddText(ImVec2(dMin.x + padX, y0 + (rowH - ImGui::GetFont()->FontSize) * 0.5f),
+                                  U(sel ? UI::P.textStrong : UI::P.textMid), models[i]);
+                if (hover && ImGui::IsMouseClicked(0))
+                {
+                    Options::Preview3D::Model = i;
+                    s_ModelOpen = false;
+                }
+            }
+        }
+    }
+
+    // ?????? Per-feature customize popup (right-click a feature) ??????
+    if (s_PopupFeat >= 0)
+    {
+        const char* featName = s_PopupFeat == kName ? "Name"
+            : s_PopupFeat == kDistance ? "Distance"
+            : s_PopupFeat == kHealth ? "Health Bar"
+            : "RigType";
+        bool open = true;
+        ImVec2 pos(rectMax.x + 8.0f, rectMin.y);
+        ImVec2 display = ImGui::GetIO().DisplaySize;
+        const float winW = 250.0f * UI::sc;
+        if (pos.x + winW > display.x - 8.0f) pos.x = display.x - winW - 8.0f;
+
+        float age = (float)(ImGui::GetTime() - s_FeatOpenAt);
+        age = age < 0.f ? 0.f : (age > 0.28f ? 1.0f : age / 0.28f);
+        const float easeA = age * age * (3.f - 2.f * age);      // smoothstep
+        const float slideY = (1.f - easeA) * 8.f;
+        if (easeA < 1.f)
+            ImGui::SetNextWindowPos(ImVec2(pos.x, pos.y + slideY), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(winW, 0.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.45f + 0.55f * easeA);
+        char title[64];
+        snprintf(title, sizeof(title), "Customize: %s###previewFeatPopup", featName);
+        if (ImGui::Begin(title, &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            // Right-aligned row helpers so every feature panel shares the same
+            // symmetric layout (label left, control right at a fixed column).
+            const float ctrX = winW - 128.0f;
+            const float ctrlW = (winW - 128.0f) - 10.0f;
+            auto RowSlider = [&](const char* label, float min, float max, float* v, const char* fmt) {
+                ImGui::TextUnformatted(label);
+                ImGui::SameLine(ctrX);
+                ImGui::SetNextItemWidth(ctrlW);
+                ImGui::SliderFloat(("##" + std::string(label)).c_str(), v, min, max, fmt);
+            };
+            auto RowCheck  = [&](const char* label, bool* b) {
+                ImGui::TextUnformatted(label);
+                ImGui::SameLine(ctrX);
+                ImGui::SetNextItemWidth(ctrlW);
+                ImGui::Checkbox(("##" + std::string(label)).c_str(), b);
+            };
+            auto RowColor  = [&](const char* label, float* col, int comps) {
+                ImGui::TextUnformatted(label);
+                ImGui::SameLine(ctrX);
+                ImVec4 sw = (comps == 4) ? ImVec4(col[0], col[1], col[2], col[3])
+                                         : ImVec4(col[0], col[1], col[2], 1.0f);
+                char popId[96]; snprintf(popId, sizeof(popId), "##cp_%s", label);
+                ImGui::PushID(label);
+                if (ImGui::ColorButton(popId, sw, ImGuiColorEditFlags_NoTooltip, ImVec2(ctrlW, 0.0f)))
+                    ImGui::OpenPopup(popId);
+                if (ImGui::BeginPopup(popId))
+                {
+                    if (comps == 4)
+                        ImGui::ColorPicker4("##picker", col,
+                            ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_NoSidePreview);
+                    else
+                        ImGui::ColorPicker3("##picker", col, ImGuiColorEditFlags_NoSidePreview);
+                    ImGui::EndPopup();
+                }
+                ImGui::PopID();
+            };
+
+            if (s_PopupFeat == kName)
+            {
+                RowSlider("Size", 8.0f, 32.0f, &Options::ESP::NameSize, "%.0f");
+                RowSlider("Thickness", 0.0f, 5.0f, &Options::ESP::NameThickness, "%.1f");
+                ImGui::Separator();
+                RowColor("Color", Options::ESP::Color, 3);
+            }
+            else if (s_PopupFeat == kDistance)
+            {
+                RowSlider("Size", 8.0f, 32.0f, &Options::ESP::DistanceSize, "%.0f");
+                RowSlider("Thickness", 0.0f, 5.0f, &Options::ESP::DistanceThickness, "%.1f");
+                ImGui::Separator();
+                RowColor("Color", Options::ESP::DistanceColor, 3);
+            }
+            else if (s_PopupFeat == kHealth)
+            {
+                RowSlider("Width", 1.0f, 12.0f, &Options::ESP::HealthBarWidth, "%.1f");
+                RowCheck("Gradient", &Options::ESP::GradientHealthbar);
+                ImGui::Separator();
+                RowColor("Top", Options::ESP::HealthbarTopColor, 4);
+                RowColor("Middle", Options::ESP::HealthbarMiddleColor, 4);
+                RowColor("Bottom", Options::ESP::HealthbarBottomColor, 4);
+            }
+            else if (s_PopupFeat == kRigType)
+            {
+                RowSlider("Size", 8.0f, 32.0f, &Options::ESP::RigTypeSize, "%.0f");
+                RowSlider("Thickness", 0.0f, 5.0f, &Options::ESP::RigTypeThickness, "%.1f");
+                ImGui::Separator();
+                RowColor("Color", Options::ESP::RigTypeColor, 3);
+            }
+        }
+        ImGui::End();
+        ImGui::PopStyleVar();
+        if (!open || ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Escape))) s_PopupFeat = -1;
+    }
 }
 
 inline void RenderArrows(ImDrawList* drawList)
@@ -2028,6 +2735,9 @@ inline void RenderArrows(ImDrawList* drawList)
             continue;
 
         if (Options::ESP::TeamCheck && IsTeammate(player))
+            continue;
+
+        if (!player.Name.empty() && !PlayerFilter::EspVisible(player.Name))
             continue;
 
         auto hrp = player.HumanoidRootPart;
@@ -2136,7 +2846,7 @@ inline void RenderRadar(ImDrawList* drawList)
 
     const int theme = Options::ESP::RadarTheme;
 
-    // ── Background / frame per theme ──
+    // ?????? Background / frame per theme ??????
     if (theme == 2) // Neon
     {
         drawList->AddCircleFilled(radarCenter, radarSize, IM_COL32(5, 10, 20, 180));
@@ -2204,6 +2914,9 @@ inline void RenderRadar(ImDrawList* drawList)
             continue;
 
         if (Options::ESP::TeamCheck && IsTeammate(player))
+            continue;
+
+        if (!player.Name.empty() && !PlayerFilter::EspVisible(player.Name))
             continue;
 
         auto hrp = player.HumanoidRootPart;

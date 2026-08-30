@@ -13,7 +13,7 @@ inline void RenderRagebotSubtab(ImVec4 main_color)
 {
 	const float panelY = ImGui::GetCursorPosY();
 	ImGui::SetCursorPosX(UI::ContentX);
-	if (UI::card::begin("##rage_main", ImVec2(UI::CardW, UI::CardH), "RAGEBOT"))
+	if (UI::CollapsibleSection("RAGEBOT", UI::CardW))
 	{
 		UI::labelsection("MAIN");
 		UI::Checkbox("Enabled", &Options::Rage::Enabled);
@@ -50,11 +50,11 @@ inline void RenderRagebotSubtab(ImVec4 main_color)
 		UI::SliderFloat("Orbit Radius", &Options::Rage::OrbitRadius, 1.f, 20.f, "%.1f");
 		UI::SliderFloat("Orbit Speed", &Options::Rage::OrbitSpeed, 0.1f, 10.f, "%.1f");
 	}
-	UI::card::end();
+	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
 	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + 6.0f * UI::sc);
-	if (UI::card::begin("##rage_settings", ImVec2(UI::CardW, UI::CardH), "SETTINGS"))
+	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("TARGET");
 		static const char* targetModes[]{ "Aimed At", "By Username" };
@@ -66,14 +66,14 @@ inline void RenderRagebotSubtab(ImVec4 main_color)
 		UI::labelsection("PERFORMANCE");
 		ImGui::TextColored(UI::P.textMid, "Fire Rate (ms): %d", Options::Ragebot::FireRate);
 	}
-	UI::card::end();
+	UI::CollapsibleEnd();
 }
 
 inline void RenderOrbitSubtab(ImVec4 main_color)
 {
 	const float panelY = ImGui::GetCursorPosY();
 	ImGui::SetCursorPosX(UI::ContentX);
-	if (UI::card::begin("##orbit_main", ImVec2(UI::CardW, UI::CardH), "ORBIT"))
+	if (UI::CollapsibleSection("ORBIT", UI::CardW))
 	{
 		UI::labelsection("MAIN");
 		UI::Checkbox("Enabled", &Options::Orbit::Enabled);
@@ -90,11 +90,11 @@ inline void RenderOrbitSubtab(ImVec4 main_color)
 		if (Options::Orbit::TargetMode == 1)
 			ImGui::InputText("Username##orbit", Options::Orbit::TargetPlayer, sizeof(Options::Orbit::TargetPlayer));
 	}
-	UI::card::end();
+	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
 	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + 6.0f * UI::sc);
-	if (UI::card::begin("##orbit_settings", ImVec2(UI::CardW, UI::CardH), "SETTINGS"))
+	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("ORBIT");
 		UI::SliderFloat("Orbit Speed", &Options::Orbit::Speed, 0.1f, 10.f, "%.1f");
@@ -131,14 +131,14 @@ inline void RenderOrbitSubtab(ImVec4 main_color)
 			ImGui::PopStyleColor(2);
 		}
 	}
-	UI::card::end();
+	UI::CollapsibleEnd();
 }
 
 inline void RenderAntiAimSubtab(ImVec4 main_color)
 {
 	const float panelY = ImGui::GetCursorPosY();
 	ImGui::SetCursorPosX(UI::ContentX);
-	if (UI::card::begin("##antiaim_main", ImVec2(UI::CardW, UI::CardH), "ANTI-AIM"))
+	if (UI::CollapsibleSection("ANTI-AIM", UI::CardW))
 	{
 		UI::labelsection("MAIN");
 		UI::Checkbox("Enabled", &Options::AntiAim::Enabled);
@@ -155,24 +155,24 @@ inline void RenderAntiAimSubtab(ImVec4 main_color)
 		else
 			ImGui::TextWrapped("Random: Randomizes target angles every tick to throw off aimbots.");
 	}
-	UI::card::end();
+	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
 	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + 6.0f * UI::sc);
-	if (UI::card::begin("##antiaim_settings", ImVec2(UI::CardW, UI::CardH), "SETTINGS"))
+	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("PARAMETERS");
 		UI::SliderFloat("Speed", &Options::AntiAim::Speed, 1.0f, 50.0f, "%.1f");
 		UI::SliderFloat("Strength", &Options::AntiAim::Strength, 5.0f, 180.0f, "%.0f");
 	}
-	UI::card::end();
+	UI::CollapsibleEnd();
 }
 
 inline void RenderDesyncSubtab(ImVec4 main_color)
 {
 	const float panelY = ImGui::GetCursorPosY();
 	ImGui::SetCursorPosX(UI::ContentX);
-	if (UI::card::begin("##desync_main", ImVec2(UI::CardW, UI::CardH), "DESYNC"))
+	if (UI::CollapsibleSection("DESYNC", UI::CardW))
 	{
 		UI::labelsection("MAIN");
 		UI::Checkbox("Enabled", &Options::Desync::Enabled);
@@ -201,11 +201,11 @@ inline void RenderDesyncSubtab(ImVec4 main_color)
 			ImGui::PopStyleColor(2);
 		}
 	}
-	UI::card::end();
+	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
 	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + 6.0f * UI::sc);
-	if (UI::card::begin("##desync_settings", ImVec2(UI::CardW, UI::CardH), "SETTINGS"))
+	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("METHOD");
 		static const char* methodNames[]{ "Freeze Server", "Velocity Boost" };
@@ -227,16 +227,18 @@ inline void RenderDesyncSubtab(ImVec4 main_color)
 			UI::Checkbox("Show Line", &Options::Desync::ShowLine);
 			if (Options::Desync::ShowLine)
 				UI::ColorEdit3("Line Color", Options::Desync::LineColor, ImGuiColorEditFlags_NoInputs);
+			UI::Checkbox("Wall Check", &Options::Desync::WallCheck);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hide the ghost when your real character is behind a wall.");
 		}
 	}
-	UI::card::end();
+	UI::CollapsibleEnd();
 }
 
 inline void RenderVoidHideSubtab(ImVec4 main_color)
 {
 	const float panelY = ImGui::GetCursorPosY();
 	ImGui::SetCursorPosX(UI::ContentX);
-	if (UI::card::begin("##voidhide_main", ImVec2(UI::CardW, UI::CardH), "VOIDHIDE"))
+	if (UI::CollapsibleSection("VOIDHIDE", UI::CardW))
 	{
 		UI::labelsection("MAIN");
 		UI::Checkbox("Enabled", &Options::VoidHide::Enabled);
@@ -247,11 +249,11 @@ inline void RenderVoidHideSubtab(ImVec4 main_color)
 			 (Options::VoidHide::VoidHideKey != 0 && Options::VoidHide::Toggled));
 		UI::Status(voidHideActive ? "ACTIVE" : "INACTIVE", voidHideActive);
 	}
-	UI::card::end();
+	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
 	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + 6.0f * UI::sc);
-	if (UI::card::begin("##voidhide_settings", ImVec2(UI::CardW, UI::CardH), "SETTINGS"))
+	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("TOGGLE");
 		static const char* voidHideModes[]{ "Hold", "Toggle", "Always On" };
@@ -270,24 +272,24 @@ inline void RenderVoidHideSubtab(ImVec4 main_color)
 			ImGui::PopStyleColor(2);
 		}
 	}
-	UI::card::end();
+	UI::CollapsibleEnd();
 }
 
 inline void RenderBhopSubtab(ImVec4 main_color)
 {
 	const float panelY = ImGui::GetCursorPosY();
 	ImGui::SetCursorPosX(UI::ContentX);
-	if (UI::card::begin("##bhop_main", ImVec2(UI::CardW, UI::CardH), "BHOP"))
+	if (UI::CollapsibleSection("BHOP", UI::CardW))
 	{
 		UI::labelsection("MAIN");
 		UI::Checkbox("Enabled", &Options::Bhop::Enabled);
 		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Automatically jumps when you touch the ground while holding the key.");
 	}
-	UI::card::end();
+	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
 	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + 6.0f * UI::sc);
-	if (UI::card::begin("##bhop_settings", ImVec2(UI::CardW, UI::CardH), "SETTINGS"))
+	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("KEYBIND");
 		UI::Bind("##bhop_key", &Options::Bhop::BhopKey);
@@ -297,5 +299,5 @@ inline void RenderBhopSubtab(ImVec4 main_color)
 			(GetAsyncKeyState(Options::Bhop::BhopKey) & 0x8000) != 0;
 		UI::Status(bhopActive ? "ACTIVE" : "INACTIVE", bhopActive);
 	}
-	UI::card::end();
+	UI::CollapsibleEnd();
 }

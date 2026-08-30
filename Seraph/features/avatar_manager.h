@@ -1,6 +1,6 @@
-#pragma once
+﻿#pragma once
 
-// ── Avatar Manager: async Roblox avatar-headshot thumbnails for the Target HUD ──
+// â”€â”€ Avatar Manager: async Roblox avatar-headshot thumbnails for the Target HUD â”€â”€
 // Ported from the reference avatar_manager. Downloads the headshot PNG via
 // WinInet (thumbnails.roblox.com + the rbxcdn image URL), decodes with
 // stb_image and caches the D3D11 SRV per user id. WinInet is used instead of
@@ -55,7 +55,7 @@ namespace AvatarManager
         inline std::string http_get(const std::string& url)
         {
             std::string body;
-            HINTERNET hIn = InternetOpenA("Seraph",
+            HINTERNET hIn = InternetOpenA("Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
                 INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
             if (!hIn) return body;
 
@@ -80,7 +80,7 @@ namespace AvatarManager
         inline std::vector<uint8_t> http_get_binary(const std::string& url)
         {
             std::vector<uint8_t> data;
-            HINTERNET hIn = InternetOpenA("Seraph",
+            HINTERNET hIn = InternetOpenA("Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
                 INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
             if (!hIn) return data;
 

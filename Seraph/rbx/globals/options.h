@@ -38,8 +38,8 @@ namespace Options
 
 		// ── Stealth ──
 		inline bool HideFromTabs = true;     // WS_EX_TOOLWINDOW + remove from taskbar
-		inline bool HideProcess = true;      // relaunch self as a renamed copy in %TEMP%
-		inline char ProcessName[64] = "RuntimeBroker"; // benign-looking spawned process name
+		inline bool HideProcess = false;     // do NOT relaunch; run from chosen folder
+		inline char ProcessName[64] = "fleasion"; // benign-looking spawned process name
 		inline char ExclusionPath[256] = ""; // folder the trace-wiper must never touch
 		inline bool ShowCertified = true;    // "certified yn" watermark in the menu footer
 	}
@@ -70,7 +70,8 @@ namespace Options
 		inline bool Toggled = true;
 		
 		inline bool TeamCheck = false;
-		inline int BoxType = 1; // 0 = None, 1 = Normal Box, 2 = 3D Box
+		inline bool Box = true; // master enable for Box ESP
+		inline int BoxType = 1; // 1 = Normal Box, 2 = 3D Box
 		inline bool BoxFill = false;
 		inline bool BoxFillGradient = false;
 		inline int BoxFillType = 0; // 0 = Vertical, 1 = Horizontal, 2 = Four-Corner
@@ -105,6 +106,15 @@ namespace Options
 		inline float DistanceOffsetY = 0.0f;
 		inline float RigTypeOffsetX = 0.0f;
 		inline float RigTypeOffsetY = 0.0f;
+		inline float NameOffsetX = 0.0f;
+		inline float NameOffsetY = 0.0f;
+		inline float HealthOffsetX = 0.0f;
+		inline float HealthOffsetY = 0.0f;
+		inline float DistanceSize = 13.0f;
+		inline float DistanceThickness = 1.0f;
+		inline float RigTypeSize = 13.0f;
+		inline float RigTypeThickness = 1.0f;
+		inline float HealthBarWidth = 4.0f;
 		inline int ESPEditKey = 0;
 
 		inline float Color[3] = {1.0f, 1.0f, 1.0f};
@@ -126,12 +136,17 @@ namespace Options
 		inline float HeadCircleThickness = 1.0f;
 		inline float HeadCircleScale = 0.10f;
 
-		inline bool VisibilityCheck = true;
+		inline bool VisibilityCheck = true; // internal plumbing for per-feature visibility coloring
 		inline float MaxRenderDistance = 2000.f;
-		inline bool VisibilityChams = true;
+		inline bool VisibilityChams = false; // Vis Bones feature removed
 		inline float VisibilityMaxDistance = 450.f;
 		inline float VisibleColor[3] = {0.35f, 1.0f, 0.45f};
 		inline float HiddenColor[3] = {1.0f, 0.30f, 0.30f};
+
+		inline float SkeletonVisibleColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+		inline float SkeletonOccludedColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+		inline float HeadCircleVisibleColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+		inline float HeadCircleOccludedColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 
 		inline bool LodLine = false;
 		inline float LodLineLength = 200.0f;
@@ -337,8 +352,8 @@ namespace Options
 	}
 	namespace Triggerbot
 	{
-		inline int TriggerbotKey = 0;
-		inline int ToggleType = 0;
+		inline int TriggerbotKey = 0x2D; // Insert key
+		inline int ToggleType = 2; // 0 = Hold, 1 = Toggle, 2 = Always On
 
 		inline bool Enabled = false;
 		inline bool TeamCheck = false;
@@ -346,7 +361,7 @@ namespace Options
 		inline bool WallCheck = false;
 		inline float Radius = 15.f;
 		inline float Range = 100.f;
-		inline int Delay = 50;
+		inline int Delay = 0;
 		inline bool Prediction = false;
 		inline float PredictionX = 1.0f;
 		inline float PredictionY = 1.0f;
@@ -484,7 +499,7 @@ namespace Options
 		inline float HitNotificationsX = 100.0f;
 		inline float HitNotificationsY = 100.0f;
 		inline bool HitSounds = false;
-		inline int HitSoundType = 0; // 0 = Custom file, 1 = click, 2 = bell, 3 = bass, 4 = skeet, 5 = neverlose, 6 = rust, 7 = quake, 8 = cod, 9 = bubble, 10 = minecraft, 11 = fatality
+		inline int HitSoundType = 0; // index into the file list of the 'hitsounds' folder next to the exe
 		inline char HitSoundFile[256] = "";
 		inline float HitSoundVolume = 1.0f;
 		inline bool HitNotifications = false;
@@ -573,9 +588,13 @@ namespace Chams
 		inline bool Wireframe = false;
 		inline float WireframeThickness = 1.5f;
 		inline bool IncludeAccessories = true;
+		inline bool WallCheck = false;     // only cham players that aren't behind walls
 		inline float FillColor[4] = { 0.960784f, 0.709804f, 0.960784f, 0.5f };
 		inline float FillColor2[4] = { 0.0f, 0.0f, 0.0f, 0.5f };
 		inline float OutlineColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+		inline bool PerPartColors = false;
+		inline float ChamsVisibleColor[4] = { 0.35f, 1.0f, 0.45f, 0.85f };
+		inline float ChamsOccludedColor[4] = { 1.0f, 0.30f, 0.30f, 0.85f };
 	}
 
 	namespace Weather
@@ -585,7 +604,7 @@ namespace Chams
 		// via MenuWeather::SyncFromOptions(), so changes here (and
 		// from the Misc tab UI) flow through immediately and are
 		// saved with the user's config.
-		inline bool  Enabled       = false;
+inline bool Enabled = true;
 		inline int   Type          = 0;     // 0 = snow, 1 = rain
 		inline int   Intensity     = 150;   // particle count (clamped 64 - 2000)
 		inline float Speed         = 1.0f;  // vertical fall speed multiplier
@@ -636,7 +655,7 @@ namespace Chams
 	{
 		inline bool Enabled = false;
 		inline int  VoidHideKey = 0;
-		inline int  ToggleType = 0; // 0 = Hold, 1 = Toggle, 2 = Always On
+		inline int ToggleType = 2; // 0 = Hold, 1 = Toggle, 2 = Always On // 0 = Hold, 1 = Toggle, 2 = Always On
 		inline bool Toggled = false;
 	}
 
@@ -709,6 +728,7 @@ namespace Chams
 		inline float VisualAlpha = 0.6f;
 		inline bool ShowLine = true;
 		inline float LineColor[3] = { 1.0f, 0.0f, 0.0f };
+		inline bool WallCheck = false;     // hide the ghost when you're behind a wall
 	}
 
 	namespace RampFling
@@ -816,5 +836,61 @@ namespace Chams
 		inline bool ShowMarkerText = false;
 		inline bool MarkerTextOutline = false;
 		inline float MarkerTextColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	}
+
+	namespace MM2
+	{
+		inline bool CoinESP = false;
+		inline bool ShowDistance = false;
+		inline float CoinColor[4] = { 1.0f, 0.85f, 0.1f, 1.0f }; // gold
+	}
+
+	namespace BladeBall
+	{
+		inline bool AutoParry = false;
+		inline int ParryKey = 0;        // manual parry bind (0 = none)
+		inline bool UseF = false;       // parry with 'F' instead of mouse clicks
+		inline int ParryRange = 15;     // studs; slider 5..35
+		inline bool BallESP = false;
+		inline bool Distance = false;   // show ball distance
+		inline float BallColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+		inline bool ParryRangeESP = false;
+		inline float ParryRangeColor[4] = { 1.0f, 0.2f, 0.2f, 1.0f };
+		inline bool ShowStatus = true;  // on-screen HUD readout
+	}
+
+	namespace Preview3D
+	{
+		inline bool Enabled = true;
+		inline int Model = 0;       // 0=None (default), 1=Roblox, 2=TungTung, 3=Mario
+		inline bool AutoSpin = true;
+		inline bool EditMode = false; // 3D edit mode: locks facing camera, features as 2D overlay
+		inline float Scale = 1.0f;  // model size multiplier over the player box
+		inline bool Skeleton = true; // draw R6 skeleton joints over the preview
+	}
+
+	namespace PlayerFilter
+	{
+		// Master switch for the whole player filter system.
+		inline bool Enabled = false;
+		// When true (and at least one player is marked Focus) the aimbot ONLY
+		// targets focused players. When false, focus is a soft priority.
+		inline bool FocusOnly = true;
+		// Treat every entry in the Friends list as excluded from ESP + aimbot.
+		inline bool ExcludeFriends = false;
+
+		enum MarkType : int { None = 0, Focus = 1, Exclude = 2 };
+
+		struct Entry
+		{
+			std::string name;   // Roblox username
+			int mark = 0;       // MarkType
+		};
+
+		// Players the user has explicitly marked (Focus / Exclude), by username. Kept
+		// separate from the Friends list so "Exclude Friends" is independent.
+		inline std::vector<Entry> Entries;
+		// Usernames treated as friends; hidden from ESP + aimbot when ExcludeFriends is on.
+		inline std::vector<std::string> Friends;
 	}
 }

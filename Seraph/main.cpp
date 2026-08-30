@@ -1,4 +1,4 @@
-#ifdef _MSC_VER
+﻿#ifdef _MSC_VER
 #pragma warning (disable: 26812)    // [Static Analyzer] The enum type 'xxx' is unscoped. Prefer 'enum class' over 'enum' (Enum.3). ImGui uses unscoped enum flag bitmasks heavily.
 #define _CRT_SECURE_NO_WARNINGS
 #endif
@@ -38,12 +38,15 @@
 #include "rbx/globals/globals.h"
 #include "rbx/configs/configs.h"
 #include "features/stealth.h"
+#include "features/stealth/stealth_integration.h"
 #include "features/movement_extra.h"
 #include "features/rewind.h"
 #include "features/thirdperson.h"
 #include "tray.h"
 #include "overlay/loader.h"
 #include "features/rivals_skinchanger.h"
+#include "features/mm2.h"
+#include "features/bladeball.h"
 #include "seraph_log.h"
 
 bool IsGameRunning(const wchar_t* processName)
@@ -83,15 +86,44 @@ static void HideConsoleWindow()
 
 int main()
 {
-    OutputDebugStringA("[Seraph] main: START\n");
-    SeraphLog("[Seraph] main: START");
+    OutputDebugStringA("[S] main: START\n");
+    SeraphLog("[S] main: START");
     HideConsoleWindow();
+
+    // Memory stealth: capture clean ntdll, unhook syscalls — must run FIRST
+    StealthIntegration::InitializeStealthLayer();
 
     // Stealth: relaunch self as a benign-named copy in %TEMP% before doing
     // anything else. This must run before attach so the "hidden" process is
     // the one that actually does the work. On clean exit we wipe our traces.
     std::atexit(Stealth::WipeTempTraces);
     Stealth::WipeTempTraces(); // also clear leftovers from any prior (crashed) session
+    {
+        char origDir[MAX_PATH] = {};
+        if (GetModuleFileNameA(nullptr, origDir, MAX_PATH) != 0) {
+            auto pos = std::string(origDir).find_last_of('\\');
+            if (pos != std::string::npos)
+                Globals::originalExeDir = std::string(origDir, pos + 1);
+        }
+        // Only set the env var if we haven't already been relaunched (i.e. we're
+        // still in the original exe directory, NOT in %TEMP%).  The child
+        // inherits the parent's environment, so if we're already in temp we
+        // must NOT overwrite the correct value the parent set.
+        char tempPath[MAX_PATH] = {};
+        GetTempPathA(MAX_PATH, tempPath);
+        bool inTemp = (_strnicmp(Globals::originalExeDir.c_str(), tempPath, strlen(tempPath)) == 0);
+        if (!inTemp && !Globals::originalExeDir.empty()) {
+            // Parent (original exe dir): propagate to child via env var.
+            SetEnvironmentVariableA(SX("SERAPH_ORIGDIR").c_str(), Globals::originalExeDir.c_str());
+        } else if (inTemp) {
+            // Child (relaunched into %TEMP%): override GetModuleFileNameA
+            // result with the original dir the parent set via the env var.
+            char envBuf[MAX_PATH] = {};
+            DWORD sz = GetEnvironmentVariableA(SX("SERAPH_ORIGDIR").c_str(), envBuf, MAX_PATH);
+            if (sz > 0 && sz < MAX_PATH)
+                Globals::originalExeDir = envBuf;
+        }
+    }
     Stealth::RelaunchAsRenamed();
 
     InitializeConfigPaths();
@@ -104,110 +136,112 @@ int main()
     while (true)
     {
         loopIter++;
-        SeraphLog("[Seraph] main: loop iteration " + std::to_string(loopIter));
-        // ── Loader UI ──────────────────────────────────────────────
+        SeraphLog("[S] main: loop iteration " + std::to_string(loopIter));
+        // â”€â”€ Loader UI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if (firstLaunch && !Options::Loader::AutoAttach)
         {
-            SeraphLog("[Seraph] main: showing loader (first launch)");
+            SeraphLog("[S] main: showing loader (first launch)");
             bool injected = Loader::Run();
-            SeraphLog(std::string("[Seraph] main: loader returned ") + (injected ? "true" : "false"));
+            SeraphLog(std::string("[S] main: loader returned ") + (injected ? "true" : "false"));
             if (!injected)
             {
-                OutputDebugStringA("[Seraph] main: loader returned false, exiting\n");
+                OutputDebugStringA("[S] main: loader returned false, exiting\n");
                 return 0; // user closed the loader without injecting
             }
-            OutputDebugStringA("[Seraph] main: loader returned true, proceeding to attach\n");
+            OutputDebugStringA("[S] main: loader returned true, proceeding to attach\n");
         }
         else
         {
-            SeraphLog("[Seraph] main: skipping loader (auto reattach)");
+            SeraphLog("[S] main: skipping loader (auto reattach)");
         }
         firstLaunch = false;
-        OutputDebugStringA("[Seraph] main: checking for Roblox...\n");
+        OutputDebugStringA("[S] main: checking for Roblox...\n");
         while (!IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
-        OutputDebugStringA("[Seraph] main: Roblox found, attaching...\n");
-        SeraphLog("[Seraph] main: Roblox found, attaching...");
+        OutputDebugStringA("[S] main: Roblox found, attaching...\n");
+        SeraphLog("[S] main: Roblox found, attaching...");
 
         // Wait 1.5 seconds to let Roblox fully spin up before attaching
         std::this_thread::sleep_for(std::chrono::milliseconds(1500));
 
         if (!Memory->attachToProcess("RobloxPlayerBeta.exe"))
         {
-            OutputDebugStringA("[Seraph] main: attachToProcess FAILED\n");
-            SeraphLog("[Seraph] main: attachToProcess FAILED");
+            OutputDebugStringA("[S] main: attachToProcess FAILED\n");
+            SeraphLog("[S] main: attachToProcess FAILED");
             std::this_thread::sleep_for(std::chrono::milliseconds(3000));
             continue;
         }
-        OutputDebugStringA("[Seraph] main: attachToProcess OK\n");
-        SeraphLog("[Seraph] main: attachToProcess OK, PID=" + std::to_string(Memory->getProcessId()));
+        OutputDebugStringA("[S] main: attachToProcess OK\n");
+        SeraphLog("[S] main: attachToProcess OK, PID=" + std::to_string(Memory->getProcessId()));
 
         if (Memory->getProcessId("RobloxPlayerBeta.exe") == 0)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(2000));
             continue;
         }
-        OutputDebugStringA("[Seraph] main: got PID, launching threads...\n");
+        OutputDebugStringA("[S] main: got PID, launching threads...\n");
 
         InitializeConfigPaths();
         TryLoadAutoloadConfig();
 
-        // Scan for hit sound files next to the executable
+        // Scan for hit sound files next to the executable. Prefer the original
+        // exe directory (the exe is relaunched as a renamed copy in %TEMP% when
+        // Hide Process is on, so the current module path would point there).
         if (Globals::HitSounds::FolderPath.empty())
         {
-            Globals::HitSounds::FolderPath = Globals::executablePath + "\\hitsounds";
+            Globals::HitSounds::FolderPath = Globals::ResolveExeDir() + "\\hitsounds";
             Globals::HitSounds::ScanFolder();
         }
 
         g_ResolveCharacterFallback = &ResolveCharacterFallback;
 
-        OutputDebugStringA("[Seraph] main: reading FakeDataModel...\n");
+        OutputDebugStringA("[S] main: reading FakeDataModel...\n");
         uintptr_t base = Memory->getBaseAddress();
         auto fakeDataModel = Memory->read<uintptr_t>(base + Offsets::FakeDataModel::Pointer);
         char dbg[256];
-        sprintf_s(dbg, "[Seraph] main: FakeDataModel pointer = 0x%llx\n", fakeDataModel);
+        sprintf_s(dbg, "[S] main: FakeDataModel pointer = 0x%llx\n", fakeDataModel);
         OutputDebugStringA(dbg);
-        SeraphLog("[Seraph] main: base=0x" + std::to_string(base) + " FakeDataModel@0x" +
+        SeraphLog("[S] main: base=0x" + std::to_string(base) + " FakeDataModel@0x" +
             std::to_string(Offsets::FakeDataModel::Pointer) + " = 0x" + std::to_string(fakeDataModel));
         
         if (fakeDataModel == 0) {
-            OutputDebugStringA("[Seraph] main: FakeDataModel is 0, trying VisualEngine path...\n");
+            OutputDebugStringA("[S] main: FakeDataModel is 0, trying VisualEngine path...\n");
             auto visualEngine = Memory->read<uintptr_t>(base + Offsets::VisualEngine::Pointer);
-            sprintf_s(dbg, "[Seraph] main: VisualEngine = 0x%llx\n", visualEngine);
+            sprintf_s(dbg, "[S] main: VisualEngine = 0x%llx\n", visualEngine);
             OutputDebugStringA(dbg);
-            SeraphLog("[Seraph] main: VisualEngine@0x" + std::to_string(Offsets::VisualEngine::Pointer) +
+            SeraphLog("[S] main: VisualEngine@0x" + std::to_string(Offsets::VisualEngine::Pointer) +
                 " = 0x" + std::to_string(visualEngine));
             if (visualEngine != 0) {
                 fakeDataModel = Memory->read<uintptr_t>(visualEngine + Offsets::VisualEngine::FakeDataModel);
-                sprintf_s(dbg, "[Seraph] main: FakeDataModel from VisualEngine = 0x%llx\n", fakeDataModel);
+                sprintf_s(dbg, "[S] main: FakeDataModel from VisualEngine = 0x%llx\n", fakeDataModel);
                 OutputDebugStringA(dbg);
-                SeraphLog("[Seraph] main: FakeDataModel from VisualEngine = 0x" + std::to_string(fakeDataModel));
+                SeraphLog("[S] main: FakeDataModel from VisualEngine = 0x" + std::to_string(fakeDataModel));
             }
         }
         
         if (fakeDataModel == 0) {
-            OutputDebugStringA("[Seraph] main: trying TaskScheduler path...\n");
+            OutputDebugStringA("[S] main: trying TaskScheduler path...\n");
             auto taskScheduler = Memory->read<uintptr_t>(base + Offsets::TaskScheduler::Pointer);
-            sprintf_s(dbg, "[Seraph] main: TaskScheduler = 0x%llx\n", taskScheduler);
+            sprintf_s(dbg, "[S] main: TaskScheduler = 0x%llx\n", taskScheduler);
             OutputDebugStringA(dbg);
-            SeraphLog("[Seraph] main: TaskScheduler@0x" + std::to_string(Offsets::TaskScheduler::Pointer) +
+            SeraphLog("[S] main: TaskScheduler@0x" + std::to_string(Offsets::TaskScheduler::Pointer) +
                 " = 0x" + std::to_string(taskScheduler));
             if (taskScheduler != 0) {
                 auto renderJob = Memory->read<uintptr_t>(taskScheduler + 0x38); // RenderJob from TaskScheduler
                 if (renderJob != 0) {
                     fakeDataModel = Memory->read<uintptr_t>(renderJob + Offsets::RenderJob::FakeDataModel);
-                    sprintf_s(dbg, "[Seraph] main: FakeDataModel from RenderJob = 0x%llx\n", fakeDataModel);
+                    sprintf_s(dbg, "[S] main: FakeDataModel from RenderJob = 0x%llx\n", fakeDataModel);
                     OutputDebugStringA(dbg);
-                    SeraphLog("[Seraph] main: FakeDataModel from RenderJob = 0x" + std::to_string(fakeDataModel));
+                    SeraphLog("[S] main: FakeDataModel from RenderJob = 0x" + std::to_string(fakeDataModel));
                 }
             }
         }
         
         if (fakeDataModel == 0) {
-            OutputDebugStringA("[Seraph] main: waiting for pointers to populate...\n");
-            SeraphLog("[Seraph] main: waiting for pointers to populate...");
+            OutputDebugStringA("[S] main: waiting for pointers to populate...\n");
+            SeraphLog("[S] main: waiting for pointers to populate...");
             int waitCount = 0;
             while (fakeDataModel == 0 && IsGameRunning(L"RobloxPlayerBeta.exe") && waitCount < 60) {
                 fakeDataModel = Memory->read<uintptr_t>(base + Offsets::FakeDataModel::Pointer);
@@ -228,39 +262,39 @@ int main()
                 }
                 if (waitCount % 5 == 0)
                 {
-                    sprintf_s(dbg, "[Seraph] main: pointer wait %d, FakeDataModel = 0x%llx\n", waitCount, fakeDataModel);
+                    sprintf_s(dbg, "[S] main: pointer wait %d, FakeDataModel = 0x%llx\n", waitCount, fakeDataModel);
                     SeraphLog(dbg);
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
                 waitCount++;
             }
-            sprintf_s(dbg, "[Seraph] main: after wait, FakeDataModel = 0x%llx\n", fakeDataModel);
+            sprintf_s(dbg, "[S] main: after wait, FakeDataModel = 0x%llx\n", fakeDataModel);
             OutputDebugStringA(dbg);
-            SeraphLog("[Seraph] main: after wait, FakeDataModel = 0x" + std::to_string(fakeDataModel));
+            SeraphLog("[S] main: after wait, FakeDataModel = 0x" + std::to_string(fakeDataModel));
         }
         
         if (fakeDataModel == 0) {
-            OutputDebugStringA("[Seraph] main: Failed to get FakeDataModel, continuing...\n");
-            SeraphLog("[Seraph] main: Failed to get FakeDataModel");
+            OutputDebugStringA("[S] main: Failed to get FakeDataModel, continuing...\n");
+            SeraphLog("[S] main: Failed to get FakeDataModel");
         }
         
         auto realDataModelPtr = Memory->read<uintptr_t>(fakeDataModel + Offsets::FakeDataModel::RealDataModel);
-        sprintf_s(dbg, "[Seraph] main: RealDataModel = 0x%llx\n", realDataModelPtr);
+        sprintf_s(dbg, "[S] main: RealDataModel = 0x%llx\n", realDataModelPtr);
         OutputDebugStringA(dbg);
         
         auto dataModel = RobloxInstance(realDataModelPtr);
 
         // Wait for Ugc or Roblox exit
-        OutputDebugStringA("[Seraph] main: waiting for DataModel (Ugc/Game)...\n");
-        SeraphLog("[Seraph] main: waiting for DataModel (Ugc/Game)... addr=0x" + std::to_string(dataModel.address));
+        OutputDebugStringA("[S] main: waiting for DataModel (Ugc/Game)...\n");
+        SeraphLog("[S] main: waiting for DataModel (Ugc/Game)... addr=0x" + std::to_string(dataModel.address));
         int dmWait = 0;
         while (dataModel.Name() != "Ugc" && dataModel.Name() != "Game" && IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
             if (dmWait % 5 == 0) {
                 char dbg[256];
-                sprintf_s(dbg, "[Seraph] main: dataModel.addr=0x%llx, Name()=\"%s\"\n", dataModel.address, dataModel.Name().c_str());
+                sprintf_s(dbg, "[S] main: dataModel.addr=0x%llx, Name()=\"%s\"\n", dataModel.address, dataModel.Name().c_str());
                 OutputDebugStringA(dbg);
-                SeraphLog(std::string("[Seraph] main: DataModel wait ") + std::to_string(dmWait) +
+                SeraphLog(std::string("[S] main: DataModel wait ") + std::to_string(dmWait) +
                     " addr=0x" + std::to_string(dataModel.address) + " Name()=\"" + dataModel.Name() + "\"");
             }
             dmWait++;
@@ -268,7 +302,7 @@ int main()
             dataModel = RobloxInstance(Memory->read<uintptr_t>(fakeDataModel + Offsets::FakeDataModel::RealDataModel));
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
-        SeraphLog("[Seraph] main: DataModel resolved, Name()=\"" + dataModel.Name() + "\"");
+        SeraphLog("[S] main: DataModel resolved, Name()=\"" + dataModel.Name() + "\"");
 
         if (!IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
@@ -278,21 +312,21 @@ int main()
 
         Globals::Roblox::DataModel = dataModel;
 
-        OutputDebugStringA("[Seraph] main: reading VisualEngine...\n");
+        OutputDebugStringA("[S] main: reading VisualEngine...\n");
         auto visualEngine = Memory->read<uintptr_t>(base + Offsets::VisualEngine::Pointer);
-        OutputDebugStringA("[Seraph] main: waiting for VisualEngine\n");
+        OutputDebugStringA("[S] main: waiting for VisualEngine\n");
         int veWait = 0;
         while (visualEngine == 0 && IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
             if (veWait % 5 == 0) {
-                OutputDebugStringA("[Seraph] main: still waiting for VisualEngine...\n");
-                SeraphLog("[Seraph] main: still waiting for VisualEngine, iter " + std::to_string(veWait));
+                OutputDebugStringA("[S] main: still waiting for VisualEngine...\n");
+                SeraphLog("[S] main: still waiting for VisualEngine, iter " + std::to_string(veWait));
             }
             veWait++;
             visualEngine = Memory->read<uintptr_t>(base + Offsets::VisualEngine::Pointer);
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
-        SeraphLog("[Seraph] main: VisualEngine = 0x" + std::to_string(visualEngine));
+        SeraphLog("[S] main: VisualEngine = 0x" + std::to_string(visualEngine));
 
         if (!IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
@@ -301,198 +335,51 @@ int main()
         }
 
         Globals::Roblox::VisualEngine = visualEngine;
-        OutputDebugStringA("[Seraph] main: got VisualEngine\n");
+        OutputDebugStringA("[S] main: got VisualEngine\n");
 
         Globals::Roblox::Workspace = Globals::Roblox::DataModel.FindFirstChildWhichIsA("Workspace");
-        OutputDebugStringA("[Seraph] main: got Workspace\n");
+        OutputDebugStringA("[S] main: got Workspace\n");
         Globals::Roblox::Players = Globals::Roblox::DataModel.FindFirstChildWhichIsA("Players");
-        OutputDebugStringA("[Seraph] main: got Players\n");
+        OutputDebugStringA("[S] main: got Players\n");
         Globals::Roblox::Camera = Globals::Roblox::Workspace.FindFirstChildWhichIsA("Camera");
-        OutputDebugStringA("[Seraph] main: got Camera\n");
+        OutputDebugStringA("[S] main: got Camera\n");
 
         Globals::Roblox::LocalPlayer = RobloxInstance(Memory->read<uintptr_t>(Globals::Roblox::Players.address + Offsets::Player::LocalPlayer));
-        OutputDebugStringA("[Seraph] main: got LocalPlayer\n");
+        OutputDebugStringA("[S] main: got LocalPlayer\n");
 
         Globals::Roblox::lastPlaceID = Memory->read<int>(Globals::Roblox::DataModel.address + Offsets::DataModel::PlaceId);
         Globals::Roblox::isPhantomForces = (Globals::Roblox::lastPlaceID == Globals::Roblox::PHANTOM_FORCES_ID);
         Globals::Roblox::isRivals = (Globals::Roblox::lastPlaceID == Globals::Roblox::RIVALS_ID);
         Globals::Roblox::isOverkill = (Globals::Roblox::lastPlaceID == Globals::Roblox::OVERKILL_ID);
+        Globals::Roblox::isMM2 = (Globals::Roblox::lastPlaceID == Globals::Roblox::MM2_ID);
+        Globals::Roblox::isBladeBall = (Globals::Roblox::lastPlaceID == Globals::Roblox::BLADEBALL_ID);
 
         // Resolve a human-readable game name for the detected place.
         if (Globals::Roblox::isPhantomForces) Globals::Roblox::gameName = "Phantom Forces";
         else if (Globals::Roblox::isRivals) Globals::Roblox::gameName = "Rivals";
         else if (Globals::Roblox::isOverkill) Globals::Roblox::gameName = "Overkill";
+        else if (Globals::Roblox::isMM2) Globals::Roblox::gameName = "Murder Mystery 2";
+        else if (Globals::Roblox::isBladeBall) Globals::Roblox::gameName = "Blade Ball";
         else Globals::Roblox::gameName = "Game #" + std::to_string(Globals::Roblox::lastPlaceID);
 
-        // Debug: dump hierarchy when Overkill is detected (run after 45s delay for game to fully load)
-        if (Globals::Roblox::isOverkill)
-        {
-            std::thread([]() {
-                std::this_thread::sleep_for(std::chrono::seconds(45));
-                if (!Globals::running) return;
-
-                std::ofstream dbg("C:\\Users\\ncomp\\overkill_debug.txt");
-                if (!dbg.is_open()) return;
-
-                dbg << "=== Overkill Debug Dump ===" << std::endl;
-                dbg << "PlaceId: " << Globals::Roblox::lastPlaceID << std::endl;
-
-                // Dump ALL DataModel children (all services)
-                dbg << "\n--- ALL DataModel children ---" << std::endl;
-                auto dmChildren = Globals::Roblox::DataModel.GetChildren();
-                dbg << "Count: " << dmChildren.size() << std::endl;
-                for (auto& child : dmChildren)
-                {
-                    if (!child.address) continue;
-                    dbg << "  Name=\"" << child.Name() << "\" Class=\"" << child.Class() << "\" Addr=0x" << std::hex << child.address << std::dec << std::endl;
-                }
-
-                // Dump ALL Players children with names
-                dbg << "\n--- Players children ---" << std::endl;
-                auto plChildren = Globals::Roblox::Players.GetChildren();
-                dbg << "Count: " << plChildren.size() << std::endl;
-                for (size_t i = 0; i < plChildren.size(); i++)
-                {
-                    auto& child = plChildren[i];
-                    dbg << "  [" << i << "] Name=\"" << child.Name() << "\" Class=\"" << child.Class() << "\" Addr=0x" << std::hex << child.address << std::dec << std::endl;
-                    dbg << "    ModelInstance(0x298)=0x" << std::hex << Memory->read<uintptr_t>(child.address + 0x298) << std::dec << std::endl;
-
-                    // Dump Player's own children
-                    auto playerKids = child.GetChildren();
-                    dbg << "    Player.GetChildren() count=" << playerKids.size() << std::endl;
-                    for (size_t j = 0; j < playerKids.size() && j < 10; j++)
-                    {
-                        dbg << "      [" << j << "] Name=\"" << playerKids[j].Name() << "\" Class=\"" << playerKids[j].Class() << "\" Addr=0x" << std::hex << playerKids[j].address << std::dec << std::endl;
-                    }
-                }
-
-                // Recursively search ALL services for Models with Humanoids
-                dbg << "\n--- Recursive search ALL services for Models with Humanoids ---" << std::endl;
-                std::function<void(RobloxInstance&, const std::string&, int)> deepSearch = [&](RobloxInstance& inst, const std::string& path, int depth) {
-                    if (depth > 8) return;
-                    auto children = inst.GetChildren();
-                    for (auto& child : children)
-                    {
-                        if (!child.address) continue;
-                        std::string cls = child.Class();
-                        std::string name = child.Name();
-                        std::string childPath = path + "/" + name;
-
-                        if (cls == "Model")
-                        {
-                            auto humanoid = child.FindFirstChildWhichIsA("Humanoid");
-                            auto hrp = child.FindFirstChild("HumanoidRootPart");
-                            if (humanoid.address || hrp.address)
-                            {
-                                dbg << "  FOUND Model \"" << name << "\" at " << childPath
-                                    << " Addr=0x" << std::hex << child.address << std::dec
-                                    << " Humanoid=" << (humanoid.address ? "YES" : "no")
-                                    << " HRP=" << (hrp.address ? "YES" : "no") << std::endl;
-
-                                if (humanoid.address)
-                                    dbg << "    RigType=" << Memory->read<int>(humanoid.address + Offsets::Humanoid::RigType) << std::endl;
-
-                                auto head = child.FindFirstChild("Head");
-                                dbg << "    Head=0x" << std::hex << (head.address) << std::dec << std::endl;
-                            }
-                        }
-
-                        // Recurse into ANY instance that has children, not just Folder/Model
-                        auto grandChildren = child.GetChildren();
-                        if (!grandChildren.empty())
-                        {
-                            deepSearch(child, childPath, depth + 1);
-                        }
-                    }
-                };
-
-                // Dump ALL direct Workspace children with class names
-                dbg << "\n--- ALL Workspace direct children ---" << std::endl;
-                {
-                    auto wsKids = Globals::Roblox::Workspace.GetChildren();
-                    dbg << "Count: " << wsKids.size() << std::endl;
-                    for (auto& kid : wsKids)
-                    {
-                        if (!kid.address) continue;
-                        auto kidKids = kid.GetChildren();
-                        dbg << "  Name=\"" << kid.Name() << "\" Class=\"" << kid.Class()
-                            << "\" Children=" << kidKids.size()
-                            << " Addr=0x" << std::hex << kid.address << std::dec << std::endl;
-                    }
-                }
-
-                for (auto& child : dmChildren)
-                {
-                    if (!child.address) continue;
-                    std::string name = child.Name();
-                    std::string cls = child.Class();
-                    dbg << "\n[" << name << "] Class=" << cls << std::endl;
-                    deepSearch(child, name, 0);
-                }
-
-                // Also scan Player object memory 0x100-0x400 for pointers that might be Character
-                dbg << "\n--- LocalPlayer memory scan 0x100-0x400 ---" << std::endl;
-                if (Globals::Roblox::LocalPlayer.address)
-                {
-                    for (uintptr_t off = 0x100; off <= 0x400; off += 0x8)
-                    {
-                        uintptr_t val = Memory->read<uintptr_t>(Globals::Roblox::LocalPlayer.address + off);
-                        if (val == 0 || val < 0x10000 || val > 0x7FFFFFFFFFFF) continue;
-
-                        // Try reading Name from this pointer
-                        uintptr_t namePtr = Memory->read<uintptr_t>(val + 0x98);
-                        if (namePtr == 0 || namePtr < 0x10000) continue;
-                        std::string instName = Memory->readString(namePtr);
-                        if (instName.empty()) continue;
-
-                        // Try ClassName
-                        std::string clsName = "";
-                        uintptr_t classDesc = Memory->read<uintptr_t>(val + 0x18);
-                        if (classDesc != 0 && classDesc > 0x10000)
-                        {
-                            uintptr_t classNamePtr = Memory->read<uintptr_t>(classDesc + 0x8);
-                            if (classNamePtr != 0 && classNamePtr > 0x10000)
-                                clsName = Memory->readString(classNamePtr);
-                        }
-
-                        dbg << "  offset=0x" << std::hex << off << " -> 0x" << val
-                            << " class=\"" << clsName << "\" name=\"" << instName << "\"" << std::dec << std::endl;
-
-                        // If it's a Model, check for Humanoid
-                        if (clsName == "Model")
-                        {
-                            auto humanoid = RobloxInstance(val).FindFirstChildWhichIsA("Humanoid");
-                            auto hrp = RobloxInstance(val).FindFirstChild("HumanoidRootPart");
-                            dbg << "    Model check: Humanoid=" << (humanoid.address ? "YES" : "no")
-                                << " HRP=" << (hrp.address ? "YES" : "no") << std::endl;
-                        }
-                    }
-                }
-
-                dbg.close();
-            }).detach();
-        }
-
-        OutputDebugStringA("[Seraph] main: about to launch threads\n");
+        OutputDebugStringA("[S] main: about to launch threads\n");
         // Enable global hack state and launch all threads
         Globals::running = true;
-        OutputDebugStringA("[Seraph] main: launching threads\n");
-        SeraphLog("[Seraph] main: running=true, launching threads");
+        OutputDebugStringA("[S] main: launching threads\n");
+        SeraphLog("[S] main: running=true, launching threads");
 
-        // Scan hitsounds folder
+        // Scan hitsounds folder (resolve relative to the original exe directory
+        // so it works no matter where the process is running from)
         {
-            char hitsoundPath[MAX_PATH];
-            GetModuleFileNameA(GetModuleHandleA(NULL), hitsoundPath, MAX_PATH);
-            std::string hitsoundDir = std::string(hitsoundPath).substr(0, std::string(hitsoundPath).find_last_of("\\/")) + "\\hitsounds";
-            Globals::HitSounds::FolderPath = hitsoundDir;
+            Globals::HitSounds::FolderPath = Globals::ResolveExeDir() + "\\hitsounds";
             Globals::HitSounds::ScanFolder();
         }
 
         std::thread(InitTray).detach();
-        OutputDebugStringA("[Seraph] main: InitTray launched\n");
+        OutputDebugStringA("[S] main: InitTray launched\n");
         std::thread(ShowImgui).detach();
-        OutputDebugStringA("[Seraph] main: ShowImgui launched\n");
-        SeraphLog("[Seraph] main: ShowImgui launched");
+        OutputDebugStringA("[S] main: ShowImgui launched\n");
+        SeraphLog("[S] main: ShowImgui launched");
         std::thread(CachePlayers).detach();
         std::thread(CachePlayerObjects).detach();
         std::thread(TPHandler).detach();
@@ -520,7 +407,8 @@ int main()
 		std::thread(Rewind::Tick).detach();
 		std::thread(StretchResLoop).detach();
 		std::thread(RageKillLoop).detach();
-		std::thread(RivalsSkinChangerLoop).detach();
+        std::thread(RivalsSkinChangerLoop).detach();
+        std::thread(BladeBall::RunService).detach();
 		Visibility::StartOccluderThread();
 		std::thread(MapParser::WorkerLoop).detach();
 
@@ -535,7 +423,7 @@ int main()
         Globals::running = false;
         Globals::overlayShouldShutdown = true;
         ShutdownTray();
-        SeraphLog("[Seraph] main: Roblox exited, running=false, overlayShouldShutdown=true");
+        SeraphLog("[S] main: Roblox exited, running=false, overlayShouldShutdown=true");
 
         // Force close overlay window if still open
         if (Globals::Viewport::RobloxHWND)
@@ -560,7 +448,7 @@ int main()
 
         // Close the Roblox process handle and reset state
         Memory->closeProcess();
-        SeraphLog("[Seraph] main: cleanup complete, looping for next Roblox session");
+        SeraphLog("[S] main: cleanup complete, looping for next Roblox session");
 
         // Clear all caches and reset global state
         Globals::Caches::CachedPlayers.clear();

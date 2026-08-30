@@ -87,7 +87,7 @@ inline void InitializeConfigPaths()
     {
         char appData[MAX_PATH] = {};
         if (SUCCEEDED(SHGetFolderPathA(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, appData)))
-            Globals::configsPath = (std::filesystem::path(appData) / "Seraph" / "configs").string();
+            Globals::configsPath = (std::filesystem::path(appData) / SX("Seraph") / SX("configs")).string();
         else if (!Globals::executablePath.empty())
             Globals::configsPath = (std::filesystem::path(Globals::executablePath) / "configs").string();
     }
@@ -293,6 +293,7 @@ inline json BuildConfigJson()
 
     j["ESP"] = {
         { "Team Check", Options::ESP::TeamCheck },
+        { "Box", Options::ESP::Box },
         { "Box Type", Options::ESP::BoxType },
         { "Tracers", Options::ESP::Tracers },
         { "TracersStart", Options::ESP::TracersStart },
@@ -315,6 +316,15 @@ inline json BuildConfigJson()
         { "ESP Distance Offset Y", Options::ESP::DistanceOffsetY },
         { "ESP RigType Offset X", Options::ESP::RigTypeOffsetX },
         { "ESP RigType Offset Y", Options::ESP::RigTypeOffsetY },
+        { "ESP Name Offset X", Options::ESP::NameOffsetX },
+        { "ESP Name Offset Y", Options::ESP::NameOffsetY },
+        { "ESP Health Offset X", Options::ESP::HealthOffsetX },
+        { "ESP Health Offset Y", Options::ESP::HealthOffsetY },
+        { "ESP Distance Size", Options::ESP::DistanceSize },
+        { "ESP Distance Thickness", Options::ESP::DistanceThickness },
+        { "ESP RigType Size", Options::ESP::RigTypeSize },
+        { "ESP RigType Thickness", Options::ESP::RigTypeThickness },
+        { "ESP Health Bar Width", Options::ESP::HealthBarWidth },
         { "Preview Auto Rotate", Options::ESP::PreviewAutoRotate },
         { "Preview Rotation Speed", Options::ESP::PreviewRotationSpeed },
         { "Box Thickness", Options::ESP::BoxThickness },
@@ -336,6 +346,10 @@ inline json BuildConfigJson()
         { "3D ESP Color", ToJsonColor(Options::ESP::ESP3DColor, 3) },
         { "Head Circles Color", ToJsonColor(Options::ESP::HeadCircleColor, 3) },
         { "Head Dot Color", ToJsonColor(Options::ESP::HeadDotColor, 3) },
+        { "Skeleton Visible Color", ToJsonColor(Options::ESP::SkeletonVisibleColor, 3) },
+        { "Skeleton Occluded Color", ToJsonColor(Options::ESP::SkeletonOccludedColor, 3) },
+        { "Head Circle Visible Color", ToJsonColor(Options::ESP::HeadCircleVisibleColor, 3) },
+        { "Head Circle Occluded Color", ToJsonColor(Options::ESP::HeadCircleOccludedColor, 3) },
         { "LodLine", Options::ESP::LodLine },
         { "LodLine Length", Options::ESP::LodLineLength },
         { "LodLine Thickness", Options::ESP::LodLineThickness },
@@ -510,14 +524,35 @@ inline json BuildConfigJson()
         { "RightFootFOV_Y", Options::Triggerbot::RightFootFOV_Y }
     };
 
+    j["PlayerFilter"] = {
+        { "Enabled", Options::PlayerFilter::Enabled },
+        { "Focus Only", Options::PlayerFilter::FocusOnly },
+        { "Exclude Friends", Options::PlayerFilter::ExcludeFriends },
+        { "Entries", []() {
+            json a = json::array();
+            for (const auto& e : Options::PlayerFilter::Entries)
+            {
+                json it;
+                it["name"] = e.name;
+                it["mark"] = e.mark;
+                a.push_back(it);
+            }
+            return a;
+        }() },
+        { "Friends", []() {
+            json a = json::array();
+            for (const auto& f : Options::PlayerFilter::Friends)
+                a.push_back(f);
+            return a;
+        }() }
+    };
+
     j["Macro"] = {
         { "Macro Key", Options::Macro::MacroKey },
         { "Toggle Type", Options::Macro::ToggleType },
         { "Enabled", Options::Macro::Enabled },
         { "Delay", Options::Macro::Delay }
-    };
-
-    j["Crosshair"] = {
+    };    j["Crosshair"] = {
         { "Enabled", Options::Crosshair::Enabled },
         { "Style", Options::Crosshair::Style },
         { "Size", Options::Crosshair::Size },
@@ -659,7 +694,12 @@ inline json BuildConfigJson()
         { "Fade Speed", Options::Chams::ChamsFadeSpeed },
         { "Fill Color", ToJsonColor(Options::Chams::FillColor, 4) },
         { "Outline Color", ToJsonColor(Options::Chams::OutlineColor, 4) },
-        { "Team Check", Options::Chams::TeamCheck }
+        { "Team Check", Options::Chams::TeamCheck },
+        { "IncludeAccessories", Options::Chams::IncludeAccessories },
+        { "WallCheck", Options::Chams::WallCheck },
+        { "PerPartColors", Options::Chams::PerPartColors },
+        { "VisibleColor", ToJsonColor(Options::Chams::ChamsVisibleColor, 4) },
+        { "OccludedColor", ToJsonColor(Options::Chams::ChamsOccludedColor, 4) }
     };
 
     j["AntiAim"] = {
@@ -749,6 +789,34 @@ inline json BuildConfigJson()
         { "Anti Katana", Options::Rivals::AntiKatana }
     };
 
+    j["MM2"] = {
+        { "CoinESP", Options::MM2::CoinESP },
+        { "ShowDistance", Options::MM2::ShowDistance },
+        { "CoinColor", ToJsonColor(Options::MM2::CoinColor, 4) }
+    };
+
+    j["BladeBall"] = {
+        { "AutoParry", Options::BladeBall::AutoParry },
+        { "ParryKey", Options::BladeBall::ParryKey },
+        { "UseF", Options::BladeBall::UseF },
+        { "ParryRange", Options::BladeBall::ParryRange },
+        { "BallESP", Options::BladeBall::BallESP },
+        { "Distance", Options::BladeBall::Distance },
+        { "BallColor", ToJsonColor(Options::BladeBall::BallColor, 4) },
+        { "ParryRangeESP", Options::BladeBall::ParryRangeESP },
+        { "ParryRangeColor", ToJsonColor(Options::BladeBall::ParryRangeColor, 4) },
+        { "ShowStatus", Options::BladeBall::ShowStatus }
+    };
+
+    j["Preview3D"] = {
+        { "Enabled", Options::Preview3D::Enabled },
+        { "Model", Options::Preview3D::Model },
+        { "AutoSpin", Options::Preview3D::AutoSpin },
+        { "EditMode", Options::Preview3D::EditMode },
+        { "Scale", Options::Preview3D::Scale },
+        { "Skeleton", Options::Preview3D::Skeleton }
+    };
+
     j["Desync"] = {
         { "Enabled", Options::Desync::Enabled },
         { "DesyncKey", Options::Desync::DesyncKey },
@@ -760,7 +828,8 @@ inline json BuildConfigJson()
         { "VisualAlpha", Options::Desync::VisualAlpha },
         { "ShowLine", Options::Desync::ShowLine },
         { "VisualColor", ToJsonColor(Options::Desync::VisualColor, 3) },
-        { "LineColor", ToJsonColor(Options::Desync::LineColor, 3) }
+        { "LineColor", ToJsonColor(Options::Desync::LineColor, 3) },
+        { "WallCheck", Options::Desync::WallCheck }
     };
 
     j["MovementExtra"] = {
@@ -861,12 +930,20 @@ inline void ApplyConfigJson(const json& data)
         const auto& esp = data["ESP"];
         LoadVal(esp, "Team Check", Options::ESP::TeamCheck);
 
-        if (esp.contains("Box Type"))
+        if (esp.contains("Box Type") && esp.contains("Box"))
+        {
+            LoadVal(esp, "Box", Options::ESP::Box);
             LoadVal(esp, "Box Type", Options::ESP::BoxType);
+        }
+        else if (esp.contains("Box Type"))
+        {
+            LoadVal(esp, "Box Type", Options::ESP::BoxType);
+        }
         else if (esp.contains("Box"))
         {
             bool oldBox = false;
             LoadVal(esp, "Box", oldBox);
+            Options::ESP::Box = oldBox;
             Options::ESP::BoxType = oldBox ? 1 : 0;
         }
 
@@ -891,6 +968,15 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(esp, "ESP Distance Offset Y", Options::ESP::DistanceOffsetY);
         LoadVal(esp, "ESP RigType Offset X", Options::ESP::RigTypeOffsetX);
         LoadVal(esp, "ESP RigType Offset Y", Options::ESP::RigTypeOffsetY);
+        LoadVal(esp, "ESP Name Offset X", Options::ESP::NameOffsetX);
+        LoadVal(esp, "ESP Name Offset Y", Options::ESP::NameOffsetY);
+        LoadVal(esp, "ESP Health Offset X", Options::ESP::HealthOffsetX);
+        LoadVal(esp, "ESP Health Offset Y", Options::ESP::HealthOffsetY);
+        LoadVal(esp, "ESP Distance Size", Options::ESP::DistanceSize);
+        LoadVal(esp, "ESP Distance Thickness", Options::ESP::DistanceThickness);
+        LoadVal(esp, "ESP RigType Size", Options::ESP::RigTypeSize);
+        LoadVal(esp, "ESP RigType Thickness", Options::ESP::RigTypeThickness);
+        LoadVal(esp, "ESP Health Bar Width", Options::ESP::HealthBarWidth);
         LoadVal(esp, "Preview Auto Rotate", Options::ESP::PreviewAutoRotate);
         LoadVal(esp, "Preview Rotation Speed", Options::ESP::PreviewRotationSpeed);
         LoadVal(esp, "Box Thickness", Options::ESP::BoxThickness);
@@ -912,6 +998,10 @@ inline void ApplyConfigJson(const json& data)
         LoadFloatArray(esp, "3D ESP Color", Options::ESP::ESP3DColor);
         LoadFloatArray(esp, "Head Circles Color", Options::ESP::HeadCircleColor);
         LoadFloatArray(esp, "Head Dot Color", Options::ESP::HeadDotColor);
+        LoadFloatArray(esp, "Skeleton Visible Color", Options::ESP::SkeletonVisibleColor);
+        LoadFloatArray(esp, "Skeleton Occluded Color", Options::ESP::SkeletonOccludedColor);
+        LoadFloatArray(esp, "Head Circle Visible Color", Options::ESP::HeadCircleVisibleColor);
+        LoadFloatArray(esp, "Head Circle Occluded Color", Options::ESP::HeadCircleOccludedColor);
         LoadVal(esp, "LodLine", Options::ESP::LodLine);
         LoadVal(esp, "LodLine Length", Options::ESP::LodLineLength);
         LoadVal(esp, "LodLine Thickness", Options::ESP::LodLineThickness);
@@ -966,6 +1056,34 @@ inline void ApplyConfigJson(const json& data)
             strncpy_s(Options::ESP::CustomImagePath, p.c_str(), sizeof(Options::ESP::CustomImagePath) - 1);
         }
         LoadVal(esp, "ESP Custom Image Scale", Options::ESP::CustomImageScale);
+    }
+
+    if (data.is_object() && data.contains("PlayerFilter"))
+    {
+        const auto& pf = data["PlayerFilter"];
+        LoadVal(pf, "Enabled", Options::PlayerFilter::Enabled);
+        LoadVal(pf, "Focus Only", Options::PlayerFilter::FocusOnly);
+        LoadVal(pf, "Exclude Friends", Options::PlayerFilter::ExcludeFriends);
+
+        Options::PlayerFilter::Entries.clear();
+        if (pf.contains("Entries") && pf["Entries"].is_array())
+        {
+            for (const auto& it : pf["Entries"])
+            {
+                if (!it.is_object()) continue;
+                Options::PlayerFilter::Entry e;
+                if (it.contains("name")) e.name = it["name"].get<std::string>();
+                if (it.contains("mark")) e.mark = it["mark"].get<int>();
+                if (!e.name.empty()) Options::PlayerFilter::Entries.push_back(e);
+            }
+        }
+
+        Options::PlayerFilter::Friends.clear();
+        if (pf.contains("Friends") && pf["Friends"].is_array())
+        {
+            for (const auto& f : pf["Friends"])
+                Options::PlayerFilter::Friends.push_back(f.get<std::string>());
+        }
     }
 
     if (data.is_object() && data.contains(OBS("Aim", "bot")))
@@ -1278,6 +1396,11 @@ inline void ApplyConfigJson(const json& data)
         LoadFloatArray(ch, "Fill Color", Options::Chams::FillColor);
         LoadFloatArray(ch, "Outline Color", Options::Chams::OutlineColor);
         LoadVal(ch, "Team Check", Options::Chams::TeamCheck);
+        LoadVal(ch, "IncludeAccessories", Options::Chams::IncludeAccessories);
+        LoadVal(ch, "WallCheck", Options::Chams::WallCheck);
+        LoadVal(ch, "PerPartColors", Options::Chams::PerPartColors);
+        LoadFloatArray(ch, "VisibleColor", Options::Chams::ChamsVisibleColor);
+        LoadFloatArray(ch, "OccludedColor", Options::Chams::ChamsOccludedColor);
     }
 
     if (data.is_object() && data.contains("AntiAim"))
@@ -1415,6 +1538,40 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(rv, "Anti Katana", Options::Rivals::AntiKatana);
     }
 
+    if (data.is_object() && data.contains("MM2"))
+    {
+        const auto& mm = data["MM2"];
+        LoadVal(mm, "CoinESP", Options::MM2::CoinESP);
+        LoadVal(mm, "ShowDistance", Options::MM2::ShowDistance);
+        LoadFloatArray(mm, "CoinColor", Options::MM2::CoinColor);
+    }
+
+    if (data.is_object() && data.contains("BladeBall"))
+    {
+        const auto& bb = data["BladeBall"];
+        LoadVal(bb, "AutoParry", Options::BladeBall::AutoParry);
+        LoadVal(bb, "ParryKey", Options::BladeBall::ParryKey);
+        LoadVal(bb, "UseF", Options::BladeBall::UseF);
+        LoadVal(bb, "ParryRange", Options::BladeBall::ParryRange);
+        LoadVal(bb, "BallESP", Options::BladeBall::BallESP);
+        LoadVal(bb, "Distance", Options::BladeBall::Distance);
+        LoadFloatArray(bb, "BallColor", Options::BladeBall::BallColor);
+        LoadVal(bb, "ParryRangeESP", Options::BladeBall::ParryRangeESP);
+        LoadFloatArray(bb, "ParryRangeColor", Options::BladeBall::ParryRangeColor);
+        LoadVal(bb, "ShowStatus", Options::BladeBall::ShowStatus);
+    }
+
+    if (data.is_object() && data.contains("Preview3D"))
+    {
+        const auto& p3 = data["Preview3D"];
+        LoadVal(p3, "Enabled", Options::Preview3D::Enabled);
+        LoadVal(p3, "Model", Options::Preview3D::Model);
+        LoadVal(p3, "AutoSpin", Options::Preview3D::AutoSpin);
+        LoadVal(p3, "EditMode", Options::Preview3D::EditMode);
+        LoadVal(p3, "Scale", Options::Preview3D::Scale);
+        LoadVal(p3, "Skeleton", Options::Preview3D::Skeleton);
+    }
+
     if (data.is_object() && data.contains("Desync"))
     {
         const auto& ds = data["Desync"];
@@ -1429,6 +1586,7 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(ds, "ShowLine", Options::Desync::ShowLine);
         LoadFloatArray(ds, "VisualColor", Options::Desync::VisualColor);
         LoadFloatArray(ds, "LineColor", Options::Desync::LineColor);
+        LoadVal(ds, "WallCheck", Options::Desync::WallCheck);
     }
 
     if (data.is_object() && data.contains("MovementExtra"))
@@ -1632,7 +1790,7 @@ inline std::filesystem::path GetSeraphDataPath()
 
     char appData[MAX_PATH] = {};
     if (SUCCEEDED(SHGetFolderPathA(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, appData)))
-        return std::filesystem::path(appData) / "Seraph";
+        return std::filesystem::path(appData) / SX("Seraph");
 
     if (!Globals::executablePath.empty())
         return std::filesystem::path(Globals::executablePath);
@@ -1686,7 +1844,7 @@ inline bool SaveAutoloadSettings(const AutoloadSettings& settings)
 
     if (dataPath.empty())
     {
-        Config::lastError = "Could not resolve Seraph data folder";
+        Config::lastError = SX("Could not resolve Seraph data folder");
         return false;
     }
 
@@ -1842,6 +2000,12 @@ inline HWND EnsureDialogOwnerWindow()
     if (g_FileDialogOwnerHWND && IsWindow(g_FileDialogOwnerHWND))
         return g_FileDialogOwnerHWND;
 
+    // XOR-obfuscated window class name (must persist for the process lifetime).
+    static const std::wstring clsName = [] {
+        std::string n = SX("SeraphDialogOwnerClass");
+        return std::wstring(n.begin(), n.end());
+    }();
+
     static bool classRegistered = false;
     if (!classRegistered)
     {
@@ -1849,7 +2013,7 @@ inline HWND EnsureDialogOwnerWindow()
         wc.cbSize = sizeof(wc);
         wc.lpfnWndProc = SeraphDialogOwnerWndProc;
         wc.hInstance = GetModuleHandleW(nullptr);
-        wc.lpszClassName = L"SeraphDialogOwnerClass";
+        wc.lpszClassName = clsName.c_str();
         if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
             return nullptr;
         classRegistered = true;
@@ -1860,8 +2024,8 @@ inline HWND EnsureDialogOwnerWindow()
     // activate it as the modal owner.
     HWND h = CreateWindowExW(
         0,                              // no ex-style: keep focus-friendly
-        L"SeraphDialogOwnerClass",
-        L"Seraph Dialog Owner",
+        clsName.c_str(),
+        SXW(L"Seraph Dialog Owner").c_str(),
         WS_OVERLAPPED,
         0, 0, 1, 1,                     // 1x1 px, off-screen
         nullptr, nullptr,

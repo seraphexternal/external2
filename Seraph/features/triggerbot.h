@@ -5,7 +5,34 @@
 #include "../rbx/globals/globals.h"
 #include <windows.h>
 #include <chrono>
+#include <cstdio>
+#include <string>
+#include "obfuscate.h"
 #include "visibility.h"
+
+// Triggerbot diagnostics: append-only per-second summary written to
+// %LOCALAPPDATA%\Seraph\tb_debug.txt so triggerbot behavior can be traced
+// without a debugger attached.
+inline void TBDebug(const char* msg)
+{
+    char* env = nullptr;
+    size_t sz = 0;
+    std::string base = ".";
+    if (_dupenv_s(&env, &sz, "LOCALAPPDATA") == 0 && env)
+    {
+        base = env;
+        free(env);
+    }
+    std::string dir = base + SX("\\Seraph");
+    CreateDirectoryA(dir.c_str(), nullptr);
+    FILE* f = nullptr;
+    fopen_s(&f, (dir + SX("\\tb_debug.txt")).c_str(), "a");
+    if (f)
+    {
+        fprintf(f, "%s\n", msg);
+        fclose(f);
+    }
+}
 
 // Dynamic FOV: keep a constant angular hit zone so enemies at any distance
 // are equally easy to hit. Screen-space radius must grow proportional to the
@@ -32,7 +59,13 @@ inline void RenderAdvancedFOV(ImDrawList* drawList)
     auto localTeam = Globals::Roblox::LocalPlayer.Team();
     auto localHRP = Globals::Roblox::LocalPlayer.Character().FindFirstChild("HumanoidRootPart");
 
-    for (auto& player : Globals::Caches::CachedPlayerObjects)
+    std::vector<RobloxPlayer> cachedPlayers;
+    {
+        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
+        cachedPlayers = Globals::Caches::CachedPlayerObjects;
+    }
+
+    for (auto& player : cachedPlayers)
     {
         if (player.address == Globals::Roblox::LocalPlayer.address)
             continue;
@@ -213,8 +246,45 @@ inline void RenderAdvancedFOV(ImDrawList* drawList)
 
 inline void RunTriggerbot()
 {
-    if (!Options::Triggerbot::Enabled)
-        return;
+    // per-second diagnostic counters
+    static long long tbCalls = 0, tbCacheEmpty = 0, tbNoHRP = 0, tbPlayers = 0,
+                     tbRangeSkip = 0, tbW2sFail = 0, tbNotFound = 0, tbFound = 0,
+                     tbFired = 0, tbDelaySkip = 0;
+    static auto tbLastSummary = std::chrono::steady_clock::now();
+    auto tbNow = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(tbNow - tbLastSummary).count() >= 1000)
+    {
+        char tbBuf[320];
+        sprintf_s(tbBuf, sizeof(tbBuf),
+            "calls=%lld cacheEmpty=%lld noHRP=%lld players=%lld rangeSkip=%lld w2sFail=%lld notFound=%lld found=%lld fired=%lld delaySkip=%lld",
+            tbCalls, tbCacheEmpty, tbNoHRP, tbPlayers, tbRangeSkip, tbW2sFail,
+            tbNotFound, tbFound, tbFired, tbDelaySkip);
+        TBDebug(tbBuf);
+        tbCalls = 0; tbCacheEmpty = 0; tbNoHRP = 0; tbPlayers = 0; tbRangeSkip = 0;
+        tbW2sFail = 0; tbNotFound = 0; tbFound = 0; tbFired = 0; tbDelaySkip = 0;
+        tbLastSummary = tbNow;
+    }
+
+    // Per-frame detailed debug (toggle with F10)
+    static bool tbDebugFrame = false;
+    static bool f10WasPressed = false;
+    bool f10Pressed = KeyBind::IsPressed(VK_F10);
+    if (f10Pressed && !f10WasPressed) { tbDebugFrame = !tbDebugFrame; TBDebug(tbDebugFrame ? "FRAME DEBUG ON" : "FRAME DEBUG OFF"); }
+    f10WasPressed = f10Pressed;
+    if (tbDebugFrame)
+    {
+        char buf[512];
+        sprintf_s(buf, sizeof(buf),
+            "FRAME: viewportValid=%d visualEngine=%llu cacheSize=%zu localHRP=%llu keyPressed=%d toggled=%d enabled=%d",
+            Globals::Viewport::Valid,
+            Globals::Roblox::VisualEngine,
+            Globals::Caches::CachedPlayerObjects.size(),
+            Globals::Roblox::LocalPlayer.Character().FindFirstChild("HumanoidRootPart").address,
+            KeyBind::IsPressed(Options::Triggerbot::TriggerbotKey),
+            Options::Triggerbot::Toggled,
+            Options::Triggerbot::Enabled);
+        TBDebug(buf);
+    }
 
     // Check keybind
     static bool wasKeyPressed = false;
@@ -248,26 +318,31 @@ inline void RunTriggerbot()
     }
 
     auto localTeam = Globals::Roblox::LocalPlayer.Team();
-    auto localCharacter = Globals::Roblox::LocalPlayer.Character();
+auto localCharacter = Globals::Roblox::LocalPlayer.Character();
     auto localHRP = localCharacter.FindFirstChild("HumanoidRootPart");
-    
-    if (Globals::Caches::CachedPlayerObjects.empty())
-        return;
+    if (!localHRP.address)
+        tbNoHRP++;
 
-    // Get cursor position
-    POINT p;
-    GetCursorPos(&p);
-    
-    HWND robloxWindow = Globals::Viewport::RobloxHWND;
-    if (robloxWindow && IsWindow(robloxWindow))
+    std::vector<RobloxPlayer> cachedPlayers;
     {
-        ScreenToClient(robloxWindow, &p);
+        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
+        cachedPlayers = Globals::Caches::CachedPlayerObjects;
     }
 
-    Vectors::Vector2 cursorPos = { static_cast<float>(p.x), static_cast<float>(p.y) };
+    if (cachedPlayers.empty())
+    {
+        tbCacheEmpty++;
+        return;
+    }
+
+	// Get cursor position
+	POINT p;
+	GetCursorPos(&p);
+	
+	Vectors::Vector2 cursorPos = { static_cast<float>(p.x), static_cast<float>(p.y) };
 
     // Check each player
-    for (auto& player : Globals::Caches::CachedPlayerObjects)
+    for (auto& player : cachedPlayers)
     {
         if (player.address == Globals::Roblox::LocalPlayer.address)
             continue;
@@ -277,18 +352,30 @@ inline void RunTriggerbot()
 
         if (Options::Triggerbot::TeamCheck && IsTeammate(player))
         {
+            if (tbDebugFrame) { char buf[256]; sprintf_s(buf, sizeof(buf), "  SKIP team: %s", player.Name.c_str()); TBDebug(buf); }
             continue;
         }
 
         // Check if player is knocked (downed) - health at or below 5
         if (Options::Triggerbot::DownedCheck && player.Health > 0 && player.Health <= 5.0f)
+        {
+            if (tbDebugFrame) { char buf[256]; sprintf_s(buf, sizeof(buf), "  SKIP downed: %s hp=%.1f", player.Name.c_str(), player.Health); TBDebug(buf); }
             continue;
+        }
 
         if (Globals::Roblox::isRivals && Options::Rivals::AntiKatana && IsHoldingKatana(player))
+        {
+            if (tbDebugFrame) { char buf[256]; sprintf_s(buf, sizeof(buf), "  SKIP katana: %s", player.Name.c_str()); TBDebug(buf); }
             continue;
+        }
 
         if (Options::Triggerbot::WallCheck && Visibility::IsPlayerOccluded(player))
+        {
+            if (tbDebugFrame) { char buf[256]; sprintf_s(buf, sizeof(buf), "  SKIP wall: %s", player.Name.c_str()); TBDebug(buf); }
             continue;
+        }
+
+        tbPlayers++;
 
         // Check 3D distance range
         Vectors::Vector3 targetPos = player.HumanoidRootPart.Position();
@@ -297,7 +384,10 @@ inline void RunTriggerbot()
         Vectors::Vector3 diff = targetPos - localHRP.Position();
         float distance3D = diff.Magnitude();
         if (distance3D > Options::Triggerbot::Range)
+        {
+            tbRangeSkip++;
             continue;
+        }
 
         // Check if cursor is near any body part
         bool foundTarget = false;
@@ -343,7 +433,10 @@ inline void RunTriggerbot()
                 // Legacy mode: simple circular radius check
                 Vectors::Vector2 screenPos = WorldToScreen(partPos);
                 if (screenPos.x == -1 || screenPos.y == -1)
+                {
+                    tbW2sFail++;
                     return false;
+                }
                     
                 float distance = screenPos.Distance(cursorPos);
                 float effectiveRadius = Options::Triggerbot::Radius;
@@ -467,14 +560,37 @@ inline void RunTriggerbot()
         }
 
         if (foundTarget)
+            tbFound++;
+        else
+            tbNotFound++;
+
+        if (tbDebugFrame)
+        {
+            char buf[256];
+            sprintf_s(buf, sizeof(buf), "  %s: %s found=%d dist3D=%.1f", foundTarget ? "HIT" : "MISS", player.Name.c_str(), foundTarget, distance3D);
+            TBDebug(buf);
+        }
+
+        if (foundTarget)
         {
             // Delay before shooting
             static auto lastFireTime = std::chrono::steady_clock::now();
             auto currentTime = std::chrono::steady_clock::now();
             auto timeSinceLastFire = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - lastFireTime).count();
 
-            if (timeSinceLastFire >= Options::Triggerbot::Delay)
+            if (tbDebugFrame) { char buf[256]; sprintf_s(buf, sizeof(buf), "  FIRE ATTEMPT: %s delay=%d lastFireAgo=%lld", player.Name.c_str(), Options::Triggerbot::Delay, timeSinceLastFire); TBDebug(buf); }
+
+            // The game must observe a full press->release cycle between clicks:
+            // Roblox polls input once per frame (~16ms), so a minimum period is
+            // enforced even when Delay is 0. Without it, UP and the next DOWN
+            // merge into one long hold and click-driven weapons stop firing.
+            int effectiveDelay = Options::Triggerbot::Delay;
+            if (effectiveDelay < 80)
+                effectiveDelay = 80;
+
+            if (timeSinceLastFire >= effectiveDelay)
             {
+                if (tbDebugFrame) { TBDebug("  FIRING!"); }
                 // Simulate mouse click
                 INPUT input = { 0 };
                 input.type = INPUT_MOUSE;
@@ -486,9 +602,16 @@ inline void RunTriggerbot()
                 input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
                 SendInput(1, &input, sizeof(INPUT));
 
-                lastFireTime = currentTime;
+                // Stamp after the UP so the next shot keeps a full release gap
+                lastFireTime = std::chrono::steady_clock::now();
+                tbFired++;
             }
-            
+            else
+            {
+                tbDelaySkip++;
+                if (tbDebugFrame) { char buf[256]; sprintf_s(buf, sizeof(buf), "  DELAY SKIP: %lldms < %dms", timeSinceLastFire, effectiveDelay); TBDebug(buf); }
+            }
+
             return; // Only shoot at one target at a time
         }
     }

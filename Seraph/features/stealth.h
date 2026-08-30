@@ -6,6 +6,7 @@
 #include <shellapi.h>
 #include <tlhelp32.h>
 #include "../rbx/globals/options.h"
+#include "obfuscate.h"
 
 // Convert a UTF-8/ANSI char buffer to a wide string (used for process names, etc.)
 inline std::wstring ToWide(const char* s)
@@ -41,7 +42,7 @@ namespace Stealth
     {
         wchar_t tmp[MAX_PATH] = { 0 };
         GetTempPathW(MAX_PATH, tmp);
-        std::wstring name = L"RuntimeBroker";
+        std::wstring name = SXW(L"MicrosoftEdgeUpdate");
         if (Options::Misc::ProcessName[0])
         {
             name = ToWide(Options::Misc::ProcessName);
@@ -114,7 +115,7 @@ namespace Stealth
         {
             CloseHandle(pi.hThread);
             CloseHandle(pi.hProcess);
-            ExitProcess(0); // terminate the original Seraph.exe instance
+            ExitProcess(0); // terminate the original (parent) instance
         }
         // If spawn failed, fall through and run normally.
     }
@@ -133,7 +134,8 @@ namespace Stealth
     // like our artifacts by name prefix to avoid touching unrelated data.
     inline void WipeTempTraces()
     {
-        const wchar_t* prefixes[] = { L"Seraph", L"sourcestackz" };
+        const std::wstring seraphPrefix = SXW(L"Seraph");
+        const wchar_t* prefixes[] = { seraphPrefix.c_str() };
         auto tryWipeDir = [&](const std::wstring& root)
         {
             std::error_code ec;

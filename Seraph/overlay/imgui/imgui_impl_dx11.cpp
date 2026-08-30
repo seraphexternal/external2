@@ -553,3 +553,13 @@ void ImGui_ImplDX11_NewFrame()
     if (!g_pFontSampler)
         ImGui_ImplDX11_CreateDeviceObjects();
 }
+
+ID3D11Device* ImGui_ImplDX11_GetDevice()
+{
+    return g_pd3dDevice;
+}
+
+ID3D11DeviceContext* ImGui_ImplDX11_GetDeviceContext()
+{
+    return g_pd3dDeviceContext;
+}

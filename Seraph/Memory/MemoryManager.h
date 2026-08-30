@@ -38,6 +38,7 @@ public:
 	bool attachToProcess(const std::string& processName);
 
 	void readRaw(uintptr_t address, void* buffer, uintptr_t size);
+	void writeRaw(uintptr_t address, const void* buffer, uintptr_t size);
 	std::string readString(uintptr_t address);
 	bool writeString(uintptr_t address, const std::string& value);
 
@@ -79,6 +80,14 @@ void MemoryManager::write(uintptr_t address, T value) {
 	if (!h) return;
 
 	Luck_WriteVirtualMemory(h, reinterpret_cast<void*>(address), &value, sizeof(T), nullptr);
+	CloseHandle(h);
+}
+
+inline void MemoryManager::writeRaw(uintptr_t address, const void* buffer, uintptr_t size) {
+	HANDLE h = openTransientHandle(true);
+	if (!h) return;
+
+	Luck_WriteVirtualMemory(h, reinterpret_cast<void*>(address), const_cast<void*>(buffer), (ULONG)size, nullptr);
 	CloseHandle(h);
 }
 

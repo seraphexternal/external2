@@ -39,7 +39,7 @@ namespace OffsetsFetcher {
             std::string result;
 
             HINTERNET session = WinHttpOpen(
-                L"Seraph/1.0",
+                L"Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
                 WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                 WINHTTP_NO_PROXY_NAME,
                 WINHTTP_NO_PROXY_BYPASS, 0);

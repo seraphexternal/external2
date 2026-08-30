@@ -10,6 +10,7 @@
 #include "../rbx/globals/globals.h"
 #include "../rbx/offsets.h"
 #include "visibility.h"
+#include "playerfilter.h"
 
 // Shared state for the Rage tab's "real you orbiting the target" visual.
 namespace RageVisual
@@ -75,6 +76,9 @@ inline RobloxPlayer GetRagebotTarget()
             continue;
 
         if (player.address == Globals::Roblox::LocalPlayer.address)
+            continue;
+
+        if (!player.Name.empty() && !PlayerFilter::AimbotAllowed(player.Name))
             continue;
 
         if (Options::Ragebot::TeamCheck && IsTeammate(player))
@@ -269,6 +273,7 @@ inline RobloxPlayer GetRageKillTarget()
         if (player.address == Globals::Roblox::LocalPlayer.address) continue;
         if (Globals::Roblox::isOverkill && !player.Name.empty() &&
             player.Name == Globals::Roblox::LocalPlayer.Name()) continue;
+        if (!player.Name.empty() && !PlayerFilter::AimbotAllowed(player.Name)) continue;
         if (player.Health <= 0.f) continue;
 
         auto hrp = player.HumanoidRootPart;

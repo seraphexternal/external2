@@ -46,7 +46,7 @@
     <CharacterSet>MultiByte</CharacterSet>
     <OutDir>$(SolutionDir)build\Debug\</OutDir>
     <IntDir>$(SolutionDir)build\Debug\shit\</IntDir>
-    <TargetName>Seraph</TargetName>
+    <TargetName>Fleasion-v2.4.0-Windows</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
@@ -56,7 +56,7 @@
     <CharacterSet>MultiByte</CharacterSet>
     <OutDir>$(SolutionDir)build\Release\</OutDir>
     <IntDir>$(SolutionDir)build\Release\shit\</IntDir>
-    <TargetName>Seraph</TargetName>
+    <TargetName>Fleasion-v2.4.0-Windows</TargetName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -117,11 +117,13 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/permissive- /Zc:__cplusplus /Zc:inline /Zc:throwingNew %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Tools\MSVC\14.51.36231\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Tools\MSVC\14.51.36231\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -134,7 +136,11 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/permissive- /Zc:__cplusplus /Zc:inline /Zc:throwingNew %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Tools\MSVC\14.51.36231\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Tools\MSVC\14.51.36231\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
     <Link>
       <SubSystem>Windows</SubSystem>
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
@@ -156,6 +162,14 @@
     <ClCompile Include="Memory\MemoryManager.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="features\stb_image_impl.cpp" />
+    <ClCompile Include="features\preview3d\preview3d_impl.cpp" />
+    <ClCompile Include="features\explorer\ValueBase.cpp" />
+    <ClCompile Include="features\scriptbytecode\scriptbytecode.cpp" />
+    <ClCompile Include="overlay\explorer\widgets.cpp" />
+    <ClCompile Include="overlay\explorer\icons.cpp" />
+    <ClCompile Include="overlay\explorer\explorer_window.cpp" />
+    <ClCompile Include="overlay\explorer\properties_window.cpp" />
+    <ClCompile Include="overlay\explorer\lua_editor.cpp" />
     <ClCompile Include="overlay\imgui\imgui.cpp" />
     <ClCompile Include="overlay\imgui\imgui_demo.cpp" />
     <ClCompile Include="overlay\imgui\imgui_draw.cpp" />
@@ -165,10 +179,77 @@
     <ClCompile Include="overlay\imgui\imgui_widgets.cpp" />
     <ClCompile Include="overlay\renderer.cpp" />
     <ClCompile Include="tray.cpp" />
+    <ClCompile Include="features\stealth\stealth_core.cpp" />
+    <ClCompile Include="features\stealth\byovd_client.cpp" />
+    <ClCompile Include="features\stealth\dma_controller.cpp" />
+    <ClCompile Include="features\stealth\stealth_integration.cpp" />
+  </ItemGroup>
+  <!-- zstd decompressor (vendored). C sources compiled as C with warnings off. -->
+  <ItemGroup>
+    <ClCompile Include="third_party\zstd\lib\common\fse_decompress.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+    </ClCompile>
+    <ClCompile Include="third_party\zstd\lib\common\debug.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+    </ClCompile>
+    <ClCompile Include="third_party\zstd\lib\common\entropy_common.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+    </ClCompile>
+    <ClCompile Include="third_party\zstd\lib\common\error_private.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+    </ClCompile>
+    <ClCompile Include="third_party\zstd\lib\common\xxhash.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+    </ClCompile>
+    <ClCompile Include="third_party\zstd\lib\common\zstd_common.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+    </ClCompile>
+    <ClCompile Include="third_party\zstd\lib\decompress\huf_decompress.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+    </ClCompile>
+    <ClCompile Include="third_party\zstd\lib\decompress\zstd_ddict.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+    </ClCompile>
+    <ClCompile Include="third_party\zstd\lib\decompress\zstd_decompress.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+    </ClCompile>
+    <ClCompile Include="third_party\zstd\lib\decompress\zstd_decompress_block.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+    </ClCompile>
   </ItemGroup>
   <!-- Header Files (h) -->
   <ItemGroup>
     <ClInclude Include="features\fly.h" />
+    <ClInclude Include="features\explorer\ExplorerTree.h" />
+    <ClInclude Include="features\explorer\ExplorerSearch.h" />
+    <ClInclude Include="features\explorer\ValueBase.h" />
+    <ClInclude Include="features\scriptbytecode\scriptbytecode.h" />
+    <ClInclude Include="overlay\explorer\widgets.h" />
+    <ClInclude Include="overlay\explorer\icons.h" />
+    <ClInclude Include="overlay\explorer\explorer_window.h" />
+    <ClInclude Include="overlay\explorer\properties_window.h" />
+    <ClInclude Include="overlay\explorer\lua_editor.h" />
+    <ClInclude Include="overlay\animation.h" />
     <ClInclude Include="features\hitboxexpander.h" />
     <ClInclude Include="features\speed.h" />
     <ClInclude Include="Memory\MemoryManager.h" />
@@ -224,8 +305,16 @@
   </ImportGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <PostBuildEvent>
-      <Command>xcopy /Y /E /I "$(ProjectDir)hitsounds" "$(OutDir)hitsounds\"</Command>
-      <Message>Copying hitsounds to output directory</Message>
+      <Command>xcopy /Y /E /I "$(ProjectDir)hitsounds" "$(OutDir)hitsounds\"
+xcopy /Y /E /I "$(ProjectDir)Models" "$(OutDir)Models\"</Command>
+      <Message>Copying hitsounds and Models to output directory</Message>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <PostBuildEvent>
+      <Command>xcopy /Y /E /I "$(ProjectDir)hitsounds" "$(OutDir)hitsounds\"
+xcopy /Y /E /I "$(ProjectDir)Models" "$(OutDir)Models\"</Command>
+      <Message>Copying hitsounds and Models to output directory</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
 </Project>
