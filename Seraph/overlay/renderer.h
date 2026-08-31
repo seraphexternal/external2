@@ -4,6 +4,7 @@
 #include <dwmapi.h>
 #include <Windows.h>
 #include <d3d11.h>
+#include <dxgi1_2.h>
 #include <tchar.h>
 #include <algorithm>
 #include <string>
@@ -48,6 +49,7 @@ void DrawNode(RobloxInstance& node);
 void ShowImgui();
 
 void RenderKeybindList(ImDrawList* drawList);
+void RenderPlayerListWindow(bool* open);
 
 // Custom tab/subtab renderers from menu
 bool renderer_tab(const char* label, const char* icon, bool selected);

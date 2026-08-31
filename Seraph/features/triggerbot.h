@@ -160,14 +160,14 @@ inline void RenderAdvancedFOV(ImDrawList* drawList)
                     static_cast<int>(Options::ESP::VisibleColor[0] * 255.f),
                     static_cast<int>(Options::ESP::VisibleColor[1] * 255.f),
                     static_cast<int>(Options::ESP::VisibleColor[2] * 255.f),
-                    30
+                    8
                 );
                 
                 ImU32 outlineColor = IM_COL32(
                     static_cast<int>(Options::ESP::VisibleColor[0] * 255.f),
                     static_cast<int>(Options::ESP::VisibleColor[1] * 255.f),
                     static_cast<int>(Options::ESP::VisibleColor[2] * 255.f),
-                    150
+                    110
                 );
                 drawList->AddQuadFilled(corners2D[0], corners2D[1], corners2D[3], corners2D[2], fillColor);
                 
@@ -185,7 +185,7 @@ inline void RenderAdvancedFOV(ImDrawList* drawList)
                 drawList->AddQuadFilled(corners2D[0], corners2D[2], corners2D[6], corners2D[4], fillColor);
 
                 // Draw outline edges
-                float thickness = 1.5f;
+                float thickness = 1.0f;
                 
                 // Front face edges
                 drawList->AddLine(corners2D[0], corners2D[1], outlineColor, thickness);
@@ -246,6 +246,11 @@ inline void RenderAdvancedFOV(ImDrawList* drawList)
 
 inline void RunTriggerbot()
 {
+    // Master gate: honor the Enabled checkbox regardless of toggle mode so the
+    // triggerbot never fires while disabled (Always-On used to bypass this).
+    if (!Options::Triggerbot::Enabled)
+        return;
+
     // per-second diagnostic counters
     static long long tbCalls = 0, tbCacheEmpty = 0, tbNoHRP = 0, tbPlayers = 0,
                      tbRangeSkip = 0, tbW2sFail = 0, tbNotFound = 0, tbFound = 0,

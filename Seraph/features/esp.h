@@ -1200,13 +1200,14 @@ inline void RenderESP(ImDrawList* drawList)
         {
             const float boxHeight = bottom - top;
             const float radius = EspClamp(boxHeight * Options::ESP::HeadCircleScale, 3.f, 14.f);
-            drawList->AddCircle(head2D, radius, activeHeadCircleColor, 0, Options::ESP::HeadCircleThickness);
+            const int segs = ((int)(radius * 3.5f) < 32) ? 32 : (int)(radius * 3.5f);
+            drawList->AddCircle(head2D, radius, activeHeadCircleColor, segs, Options::ESP::HeadCircleThickness);
         }
 
         if (Options::ESP::HeadDot && headScreen.x != -1.f && headScreen.y != -1.f)
         {
             const float dotRadius = EspClamp((bottom - top) * 0.04f, 2.f, 5.f);
-            drawList->AddCircleFilled(head2D, dotRadius, activeHeadDotColor, 12);
+            drawList->AddCircleFilled(head2D, dotRadius, activeHeadDotColor, 24);
         }
         if (Options::ESP::Name)
         {
@@ -2308,7 +2309,8 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
             float hr = hHeadH * 0.5f * 1.05f;        // half the head height
             headR = EspClamp(hr, 4.f, 30.f);
         }
-        drawList->AddCircle(ImVec2(hcX, hcY), headR, hcc, 32, Options::ESP::HeadCircleThickness);
+        const int hsegs = ((int)(headR * 3.5f) < 32) ? 32 : (int)(headR * 3.5f);
+        drawList->AddCircle(ImVec2(hcX, hcY), headR, hcc, hsegs, Options::ESP::HeadCircleThickness);
     }
 
     // Skeleton ??? all joints projected through the same rotation

@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <dwmapi.h>
 #include <d3d11.h>
+#include <dxgi1_2.h>
 #include <tchar.h>
 #include <string>
 #include <vector>
@@ -101,22 +102,53 @@ namespace Loader
     // ── D3D11 helpers ──────────────────────────────────────────────────
     static bool LoaderCreateDevice(HWND hWnd)
     {
-        DXGI_SWAP_CHAIN_DESC sd = {};
-        sd.BufferCount = 2;
-        sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        sd.BufferDesc.RefreshRate.Numerator = 60;
-        sd.BufferDesc.RefreshRate.Denominator = 1;
-        sd.Flags = DXGI_SWAP_EFFECT_DISCARD;
-        sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-        sd.OutputWindow = hWnd;
-        sd.SampleDesc.Count = 1;
-        sd.Windowed = TRUE;
-        sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+        // Opaque flip-model swapchain (no per-pixel alpha). The shared ImGui DX11
+        // backend's straight-alpha blend is selected via SetPremultipliedBlend(false)
+        // so the loader's translucent borders/glow composites correctly.
         D3D_FEATURE_LEVEL fl;
         const D3D_FEATURE_LEVEL flArr[2] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0 };
-        if (FAILED(D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
-            flArr, 2, D3D11_SDK_VERSION, &sd, &l_SwapChain, &l_Device, &fl, &l_Context)))
+        HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, flArr, 2, D3D11_SDK_VERSION, &l_Device, &fl, &l_Context);
+        if (FAILED(hr)) return false;
+
+        DXGI_SWAP_CHAIN_DESC1 sd = {};
+        sd.Width = 0;
+        sd.Height = 0;
+        sd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        sd.Stereo = FALSE;
+        sd.SampleDesc.Count = 1;
+        sd.SampleDesc.Quality = 0;
+        sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        sd.BufferCount = 4;
+        sd.Scaling = DXGI_SCALING_STRETCH;
+        sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        sd.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
+        sd.Flags = 0;
+
+        IDXGIDevice* dxgiDevice = nullptr;
+        IDXGIAdapter* adapter = nullptr;
+        IDXGIFactory2* factory = nullptr;
+        hr = l_Device->QueryInterface(IID_PPV_ARGS(&dxgiDevice));
+        if (SUCCEEDED(hr)) hr = dxgiDevice->GetAdapter(&adapter);
+        if (SUCCEEDED(hr)) hr = adapter->GetParent(IID_PPV_ARGS(&factory));
+        if (FAILED(hr))
+        {
+            if (dxgiDevice) dxgiDevice->Release();
+            if (adapter) adapter->Release();
+            if (factory) factory->Release();
             return false;
+        }
+
+        IDXGISwapChain1* sc1 = nullptr;
+        hr = factory->CreateSwapChainForHwnd(l_Device, hWnd, &sd, nullptr, nullptr, &sc1);
+        if (dxgiDevice) dxgiDevice->Release();
+        if (adapter) adapter->Release();
+        factory->Release();
+        if (FAILED(hr) || !sc1) return false;
+
+        hr = sc1->QueryInterface(IID_PPV_ARGS(&l_SwapChain));
+        sc1->Release();
+        if (FAILED(hr)) return false;
+
         ID3D11Texture2D* bb;
         l_SwapChain->GetBuffer(0, IID_PPV_ARGS(&bb));
         l_Device->CreateRenderTargetView(bb, nullptr, &l_RTV);
@@ -1351,6 +1383,8 @@ namespace Loader
 
         ImGui_ImplWin32_Init(l_Hwnd);
         ImGui_ImplDX11_Init(l_Device, l_Context);
+        // Loader uses an opaque/UNSPECIFIED swapchain -> straight-alpha blend.
+        ImGui_ImplDX11_SetPremultipliedBlend(false);
 
         ScanConfigs();
 

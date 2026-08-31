@@ -356,9 +356,17 @@ void HideFromTaskbar(HWND hwnd);
 
 void ApplyOverlayWindowStyle(HWND hwnd, bool clickThrough)
 {
-(void)clickThrough; // no longer used: this is a normal clickable window
-
 LONG exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+
+// Topmost + layered at all times so the ESP/menu layer is a visible overlay.
+exStyle |= WS_EX_LAYERED | WS_EX_TOPMOST;
+
+// Click-through (transparent to input) when in-game and the menu is closed;
+// clickable when the menu is open.
+if (clickThrough)
+exStyle |= WS_EX_TRANSPARENT;
+else
+exStyle &= ~WS_EX_TRANSPARENT;
 
 if (Options::Misc::HideFromTabs)
 {
@@ -371,7 +379,7 @@ exStyle &= ~WS_EX_TOOLWINDOW;
 }
 
 SetWindowLong(hwnd, GWL_EXSTYLE, exStyle);
-SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 
 if (Options::Misc::HideFromTabs)
 HideFromTaskbar(hwnd);
@@ -844,6 +852,167 @@ yOffset += lineHeight;
 }
 }
 
+// ── Player List window (Misc -> "Player List") ────────────────────────────
+// Mirrors the Explorer window look. Lists live players from the player-object
+// cache; clicking a player selects them and lets you toggle Exclude / Focus /
+// clear, or add/remove them as a friend. Drives the existing PlayerFilter.
+static void RenderPlayerListWindow(bool* open)
+{
+    if (!open || !*open)
+        return;
+
+    const ImVec4 border_outer = ImVec4(0.13f, 0.13f, 0.13f, 1.f);
+    constexpr float title_h = 26.f;
+    constexpr float margin = 3.f;
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(ImVec2(center.x - 180.f, center.y - 60.f), ImGuiCond_Once, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(340.f, 430.f), ImGuiCond_Once);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(280.f, 300.f), ImVec2(FLT_MAX, FLT_MAX));
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+    ImGui::PushStyleColor(ImGuiCol_Border, border_outer);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.08f, 1.f));
+    bool visible = ImGui::Begin("##playerlist_window", nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar();
+
+    if (!visible)
+    {
+        ImGui::End();
+        return;
+    }
+
+    ImVec2 wp = ImGui::GetWindowPos();
+    ImVec2 ws = ImGui::GetWindowSize();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(wp, ImVec2(wp.x + ws.x, wp.y + title_h), IM_COL32(20, 20, 20, 255));
+    const char* title = "player list";
+    ImVec2 title_ts = ImGui::CalcTextSize(title);
+    draw->AddText(ImVec2(wp.x + (ws.x - title_ts.x) * 0.5f, wp.y + (title_h - title_ts.y) * 0.5f), IM_COL32(230, 230, 230, 255), title);
+
+    // Close button
+    ImVec2 xsz = ImGui::CalcTextSize("X");
+    float x_w = xsz.x + 14.f;
+    float drag_w = ws.x - x_w - 6.f;
+    ImGui::SetCursorScreenPos(ImVec2(wp.x, wp.y));
+    ImGui::InvisibleButton("##playerlist_drag", ImVec2(drag_w, title_h));
+    if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+    {
+        ImVec2 cur = ImGui::GetWindowPos();
+        ImVec2 delta = ImGui::GetIO().MouseDelta;
+        ImGui::SetWindowPos(ImVec2(cur.x + delta.x, cur.y + delta.y));
+    }
+    ImVec2 xmin(wp.x + ws.x - x_w, wp.y);
+    ImGui::SetCursorScreenPos(xmin);
+    ImGui::InvisibleButton("##playerlist_close", ImVec2(x_w, title_h));
+    bool xhov = ImGui::IsItemHovered();
+    if (ImGui::IsItemClicked())
+        *open = false;
+    draw->AddText(ImVec2(xmin.x + 7.f, wp.y + (title_h - xsz.y) * 0.5f),
+        xhov ? IM_COL32(255, 255, 255, 255) : IM_COL32(160, 160, 160, 255), "X");
+
+    float body_top = title_h + margin;
+    float body_h = ws.y - body_top - margin;
+
+    ImGui::SetCursorPos(ImVec2(margin, body_top));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.18f, 0.18f, 0.18f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.06f, 0.06f, 0.06f, 1.f));
+    ImGui::BeginChild("##playerlist_body", ImVec2(ws.x - margin * 2.f, body_h), true);
+
+    // Snapshot of the live player cache (never read the shared vector unlocked).
+    std::vector<RobloxPlayer> players;
+    {
+        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
+        players = Globals::Caches::CachedPlayerObjects;
+    }
+    std::string localName = Globals::Roblox::LocalPlayer.address ? Globals::Roblox::LocalPlayer.Name() : std::string();
+
+    static std::string selected;
+    float avail = ImGui::GetContentRegionAvail().x;
+
+    for (size_t i = 0; i < players.size(); i++)
+    {
+        const RobloxPlayer& p = players[i];
+        if (p.Name.empty())
+            continue;
+
+        bool isLocal = (p.Name == localName);
+        int mark = PlayerFilter::GetMark(p.Name);
+        bool isFriendly = PlayerFilter::IsFriend(p.Name);
+
+        const char* tag = "  ";
+        ImU32 tagCol = IM_COL32(150, 150, 150, 255);
+        if (mark == Options::PlayerFilter::Focus) { tag = "F "; tagCol = IM_COL32(80, 200, 120, 255); }
+        else if (mark == Options::PlayerFilter::Exclude) { tag = "X "; tagCol = IM_COL32(220, 90, 90, 255); }
+        if (isFriendly) { tag = "+ "; tagCol = IM_COL32(110, 170, 230, 255); }
+
+        std::string row = std::string(tag) + (isLocal ? std::string("[YOU] ") : std::string());
+        row += p.Name;
+        if (!p.TeamName.empty()) row += "  (" + p.TeamName + ")";
+
+        char id[48];
+        std::snprintf(id, sizeof(id), "##plrow_%zu", i);
+        bool itemSel = (selected == p.Name);
+        if (ImGui::Selectable((row.c_str() + std::string(id)).c_str(), itemSel))
+            selected = p.Name;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s\nhealth %.0f/%.0f", p.Name.c_str(), p.Health, p.MaxHealth);
+    }
+
+    if (players.empty())
+    {
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.f), "no players in cache");
+    }
+
+    ImGui::Separator();
+
+    // Edit panel for the selected player.
+    ImGui::TextColored(ImVec4(0.75f, 0.75f, 0.75f, 1.f), "Selected: %s", selected.empty() ? "(none)" : selected.c_str());
+    if (!selected.empty())
+    {
+        int mark = PlayerFilter::GetMark(selected);
+        bool isFriendly = PlayerFilter::IsFriend(selected);
+        const char* markLabel =
+            mark == Options::PlayerFilter::Focus ? "Focus" :
+            mark == Options::PlayerFilter::Exclude ? "Exclude" : "Default";
+
+        ImGui::Text("Mark: %s", markLabel);
+
+        if (mark != Options::PlayerFilter::Exclude)
+            if (ImGui::SmallButton("Exclude"))
+                PlayerFilter::SetMark(selected, Options::PlayerFilter::Exclude);
+        ImGui::SameLine();
+        if (mark != Options::PlayerFilter::Focus)
+            if (ImGui::SmallButton("Focus"))
+                PlayerFilter::SetMark(selected, Options::PlayerFilter::Focus);
+        ImGui::SameLine();
+        if (mark != Options::PlayerFilter::None)
+            if (ImGui::SmallButton("Clear"))
+                PlayerFilter::SetMark(selected, Options::PlayerFilter::None);
+
+        ImGui::SameLine();
+        if (isFriendly)
+        {
+            if (ImGui::SmallButton("Unfriend"))
+                PlayerFilter::RemoveFriend(selected);
+        }
+        else
+        {
+            if (ImGui::SmallButton("Friend"))
+                PlayerFilter::AddFriend(selected);
+        }
+
+        ImGui::Checkbox("Exclude Friends", &Options::PlayerFilter::ExcludeFriends);
+        ImGui::Checkbox("Focus Only", &Options::PlayerFilter::FocusOnly);
+    }
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor(2);
+    ImGui::End();
+}
+
 void ShowImgui()
 {
     OutputDebugStringA("[S] ShowImgui: START\n");
@@ -885,15 +1054,25 @@ void ShowImgui()
     ::RegisterClassExW(&wc);
 
     HWND hwnd = ::CreateWindowExW(
-        WS_EX_TOOLWINDOW,
+        WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST,
         wc.lpszClassName,
         L"",
-        0,
+        WS_POPUP,
         winX, winY, winW, winH,
         nullptr, nullptr, wc.hInstance, nullptr);
 
+    // Opaque swapchain + color-key transparency (this system cannot create
+    // DXGI_ALPHA_MODE_PREMULTIPLIED flip-model swapchains -- every permutation
+    // of SwapEffect/BufferCount/WS_EX_NOREDIRECTIONBITMAP returns
+    // DXGI_ERROR_INVALID_CALL 0x887A0001). Instead we use LWA_COLORKEY:
+    // pure-black (RGB 0,0,0) pixels become see-through while all drawn UI/ESP
+    // (non-black) renders opaquely, so the game shows through around the GUI.
+    // Avoid pure-black foreground colors in the menu/ESP.
+
     OutputDebugStringA("[S] ShowImgui: Window created\n");
     SeraphLog("[S] ShowImgui: Window created, hwnd=0x" + std::to_string((uintptr_t)hwnd));
+
+    ::SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 0, LWA_COLORKEY);
 
     // Publish the overlay HWND so the file-dialog helpers (configs.h)
     // can present Import/Export as modal-to-owner dialogs. This is what
@@ -986,6 +1165,10 @@ io.FontDefault = font;
 config.MergeMode = true;
 ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
+    // Opaque bitblt swapchain + color-key transparency: the target has no
+    // per-pixel alpha, so use straight-alpha blend so ImGui's colors composite
+    // correctly (premultiplied blend would look washed out on an opaque target).
+    ImGui_ImplDX11_SetPremultipliedBlend(false);
     ImGui_ImplDX11_CreateDeviceObjects();
 
     OutputDebugStringA("[S] ShowImgui: ImGui backends initialized\n");
@@ -1002,7 +1185,10 @@ ImGui_ImplWin32_Init(hwnd);
     static bool menuDragging = false;
     static ImVec2 menuDragOffset = ImVec2(0, 0);
 
-    ::ShowWindow(hwnd, SW_HIDE);
+    // Overlay is a topmost, click-through ESP layer: always visible in-game.
+    // Click-through so it never blocks game input; menu toggles it clickable.
+    ::ShowWindow(hwnd, SW_SHOW);
+    ApplyOverlayWindowStyle(hwnd, true);
 OutputDebugStringA("[S] ShowImgui: Entering render loop\n");
     SeraphLog("[S] ShowImgui: Entering render loop");
     int frameCount = 0;
@@ -1073,7 +1259,8 @@ Globals::Roblox::LocalPlayer = RobloxInstance(Memory->read<uintptr_t>(Globals::R
     {
         menu_open = !menu_open;
         gMenuWasEverOpen = true;
-        ::ShowWindow(hwnd, menu_open ? SW_SHOW : SW_HIDE);
+        // Menu open -> clickable; menu closed -> click-through ESP layer. Window stays shown.
+        ApplyOverlayWindowStyle(hwnd, !menu_open);
     }
 
     // Fade animation (ease-cubic-out time-based, ported from jew-dick-hack
@@ -1099,7 +1286,6 @@ Globals::Roblox::LocalPlayer = RobloxInstance(Memory->read<uintptr_t>(Globals::R
     }
 
     float menuAlpha = anim::ease_cubic_out(fadeProgress);
-    float backgroundAlpha = 0.7f * anim::ease_cubic_out(fadeProgress);
 
     // Skip weather physics when the menu has never been opened
     if (gMenuWasEverOpen && (menu_open || menuAlpha > 0.0f))
@@ -1174,15 +1360,10 @@ const bool useGradient = themeGradient;
 
 if (menu_open || menuAlpha > 0.0f)
 {
-// Draw dark background overlay
-if (backgroundAlpha > 0.0f)
-{
-ImGui::GetBackgroundDrawList()->AddRectFilled(
-ImVec2(0, 0),
-ImVec2(io.DisplaySize.x, io.DisplaySize.y),
-IM_COL32(0, 0, 0, static_cast<int>(backgroundAlpha * 180))
-);
-}
+// No full-screen dark dim backdrop drawn here: with color-key transparency the
+// opaque pitch-black fill would render as a solid dark band around the menu
+// (keyed out only when exactly RGB(0,0,0)), so it was removed. This also drops
+// a full-window fill per frame, fixing the jank when spamming the menu key.
 // Visuals tab uses a wider layout so the ESP preview has a dedicated side panel.
         // MenuScale acts as a uniform zoom factor for the whole UI.
         const float sc = std::clamp(Options::Misc::MenuScale, 0.6f, 2.5f);
@@ -2598,6 +2779,8 @@ UI::Checkbox("Crosshair",      &Options::Crosshair::Enabled);
 	UI::Checkbox("Keybind List",   &Options::Misc::KeybindList);
 	UI::Checkbox("Explorer",       &Options::Misc::ExplorerEnabled);
 	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Opens the Roblox instance explorer (datamodel tree + properties / bytecode).");
+	UI::Checkbox("Player List",    &Options::Misc::PlayerListEnabled);
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Opens the player list window to select, exclude, focus or mark players as friends.");
 	UI::Checkbox("Third Person",   &Options::Misc::ThirdPerson);
 	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Unlocks third-person camera in games that force first-person.");
 
@@ -3159,13 +3342,10 @@ if (IsGameOnTop("Roblox"))
 	RenderAdvancedFOV(ImGui::GetBackgroundDrawList());
 	RenderCrosshair(ImGui::GetBackgroundDrawList());
 	CombatFeedback::Render(ImGui::GetBackgroundDrawList());
-	// ESP intentionally disabled: keeping the overlay a normal (non-topmost,
-	// non-transparent) window to clear the overlay-geometry detection layer.
-	// RunTriggerbot() does not depend on ESP or the overlay, so it still works.
-	//RenderESP(ImGui::GetBackgroundDrawList());
+	RenderESP(ImGui::GetBackgroundDrawList());
 
-	//if (Options::ESP::Arrows) RenderArrows(ImGui::GetBackgroundDrawList());
-	//if (Options::ESP::Radar) RenderRadar(ImGui::GetBackgroundDrawList());
+	if (Options::ESP::Arrows) RenderArrows(ImGui::GetBackgroundDrawList());
+	if (Options::ESP::Radar) RenderRadar(ImGui::GetBackgroundDrawList());
 	
 	if (Options::Desync::Enabled && Options::Desync::ShowVisual)
 		DesyncVisual::RenderDesyncVisual(ImGui::GetBackgroundDrawList());
@@ -3192,6 +3372,9 @@ drawList->AddText(pos, IM_COL32(255, 255, 255, 255), str.c_str());
 
 if (Options::Misc::ExplorerEnabled)
     gui::render_explorer_window(&Options::Misc::ExplorerEnabled);
+
+if (Options::Misc::PlayerListEnabled)
+    RenderPlayerListWindow(&Options::Misc::PlayerListEnabled);
 
 ImGui::Render();
 const float clear_color_with_alpha[4] = { clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w };
@@ -3220,19 +3403,54 @@ ImGui_ImplDX11_Shutdown();
 
 bool CreateDeviceD3D(HWND hWnd)
 {
-DXGI_SWAP_CHAIN_DESC sd;
-ZeroMemory(&sd, sizeof(sd));
-sd.BufferCount = 4;
-sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-sd.OutputWindow = hWnd;
+// Opaque bitblt-model swapchain. This system cannot create
+// DXGI_ALPHA_MODE_PREMULTIPLIED flip-model swapchains (every SwapEffect /
+// BufferCount / layered-style permutation returns DXGI_ERROR_INVALID_CALL),
+// so transparency is done with an opaque bitblt surface + LWA_COLORKEY
+// (pure black -> see-through), matching the loader's proven opaque recipe.
+DXGI_SWAP_CHAIN_DESC1 sd = {};
+sd.Width = 0;
+sd.Height = 0;
+sd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+sd.Stereo = FALSE;
 sd.SampleDesc.Count = 1;
-sd.Windowed = TRUE;
+sd.SampleDesc.Quality = 0;
+sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+sd.BufferCount = 1;
+sd.Scaling = DXGI_SCALING_STRETCH;
 sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+sd.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
+sd.Flags = 0;
 
 D3D_FEATURE_LEVEL featureLevel;
 const D3D_FEATURE_LEVEL featureLevelArray[2] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0, };
-HRESULT res = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext);
+HRESULT res = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, featureLevelArray, 2, D3D11_SDK_VERSION,
+    &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext);
+if (res != S_OK) return false;
+
+IDXGIDevice* dxgiDevice = nullptr;
+IDXGIAdapter* adapter = nullptr;
+IDXGIFactory2* factory = nullptr;
+res = g_pd3dDevice->QueryInterface(IID_PPV_ARGS(&dxgiDevice));
+if (res == S_OK) res = dxgiDevice->GetAdapter(&adapter);
+if (res == S_OK) res = adapter->GetParent(IID_PPV_ARGS(&factory));
+if (res != S_OK)
+{
+    if (dxgiDevice) dxgiDevice->Release();
+    if (adapter) adapter->Release();
+    if (factory) factory->Release();
+    return false;
+}
+
+IDXGISwapChain1* baseSwapChain = nullptr;
+res = factory->CreateSwapChainForHwnd(g_pd3dDevice, hWnd, &sd, nullptr, nullptr, &baseSwapChain);
+if (dxgiDevice) dxgiDevice->Release();
+if (adapter) adapter->Release();
+factory->Release();
+if (res != S_OK || !baseSwapChain) return false;
+
+res = baseSwapChain->QueryInterface(IID_PPV_ARGS(&g_pSwapChain));
+baseSwapChain->Release();
 if (res != S_OK) return false;
 
 CreateRenderTarget();

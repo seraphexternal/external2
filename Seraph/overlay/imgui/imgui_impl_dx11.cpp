@@ -55,6 +55,8 @@ static ID3D11SamplerState* g_pFontSampler = NULL;
 static ID3D11ShaderResourceView* g_pFontTextureView = NULL;
 static ID3D11RasterizerState* g_pRasterizerState = NULL;
 static ID3D11BlendState* g_pBlendState = NULL;
+static ID3D11BlendState* g_pBlendStateStraight = NULL;
+static bool g_PremultipliedBlend = true;
 static ID3D11DepthStencilState* g_pDepthStencilState = NULL;
 static int                      g_VertexBufferSize = 5000, g_IndexBufferSize = 10000;
 
@@ -93,12 +95,17 @@ static void ImGui_ImplDX11_SetupRenderState(ImDrawData* draw_data, ID3D11DeviceC
 
     // Setup blend state
     const float blend_factor[4] = { 0.f, 0.f, 0.f, 0.f };
-    ctx->OMSetBlendState(g_pBlendState, blend_factor, 0xffffffff);
+    ctx->OMSetBlendState(g_PremultipliedBlend ? g_pBlendState : g_pBlendStateStraight, blend_factor, 0xffffffff);
     ctx->OMSetDepthStencilState(g_pDepthStencilState, 0);
     ctx->RSSetState(g_pRasterizerState);
 }
 
 // Render function
+void ImGui_ImplDX11_SetPremultipliedBlend(bool premultiplied)
+{
+    g_PremultipliedBlend = premultiplied;
+}
+
 void ImGui_ImplDX11_RenderDrawData(ImDrawData* draw_data)
 {
     // Avoid rendering when minimized
@@ -453,7 +460,9 @@ bool    ImGui_ImplDX11_CreateDeviceObjects()
         ZeroMemory(&desc, sizeof(desc));
         desc.AlphaToCoverageEnable = false;
         desc.RenderTarget[0].BlendEnable = true;
-        desc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+        // Premultiplied-alpha blend: matches the DXGI_ALPHA_MODE_PREMULTIPLIED
+        // swapchain so AA'd text/circles composite cleanly (no color fringing).
+        desc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
         desc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
         desc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
         desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
@@ -461,6 +470,13 @@ bool    ImGui_ImplDX11_CreateDeviceObjects()
         desc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
         desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
         g_pd3dDevice->CreateBlendState(&desc, &g_pBlendState);
+
+        // Straight-alpha blend: for opaque/UNSPECIFIED-alpha swapchains (the loader),
+        // so translucent borders/glow/fades composite correctly.
+        D3D11_BLEND_DESC descS = desc;
+        descS.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+        descS.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_SRC_ALPHA;
+        g_pd3dDevice->CreateBlendState(&descS, &g_pBlendStateStraight);
     }
 
     // Create the rasterizer state
@@ -504,6 +520,7 @@ void    ImGui_ImplDX11_InvalidateDeviceObjects()
     if (g_pVB) { g_pVB->Release(); g_pVB = NULL; }
 
     if (g_pBlendState) { g_pBlendState->Release(); g_pBlendState = NULL; }
+    if (g_pBlendStateStraight) { g_pBlendStateStraight->Release(); g_pBlendStateStraight = NULL; }
     if (g_pDepthStencilState) { g_pDepthStencilState->Release(); g_pDepthStencilState = NULL; }
     if (g_pRasterizerState) { g_pRasterizerState->Release(); g_pRasterizerState = NULL; }
     if (g_pPixelShader) { g_pPixelShader->Release(); g_pPixelShader = NULL; }

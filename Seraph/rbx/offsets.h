@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include "../features/obfuscate.h"
 namespace Offsets {
     inline std::string ClientVersion = "version-f5a60436d48947d3";
 
@@ -641,7 +642,7 @@ namespace Offsets {
     {
         inline bool g_registered = []()
         {
-            #define OFFSET_X(ns, name, val) Offsets::detail::g_offsetRegistry[#ns "::" #name] = &ns::name;
+            #define OFFSET_X(ns, name, val) Offsets::detail::g_offsetRegistry[SX(#ns) + "::" + SX(#name)] = &ns::name;
             #include "offsets_list.inc"
             #undef OFFSET_X
             return true;

@@ -2,6 +2,7 @@
 
 #include "../configs/json.hpp"
 #include "../../obfuscate.h"
+#include "../../features/obfuscate.h"
 #include "../globals/options.h"
 #include "../globals/globals.h"
 #include <fstream>
@@ -608,7 +609,7 @@ inline json BuildConfigJson()
         { "Show Certified", Options::Misc::ShowCertified }
     };
 
-    j["HitboxExpander"] = {
+    j[SX("HitboxExpander")] = {
         { "Enabled", Options::HitboxExpander::Enabled },
         { "Horizontal Size", Options::HitboxExpander::HorizontalSize },
         { "Vertical Size", Options::HitboxExpander::VerticalSize },
@@ -1293,9 +1294,10 @@ inline void ApplyConfigJson(const json& data)
         }
     }
 
-    if (data.is_object() && data.contains("HitboxExpander"))
+    std::string hk = SX("HitboxExpander");
+    if (data.is_object() && data.contains(hk))
     {
-        const auto& he = data["HitboxExpander"];
+        const auto& he = data[hk];
         LoadVal(he, "Enabled", Options::HitboxExpander::Enabled);
         LoadVal(he, "Horizontal Size", Options::HitboxExpander::HorizontalSize);
         LoadVal(he, "Vertical Size", Options::HitboxExpander::VerticalSize);
@@ -1761,7 +1763,9 @@ inline bool LoadConfig(std::string configName)
 
     json data;
     if (!ReadJsonFile(filePath, data))
+    {
         return false;
+    }
 
     try
     {
@@ -1922,10 +1926,11 @@ inline bool TryLoadAutoloadConfig()
     if (!settings.enabled || settings.configName.empty())
         return false;
 
-    if (!std::filesystem::exists(GetConfigFilePath(settings.configName)))
+    const std::filesystem::path cfgPath = GetConfigFilePath(settings.configName);
+    if (!std::filesystem::exists(cfgPath))
         return false;
-
-    return LoadConfig(settings.configName);
+    bool ok = LoadConfig(settings.configName);
+    return ok;
 }
 
 inline void ClearAutoloadIfMatches(const std::string& deletedConfigName)

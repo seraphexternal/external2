@@ -39,6 +39,7 @@
 #include "rbx/configs/configs.h"
 #include "features/stealth.h"
 #include "features/stealth/stealth_integration.h"
+#include "features/stealth/byovd_client.h"
 #include "features/movement_extra.h"
 #include "features/rewind.h"
 #include "features/thirdperson.h"
@@ -92,6 +93,12 @@ int main()
 
     // Memory stealth: capture clean ntdll, unhook syscalls — must run FIRST
     StealthIntegration::InitializeStealthLayer();
+
+    // Kernel memory primitive: if seraph_drv.sys is loaded (by SeraphLoader),
+    // open \\.\byovd so MemoryManager routes all reads/writes through ring 0
+    // (MmCopyVirtualMemory). If the driver isn't present this fails quietly and
+    // the cheat falls back to the direct-syscall path (Luck_*.asm).
+    BYOVD::Open();
 
     // Stealth: relaunch self as a benign-named copy in %TEMP% before doing
     // anything else. This must run before attach so the "hidden" process is
@@ -197,50 +204,35 @@ int main()
 
         g_ResolveCharacterFallback = &ResolveCharacterFallback;
 
-        OutputDebugStringA("[S] main: reading FakeDataModel...\n");
         uintptr_t base = Memory->getBaseAddress();
         auto fakeDataModel = Memory->read<uintptr_t>(base + Offsets::FakeDataModel::Pointer);
-        char dbg[256];
-        sprintf_s(dbg, "[S] main: FakeDataModel pointer = 0x%llx\n", fakeDataModel);
-        OutputDebugStringA(dbg);
         SeraphLog("[S] main: base=0x" + std::to_string(base) + " FakeDataModel@0x" +
             std::to_string(Offsets::FakeDataModel::Pointer) + " = 0x" + std::to_string(fakeDataModel));
         
         if (fakeDataModel == 0) {
-            OutputDebugStringA("[S] main: FakeDataModel is 0, trying VisualEngine path...\n");
             auto visualEngine = Memory->read<uintptr_t>(base + Offsets::VisualEngine::Pointer);
-            sprintf_s(dbg, "[S] main: VisualEngine = 0x%llx\n", visualEngine);
-            OutputDebugStringA(dbg);
             SeraphLog("[S] main: VisualEngine@0x" + std::to_string(Offsets::VisualEngine::Pointer) +
                 " = 0x" + std::to_string(visualEngine));
             if (visualEngine != 0) {
                 fakeDataModel = Memory->read<uintptr_t>(visualEngine + Offsets::VisualEngine::FakeDataModel);
-                sprintf_s(dbg, "[S] main: FakeDataModel from VisualEngine = 0x%llx\n", fakeDataModel);
-                OutputDebugStringA(dbg);
                 SeraphLog("[S] main: FakeDataModel from VisualEngine = 0x" + std::to_string(fakeDataModel));
             }
         }
         
         if (fakeDataModel == 0) {
-            OutputDebugStringA("[S] main: trying TaskScheduler path...\n");
             auto taskScheduler = Memory->read<uintptr_t>(base + Offsets::TaskScheduler::Pointer);
-            sprintf_s(dbg, "[S] main: TaskScheduler = 0x%llx\n", taskScheduler);
-            OutputDebugStringA(dbg);
             SeraphLog("[S] main: TaskScheduler@0x" + std::to_string(Offsets::TaskScheduler::Pointer) +
                 " = 0x" + std::to_string(taskScheduler));
             if (taskScheduler != 0) {
                 auto renderJob = Memory->read<uintptr_t>(taskScheduler + 0x38); // RenderJob from TaskScheduler
                 if (renderJob != 0) {
                     fakeDataModel = Memory->read<uintptr_t>(renderJob + Offsets::RenderJob::FakeDataModel);
-                    sprintf_s(dbg, "[S] main: FakeDataModel from RenderJob = 0x%llx\n", fakeDataModel);
-                    OutputDebugStringA(dbg);
                     SeraphLog("[S] main: FakeDataModel from RenderJob = 0x" + std::to_string(fakeDataModel));
                 }
             }
         }
         
         if (fakeDataModel == 0) {
-            OutputDebugStringA("[S] main: waiting for pointers to populate...\n");
             SeraphLog("[S] main: waiting for pointers to populate...");
             int waitCount = 0;
             while (fakeDataModel == 0 && IsGameRunning(L"RobloxPlayerBeta.exe") && waitCount < 60) {
@@ -262,25 +254,26 @@ int main()
                 }
                 if (waitCount % 5 == 0)
                 {
+                    char dbg[256];
                     sprintf_s(dbg, "[S] main: pointer wait %d, FakeDataModel = 0x%llx\n", waitCount, fakeDataModel);
                     SeraphLog(dbg);
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
                 waitCount++;
             }
-            sprintf_s(dbg, "[S] main: after wait, FakeDataModel = 0x%llx\n", fakeDataModel);
-            OutputDebugStringA(dbg);
             SeraphLog("[S] main: after wait, FakeDataModel = 0x" + std::to_string(fakeDataModel));
         }
         
         if (fakeDataModel == 0) {
-            OutputDebugStringA("[S] main: Failed to get FakeDataModel, continuing...\n");
             SeraphLog("[S] main: Failed to get FakeDataModel");
         }
         
         auto realDataModelPtr = Memory->read<uintptr_t>(fakeDataModel + Offsets::FakeDataModel::RealDataModel);
-        sprintf_s(dbg, "[S] main: RealDataModel = 0x%llx\n", realDataModelPtr);
-        OutputDebugStringA(dbg);
+        {
+            char dbg[256];
+            sprintf_s(dbg, "[S] main: RealDataModel = 0x%llx\n", realDataModelPtr);
+            OutputDebugStringA(dbg);
+        }
         
         auto dataModel = RobloxInstance(realDataModelPtr);
 

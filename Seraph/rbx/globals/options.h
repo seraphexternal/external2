@@ -33,6 +33,7 @@ namespace Options
 		inline float MenuPanelColor[3] = { 0.102f, 0.102f, 0.102f };   // inner panel background
 		inline char TargetPlayer[32] = "";
 		inline bool ExplorerEnabled = false;
+		inline bool PlayerListEnabled = false;
 		inline float MenuScale = 1.0f;
 		inline bool ThirdPerson = false;
 

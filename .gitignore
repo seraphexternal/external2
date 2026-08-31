@@ -361,3 +361,5 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# Large 3D model that exceeds GitHub's 100MB per-file limit
+Seraph/Models/TungTung/tung_tung_sahur.glb

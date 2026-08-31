@@ -1,5 +1,18 @@
 #include "MemoryManager.h"
+#include "../features/stealth/byovd_client.h"
 #include <vector>
+
+bool MemoryManager::kernelReadRaw(uintptr_t address, void* buffer, uintptr_t size) {
+	if (processId <= 0 || !buffer || size == 0) return false;
+	if (!BYOVD::IsOpen()) return false;
+	return BYOVD::KernelReadProcessMemory((HANDLE)(ULONG_PTR)processId, address, buffer, size);
+}
+
+bool MemoryManager::kernelWriteRaw(uintptr_t address, const void* buffer, uintptr_t size) {
+	if (processId <= 0 || !buffer || size == 0) return false;
+	if (!BYOVD::IsOpen()) return false;
+	return BYOVD::KernelWriteProcessMemory((HANDLE)(ULONG_PTR)processId, address, buffer, size);
+}
 
 int32_t MemoryManager::getProcessId(const std::string& processName) {
 	// Collect every matching process. Multiple RobloxPlayerBeta.exe instances can
@@ -129,6 +142,9 @@ HANDLE MemoryManager::openTransientHandle(bool forWrite) {
 
 
 void MemoryManager::readRaw(uintptr_t address, void* buffer, uintptr_t size) {
+	if (kernelReadRaw(address, buffer, size))
+		return;
+
 	HANDLE h = openTransientHandle(false);
 	if (!h) return;
 
@@ -187,12 +203,18 @@ std::string MemoryManager::readString(uintptr_t address) {
 	// so each string read only opens/closes a transient handle once.
 	char buffer[512];
 	ULONG bytesRead = 0;
-	HANDLE h = openTransientHandle(false);
-	if (!h)
-		return result;
 
-	Luck_ReadVirtualMemory(h, reinterpret_cast<void*>(address), buffer, sizeof(buffer), &bytesRead);
-	CloseHandle(h);
+	// Prefer the kernel-driver path (ring 0); fall back to the direct syscall.
+	if (!kernelReadRaw(address, buffer, sizeof(buffer))) {
+		HANDLE h = openTransientHandle(false);
+		if (!h)
+			return result;
+
+		Luck_ReadVirtualMemory(h, reinterpret_cast<void*>(address), buffer, sizeof(buffer), &bytesRead);
+		CloseHandle(h);
+	} else {
+		bytesRead = (ULONG)sizeof(buffer);
+	}
 
 	if (bytesRead > 0) {
 		size_t len = bytesRead < sizeof(buffer) ? bytesRead : sizeof(buffer);

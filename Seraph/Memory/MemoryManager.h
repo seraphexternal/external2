@@ -46,6 +46,12 @@ public:
 	// Handles are never retained across calls so no persistent handle exists.
 	HANDLE openTransientHandle(bool forWrite = false);
 
+	// Kernel-driver IO path (ring 0 MmCopyVirtualMemory). Returns true only when
+	// the BYOVD driver is loaded and the copy succeeded; callers fall back to
+	// the direct-syscall path if this returns false.
+	bool kernelReadRaw(uintptr_t address, void* buffer, uintptr_t size);
+	bool kernelWriteRaw(uintptr_t address, const void* buffer, uintptr_t size);
+
 	template <typename T>
 	T read(uintptr_t address);
 
@@ -65,6 +71,9 @@ template <typename T>
 T MemoryManager::read(uintptr_t address) {
 	T buffer{};
 
+	if (kernelReadRaw(address, &buffer, sizeof(T)))
+		return buffer;
+
 	HANDLE h = openTransientHandle(false);
 	if (!h) return buffer;
 
@@ -76,6 +85,9 @@ T MemoryManager::read(uintptr_t address) {
 
 template <typename T>
 void MemoryManager::write(uintptr_t address, T value) {
+	if (kernelWriteRaw(address, &value, sizeof(T)))
+		return;
+
 	HANDLE h = openTransientHandle(true);
 	if (!h) return;
 
@@ -84,6 +96,9 @@ void MemoryManager::write(uintptr_t address, T value) {
 }
 
 inline void MemoryManager::writeRaw(uintptr_t address, const void* buffer, uintptr_t size) {
+	if (kernelWriteRaw(address, buffer, size))
+		return;
+
 	HANDLE h = openTransientHandle(true);
 	if (!h) return;
 
