@@ -325,9 +325,6 @@ namespace Options
 		inline bool FOVSpin = false;       // rotate the gradient phase
 		inline float FOVSpinSpeed = 1.0f;
 
-		// Only lock onto players that are visible (not behind walls).
-		inline bool OnlyVisible = false;
-
 		// Delay (ms) before the aimbot is allowed to switch to a new target.
 		inline float TargetSwitchDelay = 0.f;
 

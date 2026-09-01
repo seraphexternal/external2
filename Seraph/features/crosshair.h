@@ -121,47 +121,39 @@ inline void RenderCrosshair(ImDrawList* drawList)
         drawList->AddLine(p0, p1, colLine, thick);
     }
 
-    // Draw "Seraph.gg" text below crosshair
-    if (Options::Crosshair::ShowText) {
+if (Options::Crosshair::ShowText) {
         const std::string Seraph = SX("Seraph");
         const char* dotWin = ".gg";
 
-        // Render at a slightly larger, scale-aware size for a crisper watermark.
+        // Use default font with larger size for crispness
         ImFont* font = ImGui::GetFont();
-        float textScale = 1.25f;
+        float textScale = 1.5f;
         float textSize = font->FontSize * textScale;
         float SeraphW = font->CalcTextSizeA(textSize, FLT_MAX, 0.0f, Seraph.c_str()).x;
         float dotWinW = font->CalcTextSizeA(textSize, FLT_MAX, 0.0f, dotWin).x;
         float totalW = SeraphW + dotWinW;
 
-        ImVec2 textPos{ center.x - totalW * 0.5f, center.y + showGap + Options::Crosshair::Size + 4 };
+        // Round position to prevent sub-pixel blur
+        ImVec2 textPos{ 
+            floorf(center.x - totalW * 0.5f), 
+            floorf(center.y + showGap + Options::Crosshair::Size + 6) 
+        };
 
         ImU32 colWhite = IM_COL32(255, 255, 255, 255);
-        ImU32 colPink = IM_COL32(255, 105, 180, 255); // Pink accent for .win
+        ImU32 colPink = IM_COL32(255, 105, 180, 255);
         ImU32 outlineColor = IM_COL32(0, 0, 0, 255);
 
-        // Draw outline for "Seraph"
-        for (int dx = -1; dx <= 1; ++dx) {
-            for (int dy = -1; dy <= 1; ++dy) {
-                if (dx || dy) {
-                    drawList->AddText(font, textSize, ImVec2(textPos.x + dx, textPos.y + dy), outlineColor, Seraph.c_str());
-                }
+        // Draw thicker outline for better visibility (2px)
+        for (int dx = -2; dx <= 2; ++dx) {
+            for (int dy = -2; dy <= 2; ++dy) {
+                if (dx == 0 && dy == 0) continue;
+                drawList->AddText(font, textSize, ImVec2(textPos.x + dx, textPos.y + dy), outlineColor, Seraph.c_str());
+                drawList->AddText(font, textSize, ImVec2(textPos.x + SeraphW + dx, textPos.y + dy), outlineColor, dotWin);
             }
         }
 
-        // Draw main text for "Seraph"
+        // Draw main text
         drawList->AddText(font, textSize, textPos, colWhite, Seraph.c_str());
-
-        // Draw outline for ".win"
-        for (int dx = -1; dx <= 1; ++dx) {
-            for (int dy = -1; dy <= 1; ++dy) {
-                if (dx || dy) {
-                    drawList->AddText(font, textSize, ImVec2(textPos.x + SeraphW + dx, textPos.y + dy), outlineColor, dotWin);
-                }
-            }
-        }
-
-        // Draw main text for ".win"
         drawList->AddText(font, textSize, ImVec2(textPos.x + SeraphW, textPos.y), colPink, dotWin);
     }
 }

@@ -865,9 +865,19 @@ static void RenderPlayerListWindow(bool* open)
     constexpr float title_h = 26.f;
     constexpr float margin = 3.f;
 
-    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(ImVec2(center.x - 180.f, center.y - 60.f), ImGuiCond_Once, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(340.f, 430.f), ImGuiCond_Once);
+    static ImVec2 playerListPos = ImVec2(-1, -1);
+    static ImVec2 playerListSize = ImVec2(340.f, 430.f);
+    static bool playerListPosInitialized = false;
+
+    if (!playerListPosInitialized)
+    {
+        ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+        playerListPos = ImVec2(center.x - 180.f, center.y - 60.f);
+        playerListPosInitialized = true;
+    }
+
+    ImGui::SetNextWindowPos(playerListPos, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(playerListSize, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(280.f, 300.f), ImVec2(FLT_MAX, FLT_MAX));
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
@@ -886,6 +896,8 @@ static void RenderPlayerListWindow(bool* open)
 
     ImVec2 wp = ImGui::GetWindowPos();
     ImVec2 ws = ImGui::GetWindowSize();
+    playerListPos = wp;
+    playerListSize = ws;
     ImDrawList* draw = ImGui::GetWindowDrawList();
     draw->AddRectFilled(wp, ImVec2(wp.x + ws.x, wp.y + title_h), IM_COL32(20, 20, 20, 255));
     const char* title = "player list";
@@ -1397,34 +1409,34 @@ p = ImVec2(ImGui::GetWindowPos().x + ImGui::GetStyle().WindowPadding.x, ImGui::G
 auto draw = ImGui::GetWindowDrawList();
 
 // â”€â”€ Title-bar drag (top 25*sc px is the grab region) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-{
-const ImVec2 titleMin = ImVec2(p.x, p.y);
-const ImVec2 titleMax = ImVec2(p.x + s.x, p.y + 25.0f * sc);
-if (ImGui::IsMouseHoveringRect(titleMin, titleMax) && !ImGui::IsAnyItemHovered())
-{
-if (ImGui::IsMouseClicked(0))
-{
-menuDragging = true;
-menuDragOffset = ImVec2(io.MousePos.x - menuPos.x, io.MousePos.y - menuPos.y);
-}
-}
-if (menuDragging)
-{
-if (ImGui::IsMouseDown(0))
-menuPos = ImVec2(io.MousePos.x - menuDragOffset.x, io.MousePos.y - menuDragOffset.y);
-else
-menuDragging = false;
-}
-}
+        {
+            const ImVec2 titleMin = ImVec2(p.x, p.y);
+            const ImVec2 titleMax = ImVec2(p.x + s.x, p.y + 25.0f * sc);
+            if (ImGui::IsMouseHoveringRect(titleMin, titleMax) && !ImGui::IsAnyItemHovered())
+            {
+                if (ImGui::IsMouseClicked(0))
+                {
+                    menuDragging = true;
+                    menuDragOffset = ImVec2(io.MousePos.x - menuPos.x, io.MousePos.y - menuPos.y);
+                }
+            }
+            if (menuDragging)
+            {
+                if (ImGui::IsMouseDown(0))
+                    menuPos = ImVec2(io.MousePos.x - menuDragOffset.x, io.MousePos.y - menuDragOffset.y);
+                else
+                    menuDragging = false;
+            }
+        }
 
-// Scale widgets/text inside the menu to match the zoom factor.
-ImGui::SetWindowFontScale(sc);
+        // Scale widgets/text inside the menu to match the zoom factor.
+        ImGui::SetWindowFontScale(sc);
 
-// Apply the cohesive Seraph design system: unified palette +
-// global style so every widget (built-in or UI::) matches.
-UI::ApplyStyle(main_color,
-ImVec4(themeBg[0], themeBg[1], themeBg[2], 1.0f),
-ImVec4(themePanel[0], themePanel[1], themePanel[2], 1.0f));
+        // Apply the cohesive Seraph design system: unified palette +
+        // global style so every widget (built-in or UI::) matches.
+        UI::ApplyStyle(main_color,
+        ImVec4(themeBg[0], themeBg[1], themeBg[2], 1.0f),
+        ImVec4(themePanel[0], themePanel[1], themePanel[2], 1.0f));
 
         // ── Autopsy-style chrome ──────────────────────────────────────────
         // Multi-layer drop shadow, deep dark blue fill, accent glow borders,
@@ -1432,13 +1444,12 @@ ImVec4(themePanel[0], themePanel[1], themePanel[2], 1.0f));
         const float time = (float)ImGui::GetTime();
         const float glow = (sinf(time * 2.3f) + 1.0f) * 0.5f;
 
-        // Drop shadow (5 layers, rounded) — drawn on background drawlist so they extend beyond menu bounds
-        auto bgDraw = ImGui::GetBackgroundDrawList();
+        // Drop shadow (5 layers, rounded) — drawn on window drawlist clipped to menu bounds
         for (int i = 4; i >= 0; i--)
         {
             float spread = 18.0f + i * 11.0f;
             int shAlpha = (int)((12.0f - i * 1.85f) * menuAlpha);
-            bgDraw->AddRectFilled(
+            draw->AddRectFilled(
                 ImVec2(p.x - spread, p.y - spread * 0.55f),
                 ImVec2(p.x + s.x + spread, p.y + s.y + spread),
                 IM_COL32(7, 13, 21, shAlpha), (14.0f + spread) * sc);
@@ -1448,16 +1459,18 @@ ImVec4(themePanel[0], themePanel[1], themePanel[2], 1.0f));
         {
             float spread = 30.0f * sc;
             float alpha = 0.04f * menuAlpha;
-            bgDraw->AddRectFilled(
+            draw->AddRectFilled(
                 ImVec2(p.x - spread, p.y - spread * 0.5f),
                 ImVec2(p.x + s.x + spread, p.y + s.y + spread * 0.5f),
                 ImGui::ColorConvertFloat4ToU32(ImVec4(UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, alpha)),
                 (14.0f + spread * 0.5f) * sc);
         }
 
-        // Main window fill — fully opaque dark
+        // Main window fill — dark glassmorphism (translucent; real backdrop blur
+        // isn't available in a D3D overlay, so the effect is approximated with a
+        // translucent fill + soft blue glow border).
         draw->AddRectFilled(ImVec2(p.x, p.y), ImVec2(p.x + s.x, p.y + s.y),
-            IM_COL32(3, 6, 10, 255), 14.0f * sc);
+            IM_COL32(12, 12, 18, 217), 16.0f * sc);
         // Inner accent tint (subtle theme accent wash)
         draw->AddRectFilled(
             ImVec2(p.x + 1.0f * sc, p.y + 1.0f * sc),
@@ -1465,17 +1478,17 @@ ImVec4(themePanel[0], themePanel[1], themePanel[2], 1.0f));
             ImGui::ColorConvertFloat4ToU32(ImVec4(UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, 0.007f)),
             (14.0f - 1.0f) * sc);
 
-        // Outer border (dynamic palette color)
+        // Outer border — soft blue (rgba(59,130,246,0.25))
         draw->AddRect(ImVec2(p.x, p.y), ImVec2(p.x + s.x, p.y + s.y),
-            ImGui::ColorConvertFloat4ToU32(UI::P.line), 14.0f * sc, 0, 1.0f * sc);
-        // Inner glow border (accent pulse)
-        float gA = 0.11f + 0.09f * glow;
+            IM_COL32(59, 130, 246, 64), 16.0f * sc, 0, 1.0f * sc);
+        // Inner glow border (accent pulse) — blue outer glow
+        float gA = 0.18f + 0.12f * glow;
         ImU32 glowCol = ImGui::ColorConvertFloat4ToU32(
             ImVec4(UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, gA));
         draw->AddRect(
             ImVec2(p.x + 1.0f * sc, p.y + 1.0f * sc),
             ImVec2(p.x + s.x - 1.0f * sc, p.y + s.y - 1.0f * sc),
-            glowCol, (14.0f - 1.0f) * sc, 0, 1.0f * sc);
+            glowCol, (16.0f - 1.0f) * sc, 0, 1.0f * sc);
 
         // Sidebar panel (left column) — autopsy-style 178px, slightly transparent
         const float sbW = UI::SidebarW;
@@ -1501,36 +1514,88 @@ ImVec4(themePanel[0], themePanel[1], themePanel[2], 1.0f));
             ImVec2(p.x + sbW, p.y + s.y - 10.0f * sc),
             ImGui::ColorConvertFloat4ToU32(ImVec4(UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, 0.16f)), 1.0f * sc);
 
-        // Logo area: accent bar + "SERAPH" + "BETA" badge
+        // Logo area: animated accent bar + "SERAPH" + "BETA" badge
         {
             const float logoY = p.y + 25.0f * sc;
             const float logoX = p.x + 22.0f * sc;
-            // Accent bar 3×22px
-            draw->AddRectFilled(
-                ImVec2(logoX, logoY + 3.0f * sc),
-                ImVec2(logoX + 3.0f * sc, logoY + 25.0f * sc),
-                ImGui::ColorConvertFloat4ToU32(UI::P.accent), 2.0f * sc);
-            // Title text (XOR-obfuscated so the brand string isn't in the binary)
+            const float time = (float)ImGui::GetTime();
+            
+            // Animated accent bar - pulsing height and color shift
+            float barPulse = 0.5f + 0.5f * sinf(time * 2.5f);
+            float barH = 18.0f * sc + barPulse * 4.0f * sc;
+            float barY = logoY + (22.0f * sc - barH) * 0.5f;
+            
+            // Gradient accent bar
+            for (int i = 0; i < 3; i++) {
+                float t = (float)i / 2.0f;
+                ImU32 barCol = ImGui::ColorConvertFloat4ToU32(ImVec4(
+                    UI::P.accent.x + (UI::P.accent2.x - UI::P.accent.x) * t,
+                    UI::P.accent.y + (UI::P.accent2.y - UI::P.accent.y) * t,
+                    UI::P.accent.z + (UI::P.accent2.z - UI::P.accent.z) * t,
+                    0.8f + 0.2f * barPulse
+                ));
+                draw->AddRectFilled(
+                    ImVec2(logoX + i * 1.0f * sc, barY),
+                    ImVec2(logoX + (i + 1) * 1.0f * sc, barY + barH),
+                    barCol, 2.0f * sc);
+            }
+            
+            // Title text with subtle glow
             const std::string logoText = SX("SERAPH");
             ImFont* logoFont = (MenuFonts::Count > 0 && Options::Misc::MenuFont >= 0
                 && Options::Misc::MenuFont < MenuFonts::Count && MenuFonts::Fonts[Options::Misc::MenuFont])
                 ? MenuFonts::Fonts[Options::Misc::MenuFont] : io.FontDefault;
+            
+            float textGlow = 0.15f + 0.1f * sinf(time * 3.0f);
+            ImU32 glowCol = IM_COL32(
+                (int)(UI::P.accent.x * 255 * textGlow),
+                (int)(UI::P.accent.y * 255 * textGlow),
+                (int)(UI::P.accent.z * 255 * textGlow),
+                255
+            );
+            
+            // Text glow (behind)
+            draw->AddText(logoFont, 21.0f * sc,
+                ImVec2(logoX + 8.0f * sc + 1, logoY + 1),
+                glowCol, logoText.c_str());
+            draw->AddText(logoFont, 21.0f * sc,
+                ImVec2(logoX + 8.0f * sc - 1, logoY - 1),
+                glowCol, logoText.c_str());
+            
+            // Main text
             draw->AddText(logoFont, 21.0f * sc,
                 ImVec2(logoX + 8.0f * sc, logoY),
                 IM_COL32(255, 255, 255, 255), logoText.c_str());
+            
             ImVec2 textSize = logoFont->CalcTextSizeA(21.0f * sc, FLT_MAX, 0, logoText.c_str());
+            
+            // Animated BETA badge - pulsing
+            float badgePulse = 0.7f + 0.3f * sinf(time * 4.0f);
+            ImU32 badgeCol = ImGui::ColorConvertFloat4ToU32(ImVec4(
+                UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, badgePulse
+            ));
+            
             draw->AddRectFilled(
                 ImVec2(logoX + 8.0f * sc + textSize.x + 7.0f * sc, logoY + 2.0f * sc),
                 ImVec2(logoX + 8.0f * sc + textSize.x + 7.0f * sc + 36.0f * sc, logoY + 15.0f * sc),
-                ImGui::ColorConvertFloat4ToU32(UI::P.accent), 4.0f * sc);
+                badgeCol, 4.0f * sc);
+            
             draw->AddText(io.FontDefault, 10.0f * sc,
                 ImVec2(logoX + 8.0f * sc + textSize.x + 11.0f * sc, logoY + 1.5f * sc),
                 IM_COL32(255, 255, 255, 255), "BETA");
-            // Separator line below logo
-            draw->AddLine(
-                ImVec2(logoX - 2.0f * sc, logoY + 59.0f * sc),
-                ImVec2(p.x + sbW - 20.0f * sc, logoY + 59.0f * sc),
-                ImGui::ColorConvertFloat4ToU32(UI::P.divider), 1.0f * sc);
+            
+            // Separator line below logo with gradient
+            for (int i = 0; i < 60; i++) {
+                float t = (float)i / 59.0f;
+                ImU32 sepCol = ImGui::ColorConvertFloat4ToU32(ImVec4(
+                    UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, 
+                    0.16f * (1.0f - t)
+                ));
+                draw->AddLine(
+                    ImVec2(logoX - 2.0f * sc + i * 3.0f * sc, logoY + 59.0f * sc),
+                    ImVec2(logoX - 2.0f * sc + (i + 1) * 3.0f * sc, logoY + 59.0f * sc),
+                    sepCol, 1.0f * sc);
+            }
         }
 
         // Header panel (right of sidebar, top strip)
@@ -1556,7 +1621,7 @@ ImVec4(themePanel[0], themePanel[1], themePanel[2], 1.0f));
         draw->AddRectFilled(
             ImVec2(contentX, p.y + headerH + 1.0f * sc),
             ImVec2(p.x + s.x, p.y + s.y),
-            IM_COL32(5, 9, 15, 255), 14.0f * sc, ImDrawFlags_RoundCornersBottomRight);
+             IM_COL32(5, 9, 15, 210), 14.0f * sc, ImDrawFlags_RoundCornersBottomRight);
 
 // Animated top accent line: gradient (main_color -> main_color2) when
 // enabled, otherwise a single fading accent.
@@ -1643,8 +1708,9 @@ ImGui::ColorConvertFloat4ToU32(UI::P.line), 1.0f * sc);
         draw->AddText(ImVec2(x, ty), sep, "|");
         x += safeFont->CalcTextSizeA(11.0f * sc, FLT_MAX, 0.f, "|").x + segGap;
 
-        // FPS
-        draw->AddText(ImVec2(x, ty), txt, fpsBuf);
+        // FPS (muted, low-contrast so it stays subtle)
+        const ImU32 fpsCol = ImGui::ColorConvertFloat4ToU32(ImVec4(0.40f, 0.45f, 0.53f, 0.80f));
+        draw->AddText(ImVec2(x, ty), fpsCol, fpsBuf);
         }
 
         // â”€â”€ Top tab bar: full width, 7 equal segments, even gaps â”€â”€â”€â”€â”€
@@ -1664,7 +1730,7 @@ ImGui::ColorConvertFloat4ToU32(UI::P.line), 1.0f * sc);
                 for (int i = 0; i < 7; i++)
                 {
                     if (UI::SidebarTab(tabs[i].icon, tabs[i].label, tab == i,
-                        tabX, tabStartY + i * 42.0f * sc, tabW))
+                        tabX, tabStartY + i * 48.0f * sc, tabW))
                         tab = i;
                 }
 
@@ -1721,7 +1787,7 @@ if (tab == 0)
                 UI::Checkbox("Team Check", &Options::Aimbot::TeamCheck);
                 UI::Checkbox("Knocked Check", &Options::Aimbot::DownedCheck);
                 UI::Checkbox("Sticky Aim", &Options::Aimbot::StickyAim);
-                UI::Checkbox("Only Visible", &Options::Aimbot::OnlyVisible);
+                UI::Checkbox("Wall Check", &Options::Aimbot::WallCheck);
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Only lock onto players that are not behind walls.");
                 UI::Checkbox("Prediction", &Options::Aimbot::Prediction);
 
@@ -2229,54 +2295,6 @@ UI::Checkbox("Focus Only", &Options::PlayerFilter::FocusOnly);
 if (ImGui::IsItemHovered()) ImGui::SetTooltip("When at least one player is marked as Focus, the aimbot only targets focused players.");
 UI::Checkbox("Exclude Friends", &Options::PlayerFilter::ExcludeFriends);
 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hides players in your friend list from the ESP and the aimbot.");
-
-ImGui::Spacing();
-UI::labelsection("CONNECTED");
-{
-    // Gather unique, non-local player names from the live cache.
-    std::vector<std::string> names;
-    for (const auto& p : Globals::Caches::CachedPlayerObjects)
-    {
-        if (!p.address || p.Name.empty()) continue;
-        if (p.address == Globals::Roblox::LocalPlayer.address) continue;
-        if (std::find(names.begin(), names.end(), p.Name) == names.end())
-            names.push_back(p.Name);
-    }
-    std::sort(names.begin(), names.end());
-
-    if (names.empty())
-    {
-        ImGui::TextDisabled("No players connected");
-    }
-    else if (ImGui::BeginChild("##playerList", ImVec2(halfW, 200.0f * sc), true))
-    {
-        for (const auto& n : names)
-        {
-            ImGui::PushID(n.c_str());
-            int mark = PlayerFilter::GetMark(n);
-            bool isFriend = PlayerFilter::IsFriend(n);
-
-            ImVec4 stCol(0.60f, 0.60f, 0.60f, 1.0f);
-            const char* st = "none";
-            if (mark == Options::PlayerFilter::Focus) { st = "FOCUS"; stCol = ImVec4(0.30f, 1.00f, 0.60f, 1.0f); }
-            else if (mark == Options::PlayerFilter::Exclude) { st = "EXCL"; stCol = ImVec4(1.00f, 0.40f, 0.40f, 1.0f); }
-            else if (isFriend) { st = "FRND"; stCol = ImVec4(0.70f, 0.70f, 0.75f, 1.0f); }
-
-            ImGui::TextColored(stCol, "%s", st);
-            ImGui::SameLine();
-            ImGui::TextUnformatted(n.c_str());
-
-            ImGui::SetCursorPosX(ctX + halfW - (46.0f * sc) * 3 - 6.0f * sc);
-            if (ImGui::SmallButton("FOC")) PlayerFilter::SetMark(n, mark == Options::PlayerFilter::Focus ? Options::PlayerFilter::None : Options::PlayerFilter::Focus);
-            ImGui::SameLine(0, 3.0f * sc);
-            if (ImGui::SmallButton("EXC")) PlayerFilter::SetMark(n, mark == Options::PlayerFilter::Exclude ? Options::PlayerFilter::None : Options::PlayerFilter::Exclude);
-            ImGui::SameLine(0, 3.0f * sc);
-            if (ImGui::SmallButton("FRD")) { if (isFriend) PlayerFilter::RemoveFriend(n); else PlayerFilter::AddFriend(n); }
-            ImGui::PopID();
-        }
-    }
-    ImGui::EndChild();
-}
 
 UI::labelsection("PLAYER INFO");
 	UI::Checkbox("Names", &Options::ESP::Name);

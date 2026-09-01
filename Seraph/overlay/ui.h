@@ -2,6 +2,7 @@
 #include "imgui/imgui.h"
 #include "imgui/KeyBind.h"
 #include "../rbx/globals/options.h"
+#include <map>
 
 namespace UI
 {
@@ -416,7 +417,9 @@ namespace UI
         store->SetFloat(id, t);
         
         ImVec2 a = screen, b = ImVec2(screen.x + tglW, screen.y + h);
-        ImVec4 trackCol = Mix(P.track, P.accentDim, t);
+        // Pill track: dark gray when off, blue when on (rgba(59,130,246,0.9) on)
+        ImVec4 trackOff = ImVec4(0.16f, 0.18f, 0.22f, 1.0f);
+        ImVec4 trackCol = Mix(trackOff, ImVec4(0.231f, 0.616f, 1.000f, 0.90f), t);
         if (toggle_hover && !*v) trackCol = Mix(trackCol, P.surfaceHi, 0.4f);
         dl->AddRectFilled(a, b, U(trackCol), h * 0.5f);
         if (t > 0.01f) {
@@ -431,7 +434,11 @@ namespace UI
         float knobX = a.x + knobR + pad + t * (tglW - 2.0f * knobR - 2.0f * pad);
         float knobY = (a.y + b.y) * 0.5f;
         dl->AddCircleFilled(ImVec2(knobX, knobY + 1.f), currentKnobR, IM_COL32(0, 0, 0, 80), 24);
-        dl->AddCircleFilled(ImVec2(knobX, knobY), currentKnobR, U((toggle_hover) ? ImVec4(1.0f, 1.0f, 1.0f, 1.0f) : Mix(ImVec4(0.70f, 0.73f, 0.78f, 1.0f), P.textStrong, t)), 24);
+        // White sliding thumb with a blue ring when on
+        ImVec4 thumbFill = Mix(ImVec4(0.70f, 0.73f, 0.78f, 1.0f), ImVec4(1.0f, 1.0f, 1.0f, 1.0f), t);
+        dl->AddCircleFilled(ImVec2(knobX, knobY), currentKnobR, U(toggle_hover ? ImVec4(1.f, 1.f, 1.f, 1.f) : thumbFill), 24);
+        if (t > 0.01f)
+            dl->AddCircle(ImVec2(knobX, knobY), currentKnobR, U(ImVec4(P.accent.x, P.accent.y, P.accent.z, 0.5f)), 24, 1.0f);
         
         ImGui::PopID();
         return changed;
@@ -558,34 +565,77 @@ namespace UI
         ImGui::InvisibleButton("##tab", ImVec2(tabW, tabH));
         bool clicked = ImGui::IsItemClicked();
         bool hov = ImGui::IsItemHovered();
+        bool held = ImGui::IsItemActive();
         ImGui::PopID();
 
         ImGuiID id = ImGui::GetID(label);
         float t = EaseOutCubic(Anim(id, active || hov, 9.0f));
         float at = EaseOutCubic(Anim(id ^ 0x8A13C4u, active, 10.0f));
+        float ht = EaseOutCubic(Anim(id ^ 0x1F2B3Cu, held, 15.0f));
         
         ImDrawList* dl = ImGui::GetWindowDrawList();
+        const float time = (float)ImGui::GetTime();
 
+        // Background fill with hover/active states
         ImU32 hoverFill = LerpU32(IM_COL32(0,0,0,0), U(P.surfaceHi), t);
-        ImU32 activeFill = U(ImVec4(P.accent.x, P.accent.y, P.accent.z, 0.08f));
-        dl->AddRectFilled(tMin, tMax, active ? activeFill : hoverFill, 6.0f);
+        ImU32 activeFill = IM_COL32(59, 130, 246, 38);
+        ImU32 heldFill = IM_COL32(59, 130, 246, 60);
+        ImU32 finalFill = active ? activeFill : (held ? heldFill : hoverFill);
+        dl->AddRectFilled(tMin, tMax, finalFill, 8.0f);
 
+        // Animated left border indicator for active tab
         if (at > 0.01f)
         {
-            // Vertical accent indicator bar on the left edge
-            dl->AddRectFilled(ImVec2(tMin.x, tMin.y + 8.0f), ImVec2(tMin.x + 3.0f, tMax.y - 8.0f), U(P.accent), 1.5f);
+            float borderH = 18.0f + at * 12.0f;
+            float borderY = tMin.y + (tabH - borderH) * 0.5f;
+            float pulse = 0.7f + 0.3f * sinf(time * 5.0f);
+            ImU32 borderCol = ImGui::ColorConvertFloat4ToU32(ImVec4(
+                UI::P.accent.x * pulse, UI::P.accent.y * pulse, UI::P.accent.z * pulse, at
+            ));
+            dl->AddRectFilled(ImVec2(tMin.x, borderY), ImVec2(tMin.x + 4.0f, borderY + borderH), borderCol, 2.0f);
         }
 
-        float s = 16.0f + at * 1.0f;
+        // Subtle ripple on click
+        static std::map<ImGuiID, float> clickRipples;
+        if (clicked) {
+            clickRipples[id] = 0.0f;
+        }
+        auto it = clickRipples.find(id);
+        if (it != clickRipples.end()) {
+            it->second += ImGui::GetIO().DeltaTime * 8.0f;
+            float ripple = it->second;
+            if (ripple < 1.0f) {
+                float maxR = tabW * 1.5f;
+                float r = ripple * maxR;
+                float alpha = (1.0f - ripple) * 0.3f;
+                ImU32 rippleCol = IM_COL32(
+                    (int)(UI::P.accent.x * 255 * alpha),
+                    (int)(UI::P.accent.y * 255 * alpha),
+                    (int)(UI::P.accent.z * 255 * alpha),
+                    255
+                );
+                dl->AddCircleFilled(center, r, rippleCol);
+            } else {
+                clickRipples.erase(it);
+            }
+        }
+
+        float s = 16.0f + at * 2.0f + ht * 1.0f;
         ImU32 iconCol = ImGui::ColorConvertFloat4ToU32(
             Mix(hov ? P.textStrong : P.textDim, P.accent, at));
+        
+        // Icon breathing animation when active
+        if (active) {
+            s += 0.5f * sinf(time * 4.0f);
+        }
+
         switch (iconId)
         {
         case 1: // crosshair
         {
             const float r = s * .38f, gap = s * .13f, ll = s * .26f, lw = 1.5f;
             dl->AddCircle(center, r, iconCol, 32, lw);
-            dl->AddCircleFilled(center, 2.0f, iconCol);
+            dl->AddCircleFilled(center, 2.0f * at + 1.0f, iconCol);
             dl->AddLine(ImVec2(center.x, center.y - r - gap), ImVec2(center.x, center.y - r - gap - ll), iconCol, lw);
             dl->AddLine(ImVec2(center.x, center.y + r + gap), ImVec2(center.x, center.y + r + gap + ll), iconCol, lw);
             dl->AddLine(ImVec2(center.x - r - gap, center.y), ImVec2(center.x - r - gap - ll, center.y), iconCol, lw);
@@ -601,7 +651,9 @@ namespace UI
             const ImVec2 B = ImVec2(center.x, center.y + ry);
             dl->AddBezierCubic(L, ImVec2(L.x + rx * .65f, T.y - ry * .3f), ImVec2(R.x - rx * .65f, T.y - ry * .3f), R, iconCol, lw);
             dl->AddBezierCubic(L, ImVec2(L.x + rx * .65f, B.y + ry * .3f), ImVec2(R.x - rx * .65f, B.y + ry * .3f), R, iconCol, lw);
-            dl->AddCircleFilled(center, s * .13f, iconCol);
+            // Animated pupil
+            float pupilSize = s * .13f * (0.8f + 0.2f * sinf(time * 3.0f));
+            dl->AddCircleFilled(center, pupilSize, iconCol);
             break;
         }
         case 3: // globe
@@ -609,15 +661,20 @@ namespace UI
             const float r = s * .40f, cx = s * .22f, lw = 1.5f;
             dl->AddCircle(center, r, iconCol, 32, lw);
             dl->AddLine(ImVec2(center.x - r, center.y), ImVec2(center.x + r, center.y), iconCol, lw);
-            dl->AddBezierCubic(ImVec2(center.x, center.y - r), ImVec2(center.x + cx, center.y - r * .5f), ImVec2(center.x + cx, center.y + r * .5f), ImVec2(center.x, center.y + r), iconCol, lw);
+            // Animated meridians
+            float meridianOffset = fmodf(time * 0.5f, 6.2832f);
+            dl->AddBezierCubic(ImVec2(center.x, center.y - r), ImVec2(center.x + cx * cosf(meridianOffset), center.y - r * .5f), ImVec2(center.x + cx * cosf(meridianOffset), center.y + r * .5f), ImVec2(center.x, center.y + r), iconCol, lw);
             dl->AddBezierCubic(ImVec2(center.x, center.y - r), ImVec2(center.x - cx, center.y - r * .5f), ImVec2(center.x - cx, center.y + r * .5f), ImVec2(center.x, center.y + r), iconCol, lw);
             break;
         }
         case 4: // layer (3 stacked bars)
         {
             const float hw = s * .35f, hh = s * .07f, gap = s * .17f;
-            for (int i = -1; i <= 1; i++)
-                dl->AddRectFilled(ImVec2(center.x - hw, center.y + i * gap - hh), ImVec2(center.x + hw, center.y + i * gap + hh), iconCol, 1.0f);
+            for (int i = -1; i <= 1; i++) {
+                float barAnim = 0.5f + 0.5f * sinf(time * 2.0f + i * 1.0f);
+                float barH = hh * (0.7f + 0.3f * barAnim);
+                dl->AddRectFilled(ImVec2(center.x - hw, center.y + i * gap - barH), ImVec2(center.x + hw, center.y + i * gap + barH), iconCol, 1.0f);
+            }
             break;
         }
         case 5: // diamond
@@ -625,7 +682,9 @@ namespace UI
             const float r = s * .42f;
             dl->AddQuad(ImVec2(center.x, center.y - r), ImVec2(center.x + r, center.y), ImVec2(center.x, center.y + r), ImVec2(center.x - r, center.y), iconCol, 1.6f);
             dl->AddLine(ImVec2(center.x - r * .45f, center.y), ImVec2(center.x + r * .45f, center.y), iconCol, 1.3f);
-            dl->AddCircleFilled(center, s * .08f, iconCol, 12);
+            // Animated center dot
+            float dotPulse = 0.5f + 0.5f * sinf(time * 4.0f);
+            dl->AddCircleFilled(center, s * .08f * dotPulse, iconCol, 12);
             break;
         }
         case 6: // person
@@ -641,7 +700,7 @@ namespace UI
             dl->AddCircle(center, ri, iconCol, 24, 1.5f);
             for (int i = 0; i < 6; i++)
             {
-                const float a = (float)i / 6.f * 6.2832f;
+                const float a = (float)i / 6.f * 6.2832f + time * 0.5f;
                 const float a1 = a - .24f, a2 = a + .24f;
                 dl->AddQuadFilled(
                     ImVec2(center.x + cosf(a1) * ri, center.y + sinf(a1) * ri),
@@ -655,7 +714,9 @@ namespace UI
 
         if (label && *label)
         {
-            dl->AddText(ImVec2(tMin.x + 38.0f, tMin.y + (tabH - ImGui::GetFontSize()) * 0.5f), iconCol, label);
+            // Text with subtle slide animation
+            float textX = tMin.x + 38.0f + at * 4.0f;
+            dl->AddText(ImVec2(textX, tMin.y + (tabH - ImGui::GetFontSize()) * 0.5f), iconCol, label);
         }
 
         return clicked;
@@ -670,25 +731,77 @@ namespace UI
         ImGui::InvisibleButton(label, sz);
         bool clicked = ImGui::IsItemClicked();
         bool hover = ImGui::IsItemHovered();
+        bool held = ImGui::IsItemActive();
         ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
         ImDrawList* dl = ImGui::GetWindowDrawList();
+        const float time = (float)ImGui::GetTime();
 
         ImGuiID id = ImGui::GetID(label);
         float t = AnimEased(id, active || hover, 10.f);
         float at = AnimEased(id ^ 0x5C3A1Bu, active, 12.f);
+        float ht = AnimEased(id ^ 0x2D4E5F, held, 15.f);
 
+        // Background with smooth transitions
         if (active)
         {
-            ImVec4 activeBg = ImVec4(P.accent.x, P.accent.y, P.accent.z, 0.10f);
-            dl->AddRectFilled(a, b, U(activeBg), 6.0f, 0);
+            float pulse = 0.5f + 0.5f * sinf(time * 3.0f);
+            ImU32 activeFill = IM_COL32(59, 130, 246, (int)(30 + pulse * 10));
+            dl->AddRectFilled(a, b, activeFill, 6.0f, 0);
+            
+            // Animated underline - expands from center
+            float underlineW = (b.x - a.x - 16.0f) * at;
+            float underlineX = (a.x + b.x) * 0.5f - underlineW * 0.5f;
+            ImU32 underlineCol = ImGui::ColorConvertFloat4ToU32(ImVec4(
+                UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, 
+                0.8f + 0.2f * sinf(time * 4.0f)
+            ));
+            dl->AddRectFilled(ImVec2(underlineX, b.y - 2.0f), ImVec2(underlineX + underlineW, b.y), underlineCol, 1.0f);
+            
+            // Top glow line
+            dl->AddRectFilled(ImVec2(a.x, a.y), ImVec2(b.x, a.y + 1.0f), 
+                ImGui::ColorConvertFloat4ToU32(ImVec4(UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, 0.3f * at)), 0.0f);
         }
         else if (hover)
         {
             dl->AddRectFilled(a, b, U(P.surfaceHi), 6.0f, 0);
+            // Subtle bottom line on hover
+            dl->AddRectFilled(ImVec2(a.x + 8.0f, b.y - 1.0f), ImVec2(b.x - 8.0f, b.y), 
+                ImGui::ColorConvertFloat4ToU32(ImVec4(UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, 0.3f * t)), 0.0f);
+        }
+        else if (held)
+        {
+            dl->AddRectFilled(a, b, IM_COL32(59, 130, 246, 20), 6.0f, 0);
+        }
+
+        // Ripple effect on click
+        static std::map<ImGuiID, float> subtabRipples;
+        if (clicked) {
+            subtabRipples[id] = 0.0f;
+        }
+        auto it = subtabRipples.find(id);
+        if (it != subtabRipples.end()) {
+            it->second += ImGui::GetIO().DeltaTime * 10.0f;
+            float ripple = it->second;
+            if (ripple < 1.0f) {
+                float maxR = (b.x - a.x) * 1.2f;
+                float r = ripple * maxR;
+                float alpha = (1.0f - ripple) * 0.2f;
+                ImU32 rippleCol = IM_COL32(
+                    (int)(UI::P.accent.x * 255 * alpha),
+                    (int)(UI::P.accent.y * 255 * alpha),
+                    (int)(UI::P.accent.z * 255 * alpha),
+                    255
+                );
+                dl->AddCircleFilled(ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f), r, rippleCol);
+            } else {
+                subtabRipples.erase(it);
+            }
         }
 
         ImU32 labelCol = U(Mix(hover ? P.textStrong : P.textMid, P.textStrong, at));
-        dl->AddText(ImVec2((a.x + b.x) * 0.5f - ts.x * 0.5f, (a.y + b.y) * 0.5f - ts.y * 0.5f),
+        // Text slide animation
+        float textOffsetX = (1.0f - at) * 4.0f;
+        dl->AddText(ImVec2((a.x + b.x) * 0.5f - ts.x * 0.5f + textOffsetX, (a.y + b.y) * 0.5f - ts.y * 0.5f),
             labelCol, label);
         animStore = t;
         return clicked;
@@ -748,7 +861,7 @@ namespace UI
         
         const float w = avail;
         const float cy = p.y + 10.0f;
-        constexpr float kTrkH = 3.0f;
+        constexpr float kTrkH = 6.0f;
 
         ImGui::InvisibleButton("##sl", ImVec2(w, 20.0f));
         bool active = ImGui::IsItemActive();
@@ -770,13 +883,14 @@ namespace UI
                 active ? U(P.accentHover) : U(P.accent), kTrkH);
         }
 
-        const float hh = active ? 6.0f : 5.0f;
+        // Larger white thumb with a blue border
+        const float hh = (active ? 8.0f : 7.0f) + t * 0.0f;
         const float hx = p.x + w * t;
-        
-        // Thumb shadow & circle
+
+        // Thumb shadow & white circle w/ blue ring
         dl->AddCircleFilled(ImVec2(hx, cy + 1.0f), hh, IM_COL32(0, 0, 0, 70), 22);
-        dl->AddCircleFilled(ImVec2(hx, cy), hh, active ? U(P.accentHover) : U(P.accent), 22);
-        dl->AddCircle(ImVec2(hx, cy), hh, U(P.textStrong), 22, 1.0f);
+        dl->AddCircleFilled(ImVec2(hx, cy), hh, U(P.textStrong), 22);
+        dl->AddCircle(ImVec2(hx, cy), hh, active ? U(P.accentHover) : U(P.accent), 22, 1.5f);
 
         ImGui::PopID();
         return ImGui::IsItemDeactivatedAfterEdit();
@@ -916,6 +1030,7 @@ inline bool CollapsibleSection(const char* label, float width, bool defaultOpen 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 p = ImGui::GetCursorScreenPos();
     const float hdrH = 26.0f;
+    const float time = (float)ImGui::GetTime();
 
     ImGui::InvisibleButton("##csbtn", ImVec2(width, hdrH));
     if (ImGui::IsItemClicked())
@@ -925,15 +1040,37 @@ inline bool CollapsibleSection(const char* label, float width, bool defaultOpen 
     }
     bool hov = ImGui::IsItemHovered();
 
+    // Animated open-state transition (chevron rotate + background)
+    float openAnim = EaseOutCubic(Anim(id ^ 0x99AB4u, open, 10.0f));
+
     if (hov)
         dl->AddRectFilled(p, ImVec2(p.x + width, p.y + hdrH), U(P.surfaceHi), 3.0f);
+    if (openAnim > 0.01f)
+    {
+        float glowAlpha = 0.08f + 0.05f * sinf(time * 3.0f);
+        dl->AddRectFilled(p, ImVec2(p.x + width, p.y + hdrH),
+            ImGui::ColorConvertFloat4ToU32(ImVec4(P.accent.x, P.accent.y, P.accent.z, glowAlpha)), 3.0f);
+    }
     dl->AddRectFilled(p, ImVec2(p.x + 2.0f, p.y + hdrH), U(P.accent), 1.0f);
     dl->AddText(ImVec2(p.x + 10.0f, p.y + (hdrH - ImGui::GetFontSize()) * 0.5f),
         U(open ? P.textStrong : P.textDim), label);
-    const char* ind = open ? "-" : "+";
+    
+    // Animated chevron (rotating between + and -)
+    const char* ind = "-";
+    float rot = openAnim * 3.14159265f * 0.5f;
     float iw = ImGui::CalcTextSize(ind).x;
-    dl->AddText(ImVec2(p.x + width - iw - 8.0f, p.y + (hdrH - ImGui::GetFontSize()) * 0.5f),
-        U(P.textDim), ind);
+    ImVec2 indent = ImVec2(p.x + width - iw - 8.0f, p.y + (hdrH - ImGui::GetFontSize()) * 0.5f);
+    // Draw a small rotating chevron instead of static plus/minus
+    float cx = indent.x + iw * 0.5f;
+    float cy = indent.y + ImGui::GetFontSize() * 0.5f;
+    float cs = 3.5f;
+    float cosR = cosf(rot), sinR = sinf(rot);
+    auto rotp = [&](float x, float y) {
+        return ImVec2(cx + x * cosR - y * sinR, cy + x * sinR + y * cosR);
+    };
+    ImU32 chevCol = U(P.textDim);
+    dl->AddLine(rotp(-cs, -cs), rotp(cs, 0), chevCol, 1.5f);
+    dl->AddLine(rotp(cs, 0), rotp(-cs, cs), chevCol, 1.5f);
 
     ImGui::Dummy(ImVec2(0, 4.0f));
     ImVec2 sp = ImGui::GetCursorScreenPos();

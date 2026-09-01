@@ -478,12 +478,6 @@ inline RobloxPlayer GetClosestPlayer()
         if (Options::Aimbot::WallCheck && Visibility::IsPlayerOccluded(player))
             continue;
 
-        // Only Visible: skip players hidden behind geometry unless wall check
-        // is also enabled (in which case the occluder test above already ran).
-        if (Options::Aimbot::OnlyVisible && !Options::Aimbot::WallCheck &&
-            Visibility::IsPlayerOccluded(player))
-            continue;
-
         auto targetPos = GetTargetPosition(player);
         auto targetPos2D = WorldToScreen(targetPos);
 
@@ -1060,6 +1054,26 @@ inline void MouseSendInput(const Vectors::Vector2& targetPos, const POINT& curre
     float dx = static_cast<float>(targetPos.x - currentPos.x);
     float dy = static_cast<float>(targetPos.y - currentPos.y);
 
+    // Perfect lock at 0 smoothness - instant snap to target
+    if (Options::Aimbot::Smoothness <= 0.0f)
+    {
+        int intMoveX = static_cast<int>(dx);
+        int intMoveY = static_cast<int>(dy);
+        
+        if (intMoveX != 0 || intMoveY != 0)
+        {
+            INPUT input = {};
+            input.type = INPUT_MOUSE;
+            input.mi.dx = intMoveX;
+            input.mi.dy = intMoveY;
+            input.mi.dwFlags = MOUSEEVENTF_MOVE;
+            SendInput(1, &input, sizeof(INPUT));
+        }
+        accumulatedX = 0.0f;
+        accumulatedY = 0.0f;
+        return;
+    }
+
     // Add shake if enabled
     if (Options::Aimbot::Shake && Options::Aimbot::ShakeIntensity > 0.0f)
     {
@@ -1293,10 +1307,8 @@ inline void RunAimCore(ImDrawList* drawList)
     GetCursorPos(&p);
 
     HWND robloxWindow = Globals::Viewport::RobloxHWND;
-    if (robloxWindow && IsWindow(robloxWindow))
-    {
-        ScreenToClient(robloxWindow, &p);
-    }
+    // Keep p in screen coordinates to match WorldToScreen output
+    // ScreenToClient would convert to client coords, causing mismatch with MOUSEEVENTF_MOVE
 
     int CombatType;
     
@@ -1424,7 +1436,21 @@ inline void RunAimCore(ImDrawList* drawList)
         {
             char buf[32];
             sprintf_s(buf, "%.0f", Options::Aimbot::FOV);
-            drawList->AddText(ImVec2(fovCenter.x + 6.f, fovCenter.y - radius - 14.f), FOVColor, buf);
+            ImFont* font = ImGui::GetFont();
+            float textSize = font->FontSize * 1.5f;
+            ImVec2 textPos = ImVec2(floorf(fovCenter.x + 6.f), floorf(fovCenter.y - radius - 22.f));
+            ImU32 outlineColor = IM_COL32(0, 0, 0, 255);
+            
+            // Draw thicker outline (2px) for crispness
+            for (int dx = -2; dx <= 2; ++dx) {
+                for (int dy = -2; dy <= 2; ++dy) {
+                    if (dx == 0 && dy == 0) continue;
+                    drawList->AddText(font, textSize, ImVec2(textPos.x + dx, textPos.y + dy), outlineColor, buf);
+                }
+            }
+            
+            // Draw main text
+            drawList->AddText(font, textSize, textPos, FOVColor, buf);
         }
     }
 
@@ -1712,25 +1738,10 @@ inline void RunAimCore(ImDrawList* drawList)
 
             if (tracerTarget.address)
             {
+                // Only register the visual tracer. Hit confirmation (sounds, effects)
+                // is handled by RegisterHit (health delta) or ConfirmShotHit
+                // (geometry-based verification), not on every tracer spawn.
                 CombatFeedback::RegisterShot(camPos, GetTargetPosition(tracerTarget), tracerTarget.Character.address);
-
-                // Geometry-based hit confirmation. For silent aim the shot
-                // actually resolves onto the target, so use its position.
-                // Otherwise project the camera look vector out to the target
-                // distance and confirm against enemy body parts.
-                Vectors::Vector3 hitPoint;
-                if (ShouldUseSilentAim())
-                {
-                    hitPoint = GetTargetPosition(tracerTarget);
-                }
-                else
-                {
-                    sCFrame camCFrame = Globals::Roblox::Camera.CFrame();
-                    Vectors::Vector3 lookVec = camCFrame.GetLookVector();
-                    float dist = camPos.Distance(GetTargetPosition(tracerTarget));
-                    hitPoint = camPos + lookVec * dist;
-                }
-                CombatFeedback::RegisterShotHit(hitPoint);
             }
             else if (Options::Combat::BulletTracersAlways)
             {

@@ -418,7 +418,6 @@ inline json BuildConfigJson()
         { "Hitbox Mode", Options::Aimbot::HitboxMode },
         { "Target Priority", Options::Aimbot::TargetPriority },
         { "FOV Shape", Options::Aimbot::FOVShape },
-        { "Only Visible", Options::Aimbot::OnlyVisible },
         { "Target Switch Delay", Options::Aimbot::TargetSwitchDelay },
         { "Show FOV Text", Options::Aimbot::ShowFOVText },
         { "FOV", Options::Aimbot::FOV },
@@ -1104,7 +1103,6 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(aim, "Hitbox Mode", Options::Aimbot::HitboxMode);
         LoadVal(aim, "Target Priority", Options::Aimbot::TargetPriority);
         LoadVal(aim, "FOV Shape", Options::Aimbot::FOVShape);
-        LoadVal(aim, "Only Visible", Options::Aimbot::OnlyVisible);
         LoadVal(aim, "Target Switch Delay", Options::Aimbot::TargetSwitchDelay);
         LoadVal(aim, "Show FOV Text", Options::Aimbot::ShowFOVText);
         LoadVal(aim, "FOV", Options::Aimbot::FOV);
