@@ -89,19 +89,19 @@ inline void CachePlayerObjects()
 					p.Velocity = Memory->read<Vectors::Vector3>(primitiveAddr + Offsets::Primitive::AssemblyLinearVelocity);
 			}
 
-			// Cache equipped tool name
+			// Cache equipped tool name. In modern/Rivals games the weapon is a
+			// Tool that lives in the player's Backpack (child of the Player), and
+			// may be nested inside folders, so we scan the character a couple
+			// levels deep and fall back to the Backpack.
 			p.ToolName = "";
 			if (p.Character.address)
+				p.ToolName = FindToolName(p.Character, 0);
+
+			if (p.ToolName.empty())
 			{
-				auto children = p.Character.GetChildren();
-				for (auto& child : children)
-				{
-					if (child.Class() == "Tool" || child.Class() == "HopperBin")
-					{
-						p.ToolName = child.Name();
-						break;
-					}
-				}
+				auto backpack = player.FindFirstChild("Backpack");
+				if (backpack.address)
+					p.ToolName = FindToolName(backpack, 0);
 			}
 
 			switch (p.RigType)

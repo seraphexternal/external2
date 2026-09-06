@@ -1209,6 +1209,20 @@ inline void RenderESP(ImDrawList* drawList)
             const float dotRadius = EspClamp((bottom - top) * 0.04f, 2.f, 5.f);
             drawList->AddCircleFilled(head2D, dotRadius, activeHeadDotColor, 24);
         }
+
+        // ---- Tool/Weapon ESP ----
+        if (Options::ESP::Tool && !player.ToolName.empty())
+        {
+            const ImU32 toolColor = IM_COL32(
+                static_cast<int>(Options::ESP::ToolColor[0] * 255.f),
+                static_cast<int>(Options::ESP::ToolColor[1] * 255.f),
+                static_cast<int>(Options::ESP::ToolColor[2] * 255.f),
+                255);
+
+            ImVec2 toolPos = ImVec2(head2D.x, bottom + 4.f * scale);
+            drawList->AddText(font, Options::ESP::ToolSize * scale, toolPos, toolColor, player.ToolName.c_str());
+        }
+
         if (Options::ESP::Name)
         {
             std::string displayName;
@@ -1330,6 +1344,18 @@ inline void RenderESP(ImDrawList* drawList)
                     ImVec2(chipX + (chipW - wpnTextSize.x) * 0.5f, chipY + (chipH - wpnTextSize.y) * 0.5f),
                     chipText, player.ToolName.c_str());
             }
+        }
+
+        if (Options::ESP::Tool)
+        {
+            const char* toolStr = player.ToolName.empty() ? "None" : player.ToolName.c_str();
+            const float toolFontSize = (Options::ESP::DistanceSize * scale > 10.f) ? Options::ESP::DistanceSize * scale : 10.f;
+            const ImVec2 toolTextSize = font->CalcTextSizeA(toolFontSize, FLT_MAX, 0.f, toolStr);
+            const ImVec2 toolPos((left + right) * 0.5f - toolTextSize.x * 0.5f + Options::ESP::ToolOffsetX, bottom + 4.f + toolTextSize.y + 2.f + Options::ESP::ToolOffsetY);
+            const ImU32 toolCol = player.ToolName.empty()
+                ? IM_COL32(160, 160, 160, 200)
+                : IM_COL32(255, 210, 150, 235);
+            drawList->AddText(font, toolFontSize, toolPos, toolCol, toolStr);
         }
 
         if (Options::ESP::Health)
@@ -1572,7 +1598,7 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
     // Dragging a feature in the preview writes the global offset options, so the
     // moved position also drives the real in-game ESP. Hovering outlines the
     // feature in white; right-clicking opens a per-feature customize popup.
-    enum PreviewFeat : int { kName = 0, kDistance = 1, kHealth = 2, kRigType = 3 };
+    enum PreviewFeat : int { kName = 0, kDistance = 1, kHealth = 2, kRigType = 3, kTool = 4 };
     static int s_DragFeat = -1;
     static double s_FeatOpenAt = 0.0;   // ImGui time when the feature popup opened (for entrance anim)
     static ImVec2 s_DragOrigin;
@@ -2255,6 +2281,21 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
             FeatureOutline(rigX - 2.0f, rigY - 2.0f, ts.x + 4.0f, ts.y + 4.0f);
     }
 
+    if (Options::ESP::Tool)
+    {
+        const char* toolStr = "AK-47";
+        ImFont* tf = ImGui::GetFont();
+        const float tsz = Options::ESP::DistanceSize;
+        const ImVec2 ts = tf->CalcTextSizeA(tsz, FLT_MAX, 0.0f, toolStr);
+        const ImU32 toolCol = IM_COL32(255, 210, 150, 255);
+        float toolX = cx - ts.x * 0.5f + Options::ESP::ToolOffsetX;
+        float toolY = bBot + 4.0f + Options::ESP::DistanceOffsetY + ts.y + 4.0f + Options::ESP::ToolOffsetY;
+        drawList->AddText(tf, tsz, ImVec2(toolX, toolY), toolCol, toolStr);
+        FeatureDrag(kTool, toolX, toolY, ts.x, ts.y, Options::ESP::ToolOffsetX, Options::ESP::ToolOffsetY);
+        if (s_HoverFeat == kTool || s_DragFeat == kTool)
+            FeatureOutline(toolX - 2.0f, toolY - 2.0f, ts.x + 4.0f, ts.y + 4.0f);
+    }
+
     // Tracers ??? drawn from the preview's bottom (or top, per TracersStart) to the
     // centre of the bounding box. In-game tracer start 3 uses the player's own
     // screen-space torso, which maps naturally to the bottom of the preview.
@@ -2596,7 +2637,8 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
         const char* featName = s_PopupFeat == kName ? "Name"
             : s_PopupFeat == kDistance ? "Distance"
             : s_PopupFeat == kHealth ? "Health Bar"
-            : "RigType";
+            : s_PopupFeat == kRigType ? "RigType"
+            : "Tool";
         bool open = true;
         ImVec2 pos(rectMax.x + 8.0f, rectMin.y);
         ImVec2 display = ImGui::GetIO().DisplaySize;
@@ -2681,6 +2723,10 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
                 RowSlider("Thickness", 0.0f, 5.0f, &Options::ESP::RigTypeThickness, "%.1f");
                 ImGui::Separator();
                 RowColor("Color", Options::ESP::RigTypeColor, 3);
+            }
+            else if (s_PopupFeat == kTool)
+            {
+                RowSlider("Size", 8.0f, 32.0f, &Options::ESP::DistanceSize, "%.0f");
             }
         }
         ImGui::End();

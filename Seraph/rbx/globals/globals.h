@@ -62,7 +62,10 @@ inline bool IsHoldingKatana(const RobloxPlayer& player)
     for (auto& ch : hay)
         ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
 
-    return hay.find("katana") != std::string::npos;
+    // Check for various katana names used in Rivals and other games
+    return hay.find("katana") != std::string::npos ||
+           hay.find("sword") != std::string::npos ||
+           hay.find("blade") != std::string::npos;
 }
 
 namespace Globals
@@ -535,4 +538,83 @@ inline RobloxInstance ResolveCharacterFallback(uintptr_t playerAddress)
     auto it = cache.find(playerAddress);
     if (it != cache.end()) return it->second;
     return RobloxInstance(0);
+}
+
+// Looks for a Tool/HopperBin instance among the given instance's children (one
+// level deep, plus a shallow recursion into folders) and returns its name.
+inline std::string FindToolName(const RobloxInstance& inst, int depth)
+{
+    if (inst.address == 0 || depth > 3)
+        return "";
+
+    for (auto& child : inst.GetChildren())
+    {
+        if (child.Class() == "Tool" || child.Class() == "HopperBin")
+            return child.Name();
+    }
+
+    // Recurse into folders / tool wrappers
+    for (auto& child : inst.GetChildren())
+    {
+        auto c = child.Class();
+        if (c == "Folder" || c == "Model" || c == "Part")
+        {
+            auto inner = FindToolName(child, depth + 1);
+            if (!inner.empty())
+                return inner;
+        }
+    }
+
+    return "";
+}
+
+// Returns the local player's currently equipped tool name.
+// Empty string if local player has no tool. Scans the live character (a couple
+// levels deep) first, then falls back to the player's Backpack (Rivals keeps
+// weapons there), and finally checks the cached player objects.
+inline std::string GetLocalPlayerWeapon()
+{
+    if (Globals::Roblox::LocalPlayer.address == 0)
+        return "";
+
+    std::string found;
+
+    // 1) Direct live scan of the local character for an equipped Tool.
+    auto lChar = Globals::Roblox::LocalPlayer.Character();
+    if (lChar.address)
+        found = FindToolName(lChar, 0);
+
+    // 2) Fall back to the player's Backpack (weapons live here in Rivals).
+    if (found.empty())
+    {
+        auto backpack = Globals::Roblox::LocalPlayer.FindFirstChild("Backpack");
+        if (backpack.address)
+            found = FindToolName(backpack, 0);
+    }
+
+    // 3) Last resort: the cached player objects.
+    if (found.empty())
+    {
+        for (auto& player : Globals::Caches::CachedPlayerObjects)
+        {
+            if (player.address == Globals::Roblox::LocalPlayer.address)
+            {
+                found = player.ToolName;
+                break;
+            }
+        }
+    }
+
+    return found;
+}
+
+// Case-insensitive substring match: returns true if 'hay' contains 'needle'.
+inline bool CaseInsensitiveFind(const std::string& hay, const char* needle)
+{
+    if (!needle[0])
+        return false;
+    std::string lower = hay;
+    for (auto& ch : lower)
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return lower.find(needle) != std::string::npos;
 }

@@ -16,6 +16,9 @@
 #include "../features/orbit.h"
 #include "animation.h"
 #include "explorer/explorer_window.h"
+#include "explorer/lua_editor.h"
+#include "executor/executor.h"
+#include "injector.h"
 #include <shobjidl.h>
 #pragma comment(lib, "ole32.lib")
 #include "../seraph_log.h"
@@ -33,6 +36,9 @@ IDXGISwapChain* g_pSwapChain = nullptr;
 bool g_SwapChainOccluded = false;
 UINT g_ResizeWidth = 0, g_ResizeHeight = 0;
 ID3D11RenderTargetView* g_mainRenderTargetView = nullptr;
+
+// Persistent script text box for the Executor tab (survives tab switches).
+static editor::lua_editor g_executorEditor;
 
 // -----------------------------------------------------------------------------
 // MenuFonts: file-scope mirror of the menu font choices pre-loaded into the
@@ -354,7 +360,65 @@ return expectedTitle == std::string(windowTitle);
 
 void HideFromTaskbar(HWND hwnd);
 
-void ApplyOverlayWindowStyle(HWND hwnd, bool clickThrough)
+static volatile LONG g_OverlayWheelAccum = 0;
+static WNDPROC g_GameWndProc = nullptr;
+static HWND g_GameWnd = nullptr;
+
+static LRESULT CALLBACK GameWheelHookWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_MOUSEWHEEL)
+    {
+        short delta = GET_WHEEL_DELTA_WPARAM(wParam);
+        if (delta != 0)
+            InterlockedExchangeAdd(&g_OverlayWheelAccum, (LONG)((double)delta * 4096.0 / 120.0));
+    }
+    return CallWindowProcW(g_GameWndProc, hWnd, msg, wParam, lParam);
+}
+
+struct WheelForwarderCtx { HWND overlay; HWND best; int bestArea; };
+
+static BOOL CALLBACK EnumWheelForwarderWindows(HWND h, LPARAM lp)
+{
+    WheelForwarderCtx* c = (WheelForwarderCtx*)lp;
+    if (h == c->overlay || !::IsWindowVisible(h))
+        return TRUE;
+    DWORD pid = 0;
+    ::GetWindowThreadProcessId(h, &pid);
+    if (pid != ::GetCurrentProcessId())
+        return TRUE;
+    LONG_PTR ex = ::GetWindowLongPtrW(h, GWL_EXSTYLE);
+    if (ex & WS_EX_TOOLWINDOW)
+        return TRUE;
+    RECT rc;
+    ::GetWindowRect(h, &rc);
+    int area = (rc.right - rc.left) * (rc.bottom - rc.top);
+    if (area > c->bestArea)
+    {
+        c->best = h;
+        c->bestArea = area;
+    }
+    return TRUE;
+}
+
+static void InstallWheelForwarder(HWND overlay)
+{
+    WheelForwarderCtx c = { overlay, nullptr, 0 };
+    ::EnumWindows(EnumWheelForwarderWindows, (LPARAM)&c);
+    if (!c.best)
+        return;
+    g_GameWnd = c.best;
+    g_GameWndProc = (WNDPROC)::SetWindowLongPtrW(c.best, GWLP_WNDPROC, (LONG_PTR)GameWheelHookWndProc);
+}
+
+static void UninstallWheelForwarder()
+{
+    if (g_GameWnd && g_GameWndProc)
+        ::SetWindowLongPtrW(g_GameWnd, GWLP_WNDPROC, (LONG_PTR)g_GameWndProc);
+    g_GameWnd = nullptr;
+    g_GameWndProc = nullptr;
+}
+
+static void ApplyOverlayWindowStyle(HWND hwnd, bool clickThrough)
 {
 LONG exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
 
@@ -1032,6 +1096,9 @@ void ShowImgui()
     Globals::overlayShouldShutdown = false;
     Globals::overlayDone = false;
     InitializeConfigPaths();
+    OutputDebugStringA("[S] ShowImgui: Calling Executor::Initialize...\n");
+    Executor::Initialize();
+    OutputDebugStringA("[S] ShowImgui: Executor::Initialize returned\n");
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     ImGui_ImplWin32_EnableDpiAwareness();
     float main_scale = ImGui_ImplWin32_GetDpiScaleForMonitor(::MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY));
@@ -1092,6 +1159,8 @@ void ShowImgui()
     // ownership forces Windows to route mouse + focus through the
     // dialog above our WS_EX_LAYERED + WS_EX_TOPMOST overlay.
     g_OverlayHWND = hwnd;
+
+    InstallWheelForwarder(hwnd);
 
     HideFromTaskbar(hwnd);
 
@@ -1238,7 +1307,18 @@ CreateRenderTarget();
 
 ImGui_ImplDX11_NewFrame();
 ImGui_ImplWin32_NewFrame();
+    if (menu_open)
+    {
+        const LONG wheel = InterlockedExchange(&g_OverlayWheelAccum, 0);
+        if (wheel != 0)
+            ImGui::GetIO().MouseWheel += (float)wheel / 4096.0f;
+    }
+    else
+        InterlockedExchange(&g_OverlayWheelAccum, 0);
 ImGui::NewFrame();
+
+// Pump the external executor: resumes due coroutines, fires RunService events.
+Executor::Tick();
 
 Globals::Viewport::Update();
 
@@ -1724,10 +1804,10 @@ ImGui::ColorConvertFloat4ToU32(UI::P.line), 1.0f * sc);
                 struct TabDef { int icon; const char* label; };
                 static const TabDef tabs[] = {
                     {1,"Aim"}, {2,"Visuals"}, {3,"Rage"}, {4,"Misc"},
-                    {5,"Movement"}, {6,"Configs"}, {7,"Game"}
+                    {5,"Movement"}, {6,"Configs"}, {7,"Game"}, {8,"Executor"}
                 };
 
-                for (int i = 0; i < 7; i++)
+                for (int i = 0; i < 8; i++)
                 {
                     if (UI::SidebarTab(tabs[i].icon, tabs[i].label, tab == i,
                         tabX, tabStartY + i * 48.0f * sc, tabW))
@@ -1765,13 +1845,15 @@ if (tab == 0)
         // ── Content header + horizontal subtab bar ────────────────
         UI::ContentHeader("AIM");
         {
-            static float sa[4] = {};
+            static float sa[5] = {};
             ImGui::SetCursorPosX(ctX);
             if (UI::ContentSubtab("Aimbot", tab2 == 0, sa[0])) tab2 = 0;
             ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Triggerbot", tab2 == 1, sa[1])) tab2 = 1;
             ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Hitbox", tab2 == 2, sa[2])) tab2 = 2;
+            ImGui::SameLine(0, 6.0f * sc);
+            if (UI::ContentSubtab("Weapon", tab2 == 3, sa[3])) tab2 = 3;
             ImGui::Dummy(ImVec2(0, 8 * sc));
         }
 
@@ -1786,6 +1868,8 @@ if (tab == 0)
                 UI::Checkbox("Enabled", &Options::Aimbot::Aimbot);
                 UI::Checkbox("Team Check", &Options::Aimbot::TeamCheck);
                 UI::Checkbox("Knocked Check", &Options::Aimbot::DownedCheck);
+                UI::Checkbox("Anti Katana", &Options::Rivals::AntiKatana);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rivals: skip players currently holding a katana.");
                 UI::Checkbox("Sticky Aim", &Options::Aimbot::StickyAim);
                 UI::Checkbox("Wall Check", &Options::Aimbot::WallCheck);
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Only lock onto players that are not behind walls.");
@@ -2228,6 +2312,184 @@ if (tab == 0)
             ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
             // (preview rendered in ESP overlay)
         }
+        else if (tab2 == 3)
+        {
+            // ── Weapon + FOV subtab ──
+            // Two columns (CURRENT WEAPON | FOV VISUALS) side by side at top,
+            // then a full-width WEAPON PROFILES panel below — mirroring the
+            // Aimbot subtab layout that renders reliably in this ImGui fork.
+
+            static const char* wpWeapons[] = {
+                "Assault Rifle", "Warper", "Bow", "Burst Rifle", "Chainsaw",
+                "Sniper", "Daggers", "Jump Pad", "Permafrost", "Uzi",
+                "Exogun", "Maul", "Grenade", "Flare Gun", "Flashbang",
+                "Freeze Ray", "Flamethrower", "Energy Rifle", "Gunblade", "Handgun",
+                "Spear", "Katana", "Knife", "Medkit", "Minigun",
+                "Molotov", "Paintball Gun", "RPG", "Revolver", "Riot Shield",
+                "Satchel", "Scythe", "Shorty", "Shotgun", "Slingshot",
+                "Smoke Grenade", "Crossbow", "Spray", "Battle Axe", "Trowel",
+                "Grenade Launcher", "Warpstone", "Distortion", "Subspace Tripmine",
+                "Energy Pistols", "Fists", "Grappler", "War Horn"
+            };
+
+            const float panelY = ImGui::GetCursorPosY();
+
+            // Left column: CURRENT WEAPON
+            ImGui::SetCursorPosX(ctX);
+            if (UI::CollapsibleSection("CURRENT WEAPON", halfW))
+            {
+                static int curIdx = -1;
+                int match = -1;
+                for (int k = 0; k < IM_ARRAYSIZE(wpWeapons); k++)
+                    if (Options::WeaponProfiles::CurrentWeapon == wpWeapons[k]) { match = k; break; }
+                curIdx = match;
+                ImGui::SetNextItemWidth(halfW - 28.0f * sc);
+                if (UI::Combo("##curweapon", &curIdx, wpWeapons, IM_ARRAYSIZE(wpWeapons)))
+                    Options::WeaponProfiles::CurrentWeapon =
+                        (curIdx >= 0 && curIdx < (int)IM_ARRAYSIZE(wpWeapons)) ? wpWeapons[curIdx] : "";
+
+                ImGui::Spacing();
+                UI::labelsection("STATUS");
+                if (Options::WeaponProfiles::ActiveProfile >= 0 &&
+                    Options::WeaponProfiles::ActiveProfile < static_cast<int>(Options::WeaponProfiles::Profiles.size()))
+                {
+                    auto& ap = Options::WeaponProfiles::Profiles[Options::WeaponProfiles::ActiveProfile];
+                    ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), "Matched: %s", ap.Name[0] ? ap.Name : "?");
+                }
+                else
+                {
+                    ImGui::TextColored(UI::P.textMid, "None (add & enable a profile)");
+                }
+            }
+            UI::CollapsibleEnd();
+
+            // Right column: FOV VISUALS
+            ImGui::SetCursorPosY(panelY);
+            ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+            if (UI::CollapsibleSection("FOV VISUALS", halfW))
+            {
+                UI::labelsection("DISPLAY");
+                UI::Checkbox("Show FOV", &Options::Aimbot::ShowFOV);
+                UI::Checkbox("Show FOV Fill", &Options::Aimbot::ShowFOVFill);
+                UI::Checkbox("Show FOV Text", &Options::Aimbot::ShowFOVText);
+
+                static const char* fovPositions[]{ "Screen Center", "Follow Target" };
+                UI::Combo("FOV Position", &Options::Aimbot::FOVPositionMode, fovPositions, IM_ARRAYSIZE(fovPositions));
+
+                static const char* fovShapes[]{ "Circle", "Square", "Triangle", "Hexagon" };
+                UI::Combo("FOV Shape", &Options::Aimbot::FOVShape, fovShapes, IM_ARRAYSIZE(fovShapes));
+
+                static const char* fovColorModes[]{ "Solid", "Gradient", "Shift", "Pulse" };
+                UI::Combo("FOV Color Mode", &Options::Aimbot::FOVColorMode, fovColorModes, IM_ARRAYSIZE(fovColorModes));
+
+                UI::Checkbox("FOV Glow", &Options::Aimbot::FOVGlow);
+                UI::Checkbox("FOV Breathing", &Options::Aimbot::FOVBreathing);
+                UI::Checkbox("FOV Spin", &Options::Aimbot::FOVSpin);
+
+                UI::labelsection("STYLING");
+                UI::SliderFloat("FOV Thickness", &Options::Aimbot::FOVThickness, 1.0f, 10.0f, "%.1f");
+                if (Options::Aimbot::FOVColorMode == 1 || Options::Aimbot::FOVColorMode == 2)
+                    UI::SliderFloat("Gradient Speed", &Options::Aimbot::FOVGradientSpeed, 0.1f, 5.0f, "%.2f");
+                if (Options::Aimbot::FOVSpin)
+                    UI::SliderFloat("Spin Speed", &Options::Aimbot::FOVSpinSpeed, 0.1f, 5.0f, "%.2f");
+
+                UI::ColorEdit3("FOV Color", Options::Aimbot::FOVColor, ImGuiColorEditFlags_NoInputs);
+                UI::ColorEdit3("FOV Fill", Options::Aimbot::FOVFillColor, ImGuiColorEditFlags_NoInputs);
+            }
+            UI::CollapsibleEnd();
+
+            // Full-width WEAPON PROFILES panel below the two columns
+            ImGui::SetCursorPosY(panelY + 490 * sc + 12.0f * sc);
+            ImGui::SetCursorPosX(ctX);
+            if (UI::CollapsibleSection("WEAPON PROFILES", ctW))
+            {
+                if (UI::Button("Add Profile", ImVec2(-1, 28)))
+                {
+                    Options::WeaponProfile p;
+                    p.Enabled = true;
+                    snprintf(p.Name, sizeof(p.Name), "Weapon%d", (int)Options::WeaponProfiles::Profiles.size() + 1);
+                    Options::WeaponProfiles::Profiles.push_back(p);
+                    Options::WeaponProfiles::SelectedProfile = (int)Options::WeaponProfiles::Profiles.size() - 1;
+                }
+                ImGui::Spacing();
+
+                if (Options::WeaponProfiles::Profiles.empty())
+                {
+                    ImGui::TextColored(UI::P.textMid, "Click 'Add Profile' to create per-weapon aimbot settings.");
+                }
+                else
+                {
+                    std::vector<const char*> names;
+                    std::vector<std::string> stable;
+                    for (auto& pro : Options::WeaponProfiles::Profiles)
+                    {
+                        std::string lbl = std::string(pro.Name[0] ? pro.Name : "(unnamed)") +
+                            (pro.Enabled ? " [ON]" : " [OFF]");
+                        stable.push_back(lbl);
+                        names.push_back(stable.back().c_str());
+                    }
+                    int sel = Options::WeaponProfiles::SelectedProfile;
+                    UI::Combo("##profile_sel", &sel, names.data(), (int)names.size());
+                    Options::WeaponProfiles::SelectedProfile = std::clamp(sel, 0, (int)Options::WeaponProfiles::Profiles.size() - 1);
+
+                    if (sel >= 0 && sel < (int)Options::WeaponProfiles::Profiles.size())
+                    {
+                        auto& prof = Options::WeaponProfiles::Profiles[sel];
+
+                        UI::labelsection("PROFILE SETTINGS");
+                        UI::Checkbox("Enabled", &prof.Enabled);
+                        ImGui::InputText("Weapon Name", prof.Name, sizeof(prof.Name));
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Matches the held weapon name (case-insensitive).");
+
+                        static const char* wpMethods[]{ "Camera", "Mouse", "Silent" };
+                        UI::Combo("Method", &prof.AimingType, wpMethods, IM_ARRAYSIZE(wpMethods));
+                        UI::Checkbox("Silent Aim", &prof.SilentAim);
+                        if (prof.SilentAim)
+                        {
+                            static const char* wpSilentModes[]{ "Camera", "Mouse Spoof" };
+                            UI::Combo("Silent Mode", &prof.SilentAimMode, wpSilentModes, IM_ARRAYSIZE(wpSilentModes));
+                        }
+
+                        static const char* wpBones[]{ "Head", "Torso", "Upper Torso", "Lower Torso" };
+                        UI::Combo("Target Bone", &prof.TargetBone, wpBones, IM_ARRAYSIZE(wpBones));
+                        {
+                            static const char* hitboxModes[]{ "Fixed Bone", "Closest Part" };
+                            UI::Combo("Hitbox Mode", &prof.ClosestPart, hitboxModes, IM_ARRAYSIZE(hitboxModes));
+                        }
+
+                        UI::SliderFloat("Range", &prof.Range, 1.f, 1000.f, "%.0f");
+                        UI::SliderFloat("FOV", &prof.FOV, 10.f, 360.f, "%.0f");
+                        UI::SliderFloat("Smoothness", &prof.Smoothness, 0.f, 1.f, "%.3f");
+
+                        UI::labelsection("CHECKS");
+                        UI::Checkbox("Team Check", &prof.TeamCheck);
+                        UI::Checkbox("Knocked Check", &prof.DownedCheck);
+                        UI::Checkbox("Wall Check", &prof.WallCheck);
+                        UI::Checkbox("Sticky Aim", &prof.StickyAim);
+                        UI::Checkbox("Prediction", &prof.Prediction);
+                        if (prof.Prediction)
+                        {
+                            UI::SliderFloat("Prediction X", &prof.PredictionX, 0.0f, 10.0f, "%.2f");
+                            UI::SliderFloat("Prediction Y", &prof.PredictionY, 0.0f, 10.0f, "%.2f");
+                        }
+                        UI::Checkbox("Ignore Jump", &prof.IgnoreJump);
+                        if (prof.IgnoreJump)
+                            UI::SliderFloat("Jump Threshold", &prof.JumpThreshold, 1.0f, 100.0f, "%.1f");
+
+                        ImGui::Spacing();
+                        if (UI::Button("Delete Profile", ImVec2(-1, 24)))
+                        {
+                            Options::WeaponProfiles::Profiles.erase(Options::WeaponProfiles::Profiles.begin() + sel);
+                            if (Options::WeaponProfiles::SelectedProfile >= (int)Options::WeaponProfiles::Profiles.size())
+                                Options::WeaponProfiles::SelectedProfile = (int)Options::WeaponProfiles::Profiles.size() - 1;
+                            if (Options::WeaponProfiles::SelectedProfile < 0)
+                                Options::WeaponProfiles::SelectedProfile = 0;
+                        }
+                    }
+                }
+            }
+            UI::CollapsibleEnd();
+        }
 }
 else if (tab == 2)
 {
@@ -2302,6 +2564,13 @@ UI::labelsection("PLAYER INFO");
 	UI::Checkbox("Health Bar", &Options::ESP::Health);
 	UI::Checkbox("Health Text", &Options::ESP::HealthText);
 	UI::Checkbox("HP Above Head", &Options::ESP::EnemyHealthIndicator);
+	UI::Checkbox("Tool", &Options::ESP::Tool);
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows the equipped tool under the target's name.");
+	if (Options::ESP::Tool)
+	{
+		UI::SliderFloat("Tool Size", &Options::ESP::ToolSize, 8.0f, 24.0f, "%.1f");
+		UI::ColorEdit4("Tool Color", Options::ESP::ToolColor, ImGuiColorEditFlags_NoInputs);
+	}
 
 	UI::labelsection("OVERLAYS");
 	UI::Checkbox("Corner ESP", &Options::ESP::CornerESP);
@@ -3188,6 +3457,127 @@ if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows the current curse name on t
 }
 UI::CollapsibleEnd();
 }
+else if (tab == 7)
+{
+    // ---- EXECUTOR TAB ----
+    // Wrapper window owns a scrollbar and lets mouse wheel fall through to it
+    // (the child cards below are NoScrollWithMouse for the editor's wheel use).
+    // This guarantees the whole tab is scrollable at any font scale.
+    ImGui::SetCursorPosX(ctX);
+    ImGui::BeginChild("##executor_tab", ImVec2(fullW, s.y - 58.0f * sc - 8.0f * sc), false);
+    {
+        UI::ContentHeader("EXECUTOR");
+        if (UI::CollapsibleSection("SCRIPT", fullW - 16.0f * sc))
+        {
+            const float innerW = (fullW - 16.0f * sc) - 2.0f * 14.0f * sc; // card WindowPadding is 14
+            ImGui::SetCursorPos(ImVec2(6.0f * sc, ImGui::GetCursorPosY()));
+            g_executorEditor.render("##executor_script", ImVec2(innerW - 20.0f * sc, 150.0f * sc));
+
+            ImGui::SetCursorPos(ImVec2(6.0f * sc, ImGui::GetCursorPosY()));
+            if (UI::Button("EXECUTE", ImVec2(120.0f * sc, 0.0f)))
+            {
+                Executor::ConsolePush("[executor] EXECUTE clicked, running script...");
+                Executor::ClearConsole();
+                Executor::Run(g_executorEditor.get_text());
+            }
+            ImGui::SameLine();
+            if (UI::Button("STOP", ImVec2(90.0f * sc, 0.0f)))
+                Executor::Stop();
+            ImGui::SameLine();
+            if (UI::Button("CLEAR", ImVec2(90.0f * sc, 0.0f)))
+                Executor::ClearConsole();
+            ImGui::SameLine();
+            static bool s_injected = false;
+            if (UI::Button(s_injected ? "EJECT" : "INJECT DLL", ImVec2(110.0f * sc, 0.0f)))
+            {
+                if (!s_injected)
+                {
+                    Injector::SetLogCallback([](const std::string& msg) { Executor::ConsolePush("[injector] " + msg); });
+                    
+                    Executor::ConsolePush("[injector] Button clicked, starting injection...");
+                    try
+                    {
+                        Executor::ConsolePush("[injector] Step 1: Getting module path...");
+                        wchar_t exePath[MAX_PATH];
+                        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+                        std::wstring dllPath = std::wstring(exePath);
+                        size_t pos = dllPath.find_last_of(L'\\');
+                        if (pos != std::wstring::npos)
+                            dllPath = dllPath.substr(0, pos + 1) + L"SeraphExecutorDLL.dll";
+                        
+                        Executor::ConsolePush("[injector] Step 2: Loading DLL from " + std::string(dllPath.begin(), dllPath.end()));
+                        auto dllBytes = Injector::LoadDllFromDisk(dllPath.c_str());
+                        if (!dllBytes.empty())
+                        {
+                            Executor::ConsolePush("[injector] Step 3: DLL loaded (" + std::to_string(dllBytes.size()) + " bytes), finding Roblox...");
+                            int pid = Injector::FindRobloxPID();
+                            if (pid == 0)
+                            {
+                                Executor::ConsolePush("[injector] Failed: RobloxPlayerBeta.exe not running");
+                            }
+                            else
+                            {
+                                Executor::ConsolePush("[injector] Step 4: Roblox found (pid " + std::to_string(pid) + "), injecting...");
+                                auto result = Injector::InjectDLLByName(L"RobloxPlayerBeta.exe", dllBytes);
+                                if (result.success)
+                                {
+                                    s_injected = true;
+                                    Executor::ConsolePush("[injector] Success: DLL injected at 0x" + std::to_string(result.dllBase) + " (pid " + std::to_string(result.pid) + ")");
+                                }
+                                else
+                                {
+                                    Executor::ConsolePush("[injector] Failed: " + result.error);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            Executor::ConsolePush("[injector] Failed: SeraphExecutorDLL.dll not found at " + std::string(dllPath.begin(), dllPath.end()));
+                        }
+                    }
+                    catch (const std::exception& e)
+                    {
+                        Executor::ConsolePush("[injector] C++ Exception: " + std::string(e.what()));
+                    }
+                    catch (...)
+                    {
+                        Executor::ConsolePush("[injector] Unknown crash (SEH/access violation)");
+                    }
+                }
+                else
+                {
+                    Executor::ConsolePush("[injector] Eject not implemented");
+                }
+            }
+            ImGui::SameLine();
+            ImGui::TextColored(s_injected ? ImVec4(0.3f, 1.0f, 0.4f, 1.0f) : ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+                s_injected ? "[INJECTED]" : "[NOT INJECTED]");
+        }
+        UI::CollapsibleEnd();
+
+        if (UI::CollapsibleSection("CONSOLE", fullW - 16.0f * sc))
+        {
+            const float innerW = (fullW - 16.0f * sc) - 2.0f * 14.0f * sc;
+            ImGui::SetCursorPos(ImVec2(6.0f * sc, ImGui::GetCursorPosY()));
+            if (ImGui::BeginChild("##executor_console", ImVec2(innerW - 20.0f * sc, 170.0f * sc), true))
+            {
+                const auto lines = Executor::ConsoleSnapshot();
+                static size_t lastConsoleCount = 0;
+                const bool grew = lines.size() > lastConsoleCount;
+                lastConsoleCount = lines.size();
+                ImGui::PushTextWrapPos(ImGui::GetContentRegionMax().x - 8.0f * sc);
+                for (const auto& l : lines)
+                    ImGui::TextUnformatted(l.c_str());
+                ImGui::PopTextWrapPos();
+                if (grew)
+                    ImGui::SetScrollHereY(1.0f);
+            }
+            ImGui::EndChild();
+        }
+        UI::CollapsibleEnd();
+    }
+    ImGui::EndChild();
+}
 
 ImGui::PopFont();
 }
@@ -3394,6 +3784,9 @@ if (Options::Misc::ExplorerEnabled)
 if (Options::Misc::PlayerListEnabled)
     RenderPlayerListWindow(&Options::Misc::PlayerListEnabled);
 
+// Render draw.* items produced by running scripts (before the final commit).
+Executor::RenderOverlay(ImGui::GetBackgroundDrawList());
+
 ImGui::Render();
 const float clear_color_with_alpha[4] = { clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w };
 g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
@@ -3407,6 +3800,9 @@ g_SwapChainOccluded = (hr == DXGI_STATUS_OCCLUDED);
 ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
+    g_OverlayWheelAccum = 0;
+
+    UninstallWheelForwarder();
 
     gui::explorer_shutdown();
 
@@ -3477,6 +3873,7 @@ return true;
 
 void CleanupDeviceD3D()
 {
+Executor::Shutdown();
 CleanupRenderTarget();
 if (g_pSwapChain) { g_pSwapChain->Release(); g_pSwapChain = nullptr; }
 if (g_pd3dDeviceContext) { g_pd3dDeviceContext->Release(); g_pd3dDeviceContext = nullptr; }

@@ -554,9 +554,12 @@ void ImDrawList::_OnChangedVtxOffset()
 int ImDrawList::_CalcCircleAutoSegmentCount(float radius) const
 {
     // Automatic segment count
-    const int radius_idx = (int)(radius + 0.999999f); // ceil to never reduce accuracy
+    // Clamp to >= 1: a tiny positive radius maps to CircleSegmentCounts[0], which is 0 by design
+    // (see SetCircleTessellationMaxError). Callers such as _PathArcToFastEx() divide by this
+    // value, so returning 0 would be an integer divide-by-zero (0xC0000094).
+    const int radius_idx = ImMax((int)(radius + 0.999999f), 1); // ceil to never reduce accuracy
     if (radius_idx < IM_ARRAYSIZE(_Data->CircleSegmentCounts))
-        return _Data->CircleSegmentCounts[radius_idx]; // Use cached value
+        return ImMax((int)_Data->CircleSegmentCounts[radius_idx], IM_DRAWLIST_CIRCLE_AUTO_SEGMENT_MIN); // Use cached value
     else
         return IM_DRAWLIST_CIRCLE_AUTO_SEGMENT_CALC(radius, _Data->CircleSegmentMaxError);
 }
@@ -1046,7 +1049,7 @@ void ImDrawList::_PathArcToFastEx(const ImVec2& center, float radius, int a_min_
 
     // Calculate arc auto segment step size
     if (a_step <= 0)
-        a_step = IM_DRAWLIST_ARCFAST_SAMPLE_MAX / _CalcCircleAutoSegmentCount(radius);
+        a_step = IM_DRAWLIST_ARCFAST_SAMPLE_MAX / ImMax(_CalcCircleAutoSegmentCount(radius), IM_DRAWLIST_CIRCLE_AUTO_SEGMENT_MIN);
 
     // Make sure we never do steps larger than one quarter of the circle
     a_step = ImClamp(a_step, 1, IM_DRAWLIST_ARCFAST_TABLE_SIZE / 4);

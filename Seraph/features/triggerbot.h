@@ -368,7 +368,7 @@ auto localCharacter = Globals::Roblox::LocalPlayer.Character();
             continue;
         }
 
-        if (Globals::Roblox::isRivals && Options::Rivals::AntiKatana && IsHoldingKatana(player))
+        if (Options::Rivals::AntiKatana && IsHoldingKatana(player))
         {
             if (tbDebugFrame) { char buf[256]; sprintf_s(buf, sizeof(buf), "  SKIP katana: %s", player.Name.c_str()); TBDebug(buf); }
             continue;

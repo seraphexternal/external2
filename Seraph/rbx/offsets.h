@@ -4,9 +4,9 @@
 /*                  https://offsets.imtheo.lol                  
 /* -------------------------------------------------------------
 /*  Dumped With     : RbxDumperV2                               
-/*  Roblox Version  : version-f5a60436d48947d3
+/*  Roblox Version  : version-e7d81637d42c4b23
 /*  Dumper Version  : 2.1.7
-/*  Dumped At       : 19:36 27/08/2026 (GMT)
+/*  Dumped At       : 17:43 02/09/2026 (GMT)
 /*  Total Offsets   : 388
 /* -------------------------------------------------------------
 /*  Join the discord!                                           
@@ -19,11 +19,11 @@
 #include <unordered_map>
 #include "../features/obfuscate.h"
 namespace Offsets {
-    inline std::string ClientVersion = "version-f5a60436d48947d3";
+    inline std::string ClientVersion = "version-e7d81637d42c4b23";
 
     namespace AirProperties {
-         inline uintptr_t AirDensity = 0x0;
-         inline uintptr_t GlobalWind = 0x0;
+         inline uintptr_t AirDensity = 0x18;
+         inline uintptr_t GlobalWind = 0x3c;
     }
 
     namespace AnimationTrack {
@@ -59,7 +59,7 @@ namespace Offsets {
          inline uintptr_t Massless = 0x137;
          inline uintptr_t Primitive = 0x188;
          inline uintptr_t Reflectance = 0x10c;
-         inline uintptr_t Shape = 0x1b9;
+         inline uintptr_t Shape = 0x1b8;
          inline uintptr_t Transparency = 0x130;
     }
 
@@ -139,13 +139,13 @@ namespace Offsets {
     namespace DataModel {
          inline uintptr_t CreatorId = 0x180;
          inline uintptr_t GameId = 0x188;
-         inline uintptr_t GameLoaded = 0x5d0;
+         inline uintptr_t GameLoaded = 0x5d8;
          inline uintptr_t JobId = 0x118;
          inline uintptr_t PlaceId = 0x190;
          inline uintptr_t PlaceVersion = 0x1ac;
-         inline uintptr_t PrimitiveCount = 0x418;
+         inline uintptr_t PrimitiveCount = 0x420;
          inline uintptr_t ScriptContext = 0x440;
-         inline uintptr_t ServerIP = 0x5b8;
+         inline uintptr_t ServerIP = 0x5c0;
          inline uintptr_t ToRenderView1 = 0x1c8;
          inline uintptr_t ToRenderView2 = 0x8;
          inline uintptr_t ToRenderView3 = 0x28;
@@ -175,14 +175,14 @@ namespace Offsets {
     }
 
     namespace FakeDataModel {
-         inline uintptr_t Pointer = 0x8ca9cc8;
+         inline uintptr_t Pointer = 0x8d22868;
          inline uintptr_t RealDataModel = 0x1f8;
     }
 
     namespace FFlags {
-         inline uintptr_t GameNetCompressionLodByteBudgetThresholdPct = 0x7991258;
-         inline uintptr_t PhysicsSenderMaxBandwidthBps = 0x798fa88;
-         inline uintptr_t NextGenReplicatorEnabledWrite4 = 0x7da93d0;
+         inline uintptr_t GameNetCompressionLodByteBudgetThresholdPct = 0x7783778;
+         inline uintptr_t PhysicsSenderMaxBandwidthBps = 0x77844c0;
+         inline uintptr_t NextGenReplicatorEnabledWrite4 = 0x8152668;
     }
 
     namespace GuiBase2D {
@@ -196,7 +196,7 @@ namespace Offsets {
          inline uintptr_t BackgroundTransparency = 0x54c;
          inline uintptr_t BorderColor3 = 0x54c;
          inline uintptr_t Image = 0x988;
-         inline uintptr_t LayoutOrder = 0x580;
+         inline uintptr_t LayoutOrder = 0x57c;
          inline uintptr_t Position = 0x510;
          inline uintptr_t RichText = 0xb88;
          inline uintptr_t Rotation = 0xe8;
@@ -450,8 +450,8 @@ namespace Offsets {
     }
 
     namespace RunService {
-         inline uintptr_t HeartbeatFPS = 0xf4;
-         inline uintptr_t HeartbeatTask = 0x3b8;
+         inline uintptr_t HeartbeatFPS = 0xc0;
+         inline uintptr_t HeartbeatTask = 0xe0;
     }
 
     namespace Script {
@@ -465,7 +465,7 @@ namespace Offsets {
     }
 
     namespace Seat {
-         inline uintptr_t Occupant = 0x210;
+         inline uintptr_t Occupant = 0x218;
     }
 
     namespace Sky {
@@ -495,11 +495,11 @@ namespace Offsets {
     }
 
     namespace SpawnLocation {
-         inline uintptr_t AllowTeamChangeOnTouch = 0x1e8;
-         inline uintptr_t Enabled = 0x1e9;
-         inline uintptr_t ForcefieldDuration = 0x1e0;
-         inline uintptr_t Neutral = 0x1ea;
-         inline uintptr_t TeamColor = 0x1e4;
+         inline uintptr_t AllowTeamChangeOnTouch = 0x3d;
+         inline uintptr_t Enabled = 0x1f1;
+         inline uintptr_t ForcefieldDuration = 0x1e8;
+         inline uintptr_t Neutral = 0x1f2;
+         inline uintptr_t TeamColor = 0x1ec;
     }
 
     namespace SpecialMesh {
@@ -534,7 +534,7 @@ namespace Offsets {
          inline uintptr_t JobName = 0x18;
          inline uintptr_t JobStart = 0xc8;
          inline uintptr_t MaxFPS = 0xb0;
-         inline uintptr_t Pointer = 0x8a44d68;
+         inline uintptr_t Pointer = 0x8abd728;
     }
 
     namespace Team {
@@ -542,13 +542,13 @@ namespace Offsets {
     }
 
     namespace Terrain {
-         inline uintptr_t GrassLength = 0x1e8;
-         inline uintptr_t MaterialColors = 0x4b0;
-         inline uintptr_t WaterColor = 0x1d8;
-         inline uintptr_t WaterReflectance = 0x1f0;
-         inline uintptr_t WaterTransparency = 0x1f4;
-         inline uintptr_t WaterWaveSize = 0x1f8;
-         inline uintptr_t WaterWaveSpeed = 0x1fc;
+         inline uintptr_t GrassLength = 0x1f0;
+         inline uintptr_t MaterialColors = 0x4b8;
+         inline uintptr_t WaterColor = 0x1e0;
+         inline uintptr_t WaterReflectance = 0x1f8;
+         inline uintptr_t WaterTransparency = 0x1fc;
+         inline uintptr_t WaterWaveSize = 0x200;
+         inline uintptr_t WaterWaveSpeed = 0x204;
     }
 
     namespace Textures {
@@ -561,7 +561,7 @@ namespace Offsets {
          inline uintptr_t Enabled = 0x4b9;
          inline uintptr_t Grip = 0x4ac;
          inline uintptr_t ManualActivationOnly = 0x4ba;
-         inline uintptr_t RequiresHandle = 0x4bb;
+         inline uintptr_t RequiresHandle = 0x1d5;
          inline uintptr_t TextureId = 0x360;
          inline uintptr_t Tooltip = 0x468;
     }
@@ -577,17 +577,17 @@ namespace Offsets {
     namespace VehicleSeat {
          inline uintptr_t MaxSpeed = 0x228;
          inline uintptr_t SteerFloat = 0x22c;
-         inline uintptr_t ThrottleFloat = 0x230;
+         inline uintptr_t ThrottleFloat = 0x188;
          inline uintptr_t Torque = 0x234;
          inline uintptr_t TurnSpeed = 0x238;
     }
 
     namespace VisualEngine {
-         inline uintptr_t Dimensions = 0xae0;
-         inline uintptr_t FakeDataModel = 0xac0;
-         inline uintptr_t Pointer = 0x82e2128;
-         inline uintptr_t RenderView = 0xc00;
-         inline uintptr_t ViewMatrix = 0x180;
+         inline uintptr_t Dimensions = 0xb10;
+         inline uintptr_t FakeDataModel = 0xaf0;
+         inline uintptr_t Pointer = 0x8351408;
+         inline uintptr_t RenderView = 0xc30;
+         inline uintptr_t ViewMatrix = 0x1b0;
     }
 
     namespace Weld {
@@ -606,18 +606,18 @@ namespace Offsets {
     }
 
     namespace Workspace {
-         inline uintptr_t CurrentCamera = 0x498;
-         inline uintptr_t DistributedGameTime = 0x4b8;
-         inline uintptr_t ReadOnlyGravity = 0x9c8;
-         inline uintptr_t World = 0x368;
+         inline uintptr_t CurrentCamera = 0x4b8;
+         inline uintptr_t DistributedGameTime = 0x4d8;
+         inline uintptr_t ReadOnlyGravity = 0x9f0;
+         inline uintptr_t World = 0x410;
     }
 
     namespace World {
-         inline uintptr_t AirProperties = 0x0;
-         inline uintptr_t FallenPartsDestroyHeight = 0x0;
-         inline uintptr_t Gravity = 0x1b4;
-         inline uintptr_t Primitives = 0x0;
-         inline uintptr_t worldStepsPerSec = 0x0;
+         inline uintptr_t AirProperties = 0x240;
+         inline uintptr_t FallenPartsDestroyHeight = 0x220;
+         inline uintptr_t Gravity = 0x22c;
+         inline uintptr_t Primitives = 0x2b0;
+         inline uintptr_t worldStepsPerSec = 0x728;
     }
 
     // ── Runtime override registry (populated from offsets_list.inc) ──

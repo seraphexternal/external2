@@ -307,6 +307,11 @@ inline json BuildConfigJson()
         { "Remove Borders", Options::ESP::RemoveBorders },
         { "Headless", Options::ESP::Headless },
         { "Show Weapon", Options::ESP::ShowWeapon },
+        { "Tool", Options::ESP::Tool },
+        { "ESP Tool Offset X", Options::ESP::ToolOffsetX },
+        { "ESP Tool Offset Y", Options::ESP::ToolOffsetY },
+        { "ESP Tool Color", ToJsonColor(Options::ESP::ToolColor, 3) },
+        { "ESP Tool Size", Options::ESP::ToolSize },
         { "Head Dot", Options::ESP::HeadDot },
         { "Corner ESP", Options::ESP::CornerESP },
         { "Health Text", Options::ESP::HealthText },
@@ -475,6 +480,39 @@ inline json BuildConfigJson()
         { "Jump Threshold", Options::Aimbot::JumpThreshold }
     };
 
+    j["WeaponProfiles"] = [&]()
+    {
+        json arr = json::array();
+        for (auto& p : Options::WeaponProfiles::Profiles)
+        {
+            arr.push_back({
+                { "Name", std::string(p.Name) },
+                { "Enabled", p.Enabled },
+                { "AimingType", p.AimingType },
+                { "SilentAim", p.SilentAim },
+                { "SilentAimMode", p.SilentAimMode },
+                { "Range", p.Range },
+                { "FOV", p.FOV },
+                { "Smoothness", p.Smoothness },
+                { "SmoothnessCurve", p.SmoothnessCurve },
+                { "TargetBone", p.TargetBone },
+                { "ClosestPart", p.ClosestPart },
+                { "TeamCheck", p.TeamCheck },
+                { "DownedCheck", p.DownedCheck },
+                { "WallCheck", p.WallCheck },
+                { "StickyAim", p.StickyAim },
+                { "Prediction", p.Prediction },
+                { "PredictionX", p.PredictionX },
+                { "PredictionY", p.PredictionY },
+                { "IgnoreJump", p.IgnoreJump },
+                { "JumpThreshold", p.JumpThreshold }
+            });
+        }
+        return arr;
+    }();
+
+    j["CurrentWeapon"] = Options::WeaponProfiles::CurrentWeapon;
+
     j[OBS("Trigger", "bot")] = {
         { OBS("Trigger", "bot Key"), Options::Triggerbot::TriggerbotKey },
         { "Toggle Type", Options::Triggerbot::ToggleType },
@@ -588,6 +626,12 @@ inline json BuildConfigJson()
         { "ESP Preview Offset Y", Options::Misc::ESPPreviewOffsetY },
         { "Stream Proof", Options::Misc::StreamProof },
         { "Third Person", Options::Misc::ThirdPerson },
+        { "Anim Changer", Options::AnimationChanger::Enabled },
+        { "Anim Idle", Options::AnimationChanger::Idle },
+        { "Anim Run", Options::AnimationChanger::Run },
+        { "Anim Walk", Options::AnimationChanger::Walk },
+        { "Anim Jump", Options::AnimationChanger::Jump },
+        { "Anim Fall", Options::AnimationChanger::Fall },
         { "Menu Key", Options::Misc::MenuKey },
         { "Menu Accent Color", ToJsonColor(Options::Misc::MenuAccentColor, 3) },
         { "Menu Accent Color 2", ToJsonColor(Options::Misc::MenuAccentColor2, 3) },
@@ -958,6 +1002,11 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(esp, "Remove Borders", Options::ESP::RemoveBorders);
         LoadVal(esp, "Headless", Options::ESP::Headless);
         LoadVal(esp, "Show Weapon", Options::ESP::ShowWeapon);
+        LoadVal(esp, "Tool", Options::ESP::Tool);
+        LoadVal(esp, "ESP Tool Offset X", Options::ESP::ToolOffsetX);
+        LoadVal(esp, "ESP Tool Offset Y", Options::ESP::ToolOffsetY);
+        LoadFloatArray(esp, "ESP Tool Color", Options::ESP::ToolColor);
+        LoadVal(esp, "ESP Tool Size", Options::ESP::ToolSize);
         LoadVal(esp, "Head Dot", Options::ESP::HeadDot);
         LoadVal(esp, "Corner ESP", Options::ESP::CornerESP);
         LoadVal(esp, "Health Text", Options::ESP::HealthText);
@@ -1160,6 +1209,45 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(aim, "Jump Threshold", Options::Aimbot::JumpThreshold);
     }
 
+    if (data.is_object() && data.contains("WeaponProfiles") && data["WeaponProfiles"].is_array())
+    {
+        Options::WeaponProfiles::Profiles.clear();
+        for (auto& el : data["WeaponProfiles"])
+        {
+            Options::WeaponProfile p;
+            std::string n;
+            if (el.contains("Name")) n = el["Name"].get<std::string>();
+            strncpy_s(p.Name, n.c_str(), sizeof(p.Name) - 1);
+            LoadVal(el, "Enabled", p.Enabled);
+            LoadVal(el, "AimingType", p.AimingType);
+            LoadVal(el, "SilentAim", p.SilentAim);
+            LoadVal(el, "SilentAimMode", p.SilentAimMode);
+            LoadVal(el, "Range", p.Range);
+            LoadVal(el, "FOV", p.FOV);
+            LoadVal(el, "Smoothness", p.Smoothness);
+            LoadVal(el, "SmoothnessCurve", p.SmoothnessCurve);
+            LoadVal(el, "TargetBone", p.TargetBone);
+            LoadVal(el, "ClosestPart", p.ClosestPart);
+            LoadVal(el, "TeamCheck", p.TeamCheck);
+            LoadVal(el, "DownedCheck", p.DownedCheck);
+            LoadVal(el, "WallCheck", p.WallCheck);
+            LoadVal(el, "StickyAim", p.StickyAim);
+            LoadVal(el, "Prediction", p.Prediction);
+            LoadVal(el, "PredictionX", p.PredictionX);
+            LoadVal(el, "PredictionY", p.PredictionY);
+            LoadVal(el, "IgnoreJump", p.IgnoreJump);
+            LoadVal(el, "JumpThreshold", p.JumpThreshold);
+            Options::WeaponProfiles::Profiles.push_back(p);
+        }
+        if (Options::WeaponProfiles::SelectedProfile >= (int)Options::WeaponProfiles::Profiles.size())
+            Options::WeaponProfiles::SelectedProfile = (int)Options::WeaponProfiles::Profiles.size() - 1;
+        if (Options::WeaponProfiles::SelectedProfile < 0)
+            Options::WeaponProfiles::SelectedProfile = 0;
+    }
+
+    if (data.is_object() && data.contains("CurrentWeapon"))
+        Options::WeaponProfiles::CurrentWeapon = data["CurrentWeapon"].get<std::string>();
+
     if (data.is_object() && data.contains(OBS("Trigger", "bot")))
     {
         const auto& tb = data[OBS("Trigger", "bot")];
@@ -1260,6 +1348,12 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(ms, "ESP Preview Offset Y", Options::Misc::ESPPreviewOffsetY);
         LoadVal(ms, "Stream Proof", Options::Misc::StreamProof);
         LoadVal(ms, "Third Person", Options::Misc::ThirdPerson);
+        LoadVal(ms, "Anim Changer", Options::AnimationChanger::Enabled);
+        LoadVal(ms, "Anim Idle", Options::AnimationChanger::Idle);
+        LoadVal(ms, "Anim Run", Options::AnimationChanger::Run);
+        LoadVal(ms, "Anim Walk", Options::AnimationChanger::Walk);
+        LoadVal(ms, "Anim Jump", Options::AnimationChanger::Jump);
+        LoadVal(ms, "Anim Fall", Options::AnimationChanger::Fall);
         LoadVal(ms, "Menu Key", Options::Misc::MenuKey);
         LoadFloatArray(ms, "Menu Accent Color", Options::Misc::MenuAccentColor);
         LoadFloatArray(ms, "Menu Accent Color 2", Options::Misc::MenuAccentColor2);

@@ -44,6 +44,27 @@ namespace Options
 		inline char ExclusionPath[256] = ""; // folder the trace-wiper must never touch
 		inline bool ShowCertified = true;    // "certified yn" watermark in the menu footer
 	}
+	// Animation Changer (Misc tab). Drives the local character's "Animate"
+	// controller by rewriting each slot's Animation instances to a chosen
+	// preset style. Each slot index points into the style list below.
+	namespace AnimationChanger
+	{
+		inline bool Enabled = false;
+		inline int Idle = 0;   // style index for the "idle" slot (0 = none)
+		inline int Run  = 0;   // style index for the "run"  slot (0 = none)
+		inline int Walk = 0;   // style index for the "walk" slot (0 = none)
+		inline int Jump = 0;   // style index for the "jump" slot (0 = none)
+		inline int Fall = 0;   // style index for the "fall" slot (0 = none)
+
+		// Display labels for the dropdown (index == slot value). Index 0 = None.
+		inline const char* StyleNames[] =
+		{
+			"None", "Zombie", "Ninja", "Robot", "Zombie II", "Levitation",
+			"Stylish", "Cartoony", "Super Hero", "Elder", "Toy", "Old School"
+		};
+		inline constexpr int StyleCount = 12;   // 1 "None" + 11 styles
+		inline constexpr int None = 0;          // slot value meaning "don't touch"
+	}
 	namespace Loader
 	{
 		inline bool AutoAttach = false;         // skip loader, attach immediately when game found
@@ -101,6 +122,11 @@ namespace Options
 		inline float PreviewRotationSpeed = 45.0f;
 		inline bool Headless = false;
 		inline bool ShowWeapon = true;
+		inline bool Tool = false;
+		inline float ToolOffsetX = 0.0f;
+		inline float ToolOffsetY = 0.0f;
+		inline float ToolColor[3] = { 1.0f, 1.0f, 1.0f };
+		inline float ToolSize = 13.0f;
 		inline bool RigType = false;
 		inline float RigTypeColor[3] = { 1.0f, 1.0f, 1.0f };
 		inline float DistanceOffsetX = 0.0f;
@@ -890,5 +916,38 @@ inline bool Enabled = true;
 		inline std::vector<Entry> Entries;
 		// Usernames treated as friends; hidden from ESP + aimbot when ExcludeFriends is on.
 		inline std::vector<std::string> Friends;
+	}
+
+	struct WeaponProfile
+	{
+		char Name[64] = "";              // weapon name to match (case-insensitive substring)
+		bool Enabled = false;            // enable this profile
+		int AimingType = 0;              // 0=Camera, 1=Mouse, 2=Silent
+		float Range = 150.f;
+		float FOV = 180.f;
+		float Smoothness = 0.f;
+		int SmoothnessCurve = 0;
+		bool WallCheck = true;
+		bool TeamCheck = false;
+		bool DownedCheck = false;
+		bool Prediction = false;
+		float PredictionX = 1.0f;
+		float PredictionY = 1.0f;
+		bool StickyAim = false;
+		bool SilentAim = false;
+		int SilentAimMode = 0;           // 0=camera, 1=mouse spoof
+		int TargetBone = 0;              // 0=Head, 1=Torso, 2=UpperTorso, 3=LowerTorso
+		bool IgnoreJump = false;
+		float JumpThreshold = 20.0f;
+		int ClosestPart = 0;             // 0=Fixed Bone, 1=Closest Part
+	};
+
+	namespace WeaponProfiles
+	{
+		inline std::vector<WeaponProfile> Profiles;
+		inline int ActiveProfile = -1;       // index of currently matched profile (-1 = none)
+		inline int SelectedProfile = 0;      // index of profile being edited in UI
+		inline int MaxProfiles = 10;
+		inline std::string CurrentWeapon;    // manually selected current weapon (Rivals doesn't expose it as a Tool)
 	}
 }

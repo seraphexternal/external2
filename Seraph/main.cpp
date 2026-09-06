@@ -9,6 +9,8 @@
 #include <fstream>
 #include <functional>
 #include <windows.h>
+#include <dbghelp.h>
+#pragma comment(lib, "dbghelp.lib")
 #include "Memory/MemoryManager.h"
 #include "rbx/globals/OffsetsFetcher.h"
 #include "overlay/renderer.h"
@@ -85,8 +87,101 @@ static void HideConsoleWindow()
         ShowWindow(console, SW_HIDE);
 }
 
+// ── Crash reporting ───────────────────────────────────────────────────────
+// Registers an unhandled-exception filter at the top of main(). On a crash it
+// writes %LOCALAPPDATA%\Seraph\crash_log.txt with the exception code, the
+// faulting module and its offset (so an RVA can be resolved against the PDB),
+// and attempts a full minidump at crash.dmp. The filter survives the stealth
+// relaunch because main() runs again in the renamed child.
+static const char* CrashExceptionName(DWORD code)
+{
+    switch (code)
+    {
+    case EXCEPTION_ACCESS_VIOLATION: return "ACCESS_VIOLATION";
+    case EXCEPTION_ARRAY_BOUNDS_EXCEEDED: return "ARRAY_BOUNDS_EXCEEDED";
+    case EXCEPTION_BREAKPOINT: return "BREAKPOINT";
+    case EXCEPTION_DATATYPE_MISALIGNMENT: return "DATATYPE_MISALIGNMENT";
+    case EXCEPTION_FLT_DIVIDE_BY_ZERO: return "FLT_DIVIDE_BY_ZERO";
+    case EXCEPTION_ILLEGAL_INSTRUCTION: return "ILLEGAL_INSTRUCTION";
+    case EXCEPTION_INT_DIVIDE_BY_ZERO: return "INT_DIVIDE_BY_ZERO";
+    case EXCEPTION_PRIV_INSTRUCTION: return "PRIV_INSTRUCTION";
+    case EXCEPTION_STACK_OVERFLOW: return "STACK_OVERFLOW";
+    default: return "UNKNOWN";
+    }
+}
+
+static LONG CALLBACK SeraphCrashFilter(EXCEPTION_POINTERS* ep)
+{
+    if (ep && ep->ExceptionRecord)
+    {
+        char logPath[MAX_PATH] = {};
+        char appData[MAX_PATH] = {};
+        const char* name = CrashExceptionName(ep->ExceptionRecord->ExceptionCode);
+
+        // Resolve the module containing the faulting instruction, if any.
+        HMODULE mod = nullptr;
+        std::string moduleName = "?";
+        ULONGLONG moduleBase = 0;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCSTR>(ep->ExceptionRecord->ExceptionAddress), &mod) && mod)
+        {
+            char modPath[MAX_PATH] = {};
+            if (GetModuleFileNameA(mod, modPath, MAX_PATH))
+            {
+                const char* slash = strrchr(modPath, '\\');
+                moduleName = slash ? slash + 1 : modPath;
+            }
+            moduleBase = reinterpret_cast<ULONGLONG>(mod);
+        }
+
+        if (SUCCEEDED(SHGetFolderPathA(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, appData)))
+        {
+            snprintf(logPath, sizeof(logPath), "%s\\Seraph\\crash_log.txt", appData);
+            CreateDirectoryA((std::string(appData) + "\\Seraph").c_str(), nullptr);
+
+            DWORD tid = GetCurrentThreadId();
+            DWORD pid = GetCurrentProcessId();
+            ULONGLONG faultOffset = ep->ExceptionRecord->ExceptionAddress ?
+                reinterpret_cast<ULONGLONG>(ep->ExceptionRecord->ExceptionAddress) - moduleBase : 0;
+            DWORD flt = ep->ExceptionRecord->NumberParameters > 0 ?
+                static_cast<DWORD>(ep->ExceptionRecord->ExceptionInformation[0]) : 0;
+
+            std::ofstream f(logPath, std::ios::app);
+            if (f)
+            {
+                f << "[" << pid << ":" << tid << "] EXCEPTION 0x"
+                  << std::hex << ep->ExceptionRecord->ExceptionCode << std::dec
+                  << " (" << name << ") flt=" << flt
+                  << " pc=0x" << std::hex << reinterpret_cast<ULONGLONG>(ep->ExceptionRecord->ExceptionAddress)
+                  << " module=" << moduleName << " base=0x" << std::hex << moduleBase
+                  << " rva=0x" << std::hex << faultOffset << std::dec
+                  << "\n";
+                f.close();
+            }
+
+            // Best-effort minidump for full stack analysis.
+            std::string dmpPath = std::string(appData) + "\\Seraph\\crash.dmp";
+            HANDLE hFile = CreateFileA(dmpPath.c_str(), GENERIC_WRITE, 0, nullptr,
+                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (hFile != INVALID_HANDLE_VALUE)
+            {
+                MINIDUMP_EXCEPTION_INFORMATION mei = {};
+                mei.ThreadId = tid;
+                mei.ExceptionPointers = ep;
+                mei.ClientPointers = TRUE;
+                MiniDumpWriteDump(GetCurrentProcess(), pid, hFile,
+                    MiniDumpNormal, &mei, nullptr, nullptr);
+                CloseHandle(hFile);
+            }
+        }
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 int main()
 {
+    SetUnhandledExceptionFilter(SeraphCrashFilter);
     OutputDebugStringA("[S] main: START\n");
     SeraphLog("[S] main: START");
     HideConsoleWindow();
@@ -377,6 +472,7 @@ int main()
         std::thread(CachePlayerObjects).detach();
         std::thread(TPHandler).detach();
         std::thread(MiscLoop).detach();
+        std::thread(AnimationChangerLoop).detach();
         std::thread(RunHitboxExpander).detach();
         std::thread(FlyLoop).detach();
         std::thread(AutoClickerLoop).detach();

@@ -13,6 +13,57 @@
 #include "silentaim.h"
 #include "playerfilter.h"
 
+// Weapon profile system: detects local player's held weapon and applies
+// per-weapon aimbot settings. Returns the index of the matched profile or -1.
+inline int ApplyWeaponProfile()
+{
+    Options::WeaponProfiles::ActiveProfile = -1;
+
+    if (Options::WeaponProfiles::Profiles.empty())
+        return -1;
+
+    std::string localWeapon = Options::WeaponProfiles::CurrentWeapon;
+    if (localWeapon.empty())
+        localWeapon = GetLocalPlayerWeapon();
+    if (localWeapon.empty())
+        return -1;
+
+    for (int i = 0; i < static_cast<int>(Options::WeaponProfiles::Profiles.size()); i++)
+    {
+        auto& prof = Options::WeaponProfiles::Profiles[i];
+        if (!prof.Enabled || prof.Name[0] == '\0')
+            continue;
+
+        if (CaseInsensitiveFind(localWeapon, prof.Name))
+        {
+            Options::WeaponProfiles::ActiveProfile = i;
+
+            Options::Aimbot::AimingType = prof.AimingType;
+            Options::Aimbot::Range = prof.Range;
+            Options::Aimbot::FOV = prof.FOV;
+            Options::Aimbot::Smoothness = prof.Smoothness;
+            Options::Aimbot::SmoothnessCurve = prof.SmoothnessCurve;
+            Options::Aimbot::WallCheck = prof.WallCheck;
+            Options::Aimbot::TeamCheck = prof.TeamCheck;
+            Options::Aimbot::DownedCheck = prof.DownedCheck;
+            Options::Aimbot::Prediction = prof.Prediction;
+            Options::Aimbot::PredictionX = prof.PredictionX;
+            Options::Aimbot::PredictionY = prof.PredictionY;
+            Options::Aimbot::StickyAim = prof.StickyAim;
+            Options::Aimbot::SilentAim = prof.SilentAim;
+            Options::Aimbot::SilentAimMode = prof.SilentAimMode;
+            Options::Aimbot::TargetBone = prof.TargetBone;
+            Options::Aimbot::IgnoreJump = prof.IgnoreJump;
+            Options::Aimbot::JumpThreshold = prof.JumpThreshold;
+            Options::Aimbot::HitboxMode = prof.ClosestPart;
+
+            return i;
+        }
+    }
+
+    return -1;
+}
+
 namespace RivalsDetect
 {
     struct SmokeGrenade
@@ -695,13 +746,22 @@ inline void CameraRotation(const RobloxPlayer& target)
     Vectors::Vector4 currentQuat = Vectors::Vector4::FromMatrix(currentRotation);
     Vectors::Vector4 targetQuat = Vectors::Vector4::FromMatrix(rotationMatrix);
 
-    // Apply smoothness curve
-    float t = ApplySmoothnessCurve(Options::Aimbot::Smoothness, Options::Aimbot::SmoothnessCurve);
+    // Perfect lock at 0 smoothness
+    Matrixes::Matrix3x3 finalMatrix;
+    if (Options::Aimbot::Smoothness <= 0.0f)
+    {
+        finalMatrix = rotationMatrix;
+    }
+    else
+    {
+        // Apply smoothness curve
+        float t = ApplySmoothnessCurve(Options::Aimbot::Smoothness, Options::Aimbot::SmoothnessCurve);
 
-    Vectors::Vector4 smoothedQuat = Vectors::Vector4::Slerp(currentQuat, targetQuat, t);
-    Matrixes::Matrix3x3 smoothedMatrix = smoothedQuat.ToMatrix();
+        Vectors::Vector4 smoothedQuat = Vectors::Vector4::Slerp(currentQuat, targetQuat, t);
+        finalMatrix = smoothedQuat.ToMatrix();
+    }
 
-    Memory->write<Matrixes::Matrix3x3>(Globals::Roblox::Camera.address + Offsets::Camera::Rotation, smoothedMatrix);
+    Memory->write<Matrixes::Matrix3x3>(Globals::Roblox::Camera.address + Offsets::Camera::Rotation, finalMatrix);
 }
 
 inline void Mouse(const Vectors::Vector2& targetPos, const POINT& p)
@@ -723,6 +783,21 @@ inline void Mouse(const Vectors::Vector2& targetPos, const POINT& p)
         
         dx += shakeX;
         dy += shakeY;
+    }
+
+    // Perfect lock at 0 smoothness - instant snap to target
+    if (Options::Aimbot::Smoothness <= 0.0f)
+    {
+        int intMoveX = static_cast<int>(dx);
+        int intMoveY = static_cast<int>(dy);
+        
+        if (intMoveX != 0 || intMoveY != 0)
+        {
+            SetCursorPos(p.x + intMoveX, p.y + intMoveY);
+        }
+        accumulatedX = 0.0f;
+        accumulatedY = 0.0f;
+        return;
     }
 
     // Apply smoothness curve
@@ -1282,6 +1357,11 @@ inline void DrawFOVShape(ImDrawList* dl, const ImVec2& center, float r, ImU32 co
 
 inline void RunAimCore(ImDrawList* drawList)
 {
+    // Apply per-weapon aimbot profile (if the local player is holding a
+    // weapon that matches one). This mutates the live Aimbot settings so
+    // both the camera aimbot and the raycast silent aim use the profile.
+    ApplyWeaponProfile();
+
     // Check if aimbot is enabled first
     if (!Options::Aimbot::Aimbot)
         return;

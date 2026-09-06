@@ -217,7 +217,7 @@ namespace UI
         ImGui::PushStyleColor(ImGuiCol_ChildBg, P.surface);
         ImGui::PushStyleColor(ImGuiCol_Border, P.line);
         bool open = ImGui::BeginChild(ImGui::GetID(title), size, true,
-            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysUseWindowPadding);
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysUseWindowPadding | ImGuiWindowFlags_NoScrollWithMouse);
         ImDrawList* dl = ImGui::GetWindowDrawList();
         ImVec2 wp = ImGui::GetWindowPos();
         ImVec2 ws = ImGui::GetWindowSize();
@@ -526,7 +526,7 @@ namespace UI
             ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
-            const bool open = ImGui::BeginChild(id, size, true, ImGuiWindowFlags_None);
+            const bool open = ImGui::BeginChild(id, size, true, ImGuiWindowFlags_NoScrollWithMouse);
             if (open && title)
             {
                 ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 2.0f);
@@ -593,31 +593,6 @@ namespace UI
                 UI::P.accent.x * pulse, UI::P.accent.y * pulse, UI::P.accent.z * pulse, at
             ));
             dl->AddRectFilled(ImVec2(tMin.x, borderY), ImVec2(tMin.x + 4.0f, borderY + borderH), borderCol, 2.0f);
-        }
-
-        // Subtle ripple on click
-        static std::map<ImGuiID, float> clickRipples;
-        if (clicked) {
-            clickRipples[id] = 0.0f;
-        }
-        auto it = clickRipples.find(id);
-        if (it != clickRipples.end()) {
-            it->second += ImGui::GetIO().DeltaTime * 8.0f;
-            float ripple = it->second;
-            if (ripple < 1.0f) {
-                float maxR = tabW * 1.5f;
-                float r = ripple * maxR;
-                float alpha = (1.0f - ripple) * 0.3f;
-                ImU32 rippleCol = IM_COL32(
-                    (int)(UI::P.accent.x * 255 * alpha),
-                    (int)(UI::P.accent.y * 255 * alpha),
-                    (int)(UI::P.accent.z * 255 * alpha),
-                    255
-                );
-                dl->AddCircleFilled(center, r, rippleCol);
-            } else {
-                clickRipples.erase(it);
-            }
         }
 
         float s = 16.0f + at * 2.0f + ht * 1.0f;
@@ -708,6 +683,16 @@ namespace UI
                     ImVec2(center.x + cosf(a2) * ro, center.y + sinf(a2) * ro),
                     ImVec2(center.x + cosf(a1) * ro, center.y + sinf(a1) * ro), iconCol);
             }
+            break;
+        }
+        case 8: // terminal / code
+        {
+            const float rw = s * .55f, rh = s * .55f;
+            ImVec2 ta = ImVec2(center.x - rw, center.y - rh);
+            ImVec2 tb = ImVec2(center.x + rw, center.y + rh);
+            dl->AddRect(ta, tb, iconCol, 3.0f, 0, 1.5f);
+            dl->AddLine(ImVec2(center.x - rw * .18f, center.y), ImVec2(center.x + rw * .32f, center.y - rh * .42f), iconCol, 1.5f);
+            dl->AddLine(ImVec2(center.x - rw * .18f, center.y), ImVec2(center.x + rw * .32f, center.y + rh * .42f), iconCol, 1.5f);
             break;
         }
         }
@@ -1025,7 +1010,7 @@ inline bool CollapsibleSection(const char* label, float width, bool defaultOpen 
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
 
-    ImGui::BeginChild(label, ImVec2(width, 0), true, ImGuiWindowFlags_None);
+    ImGui::BeginChild(label, ImVec2(width, 0), true, ImGuiWindowFlags_NoScrollWithMouse);
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 p = ImGui::GetCursorScreenPos();
