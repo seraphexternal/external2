@@ -7,6 +7,7 @@
 #include "renderer.h"
 #include "ragesubtabs.h"
 #include "ui.h"
+#include "fonts_ex.h"
 #include "../features/chams.h"
 #include "../rbx/configs/configs.h"
 #include "../features/desync.h"
@@ -48,9 +49,9 @@ static editor::lua_editor g_executorEditor;
 // -----------------------------------------------------------------------------
 namespace MenuFonts
 {
-inline ImFont* Fonts[7] = {};
-inline const char* Names[7] = {
-"Verdana", "Segoe UI", "Tahoma", "Arial",
+inline ImFont* Fonts[8] = {};
+inline const char* Names[8] = {
+"Nunito", "Verdana", "Segoe UI", "Tahoma", "Arial",
 "Georgia", "Calibri", "Consolas"
 };
 inline int Count = 0;
@@ -1201,13 +1202,11 @@ config.PixelSnapH = true;
 
 ImFont* baseFont = io.Fonts->AddFontDefault(&config);
 
-// Pre-load a curated set of Windows system fonts so users can switch
-// the menu font at runtime via Options::Misc::MenuFont without us
-// having to rebuild the font atlas on the fly (which would stall the
-// overlay for ~50ms each time). Each entry must have its file on disk
-// in C:\Windows\Fonts\ (resolvable via LoadSystemFont below).
+// Menu font list: embedded Nunito Medium (Exterium default, 21px) is index
+// 0, then a curated set of Windows system fonts for the runtime "Menu Font"
+// combo (Options::Misc::MenuFont) so switching never rebuilds the atlas.
 struct MenuFontEntry { ImFont* font; const char* path; const char* name; };
-static MenuFontEntry menuFonts[7];
+static MenuFontEntry menuFonts[8];
 int menuFontCount = 0;
 
 auto LoadSystemFont = [&](const char* path, float size) -> ImFont*
@@ -1219,6 +1218,7 @@ return nullptr;
 return io.Fonts->AddFontFromFileTTF(path, size, &config, io.Fonts->GetGlyphRangesJapanese());
 };
 
+if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { io.Fonts->AddFontFromMemoryTTF((void*)NunitoMedium, (int)sizeof(NunitoMedium), 21.0f, &config, io.Fonts->GetGlyphRangesCyrillic()), "", "Nunito" };
 if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\verdana.ttf", 14.0f), "C:\\Windows\\Fonts\\verdana.ttf", "Verdana" };
 if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\segoeui.ttf", 14.0f), "C:\\Windows\\Fonts\\segoeui.ttf", "Segoe UI" };
 if (menuFontCount < (int)(sizeof(menuFonts)/sizeof(menuFonts[0]))) menuFonts[menuFontCount++] = { LoadSystemFont("C:\\Windows\\Fonts\\tahoma.ttf", 14.0f),  "C:\\Windows\\Fonts\\tahoma.ttf",  "Tahoma" };
@@ -1235,13 +1235,33 @@ MenuFonts::Fonts[i] = menuFonts[i].font;
 MenuFonts::Count = menuFontCount;
 
 // Apply current font selection; clamp to the loaded count so an out-of-
-// range value falls back gracefully to the first entry (Verdana).
+// range value falls back gracefully to the first entry (Nunito).
 if (Options::Misc::MenuFont >= menuFontCount || Options::Misc::MenuFont < 0)
 Options::Misc::MenuFont = 0;
 ImFont* font = (menuFontCount > 0 && menuFonts[Options::Misc::MenuFont].font)
 ? menuFonts[Options::Misc::MenuFont].font
 : baseFont;
 io.FontDefault = font;
+
+// Exterium UI faces (icons + secondary text) — loaded into the same atlas
+// so there is a single texture upload and no per-frame font switching stalls.
+{
+ImFontConfig uicfg;
+uicfg.MergeMode = false;
+uicfg.PixelSnapH = true;
+uicfg.OversampleH = 6;
+uicfg.OversampleV = 6;
+const ImWchar* cyr = io.Fonts->GetGlyphRangesCyrillic();
+UI::small_font = io.Fonts->AddFontFromMemoryTTF((void*)NunitoMedium, (int)sizeof(NunitoMedium), 17.0f, &uicfg, cyr);
+UI::medium_font = io.Fonts->AddFontFromMemoryTTF((void*)NunitoMedium, (int)sizeof(NunitoMedium), 18.0f, &uicfg, cyr);
+UI::small_icon_font = io.Fonts->AddFontFromMemoryTTF((void*)NunitoMedium, (int)sizeof(NunitoMedium), 15.0f, &uicfg, cyr);
+UI::logo_font = io.Fonts->AddFontFromMemoryTTF((void*)NunitoMedium, (int)sizeof(NunitoMedium), 25.0f, &uicfg, cyr);
+uicfg.OversampleH = 8;
+uicfg.OversampleV = 8;
+UI::icon_font = io.Fonts->AddFontFromMemoryTTF((void*)icomoon, (int)sizeof(icomoon), 18.0f, &uicfg, io.Fonts->GetGlyphRangesDefault());
+UI::icon_big_font = io.Fonts->AddFontFromMemoryTTF((void*)icomoon, (int)sizeof(icomoon), 23.0f, &uicfg, io.Fonts->GetGlyphRangesDefault());
+UI::arrow_icons = io.Fonts->AddFontFromMemoryTTF((void*)arrowicon, (int)sizeof(arrowicon), 18.0f, &uicfg, io.Fonts->GetGlyphRangesDefault());
+}
 
 config.MergeMode = true;
 ImGui_ImplWin32_Init(hwnd);
@@ -1449,6 +1469,7 @@ main_color = ImVec4(themeAccent[0], themeAccent[1], themeAccent[2], 1.0f);
 main_color2 = ImVec4(themeAccent2[0], themeAccent2[1], themeAccent2[2], 1.0f);
 // Gradient flag follows the preset (or the custom toggle).
 const bool useGradient = themeGradient;
+        (void)useGradient; // Exterium palette is fixed; gradient accent line removed
 
 if (menu_open || menuAlpha > 0.0f)
 {
@@ -1460,14 +1481,15 @@ if (menu_open || menuAlpha > 0.0f)
         // MenuScale acts as a uniform zoom factor for the whole UI.
         const float sc = std::clamp(Options::Misc::MenuScale, 0.6f, 2.5f);
         // keep every subtab pill a uniform width, aligned inside the left rail
+        // Exterium layout: 187px sidebar + 630px content, two 305px cards.
         UI::sc = sc;
-        UI::SidebarX = 0.0f;
-        UI::SidebarW = 178.0f * sc;
-        UI::ContentX = UI::SidebarW + 1.0f;
-        UI::ContentW = 960.0f - UI::ContentX;
-        UI::CardW = (UI::ContentW - 32.0f * sc) * 0.5f;
-        const float menuWidth = 960.0f;
-        const float menuHeight = 620.0f;
+        UI::SidebarX = 10.0f * sc;
+        UI::SidebarW = 187.0f * sc;
+        UI::ContentX = 197.0f * sc;
+        UI::ContentW = 630.0f * sc;
+        UI::CardW = 305.0f * sc;
+        const float menuWidth = 827.0f;
+        const float menuHeight = 604.0f;
 // Window frame stays a fixed size so dragging the scale slider doesn't
 // resize the window under the cursor (which caused a big/small feedback loop).
 // Zoom is applied to content via SetWindowFontScale + scaled positions.
@@ -1518,218 +1540,78 @@ auto draw = ImGui::GetWindowDrawList();
         ImVec4(themeBg[0], themeBg[1], themeBg[2], 1.0f),
         ImVec4(themePanel[0], themePanel[1], themePanel[2], 1.0f));
 
-        // ── Autopsy-style chrome ──────────────────────────────────────────
-        // Multi-layer drop shadow, deep dark blue fill, accent glow borders,
-        // sidebar panel with cyan divider.
+        // ── Exterium chrome ─────────────────────────────────────────────────
+        // Near-black window frame (13,14,16,200), 55px header with a main-
+        // color accent strip at its bottom, 187px sidebar panel, centered logo,
+        // grouped sidebar tabs, and a small muted status line in the sidebar
+        // footer. Layout target: 827x604.
         const float time = (float)ImGui::GetTime();
         const float glow = (sinf(time * 2.3f) + 1.0f) * 0.5f;
+        const ImVec4 mainA = UI::P.accent;
+        const ImU32 colWin = UI::U(UI::winbg_color);
+        const ImU32 colPanel = UI::U(UI::background_color);
+        const ImU32 colStroke = UI::U(UI::stroke_color);
+        const ImU32 colMain = ImGui::ColorConvertFloat4ToU32(mainA);
+        const ImU32 colMainStr = ImGui::ColorConvertFloat4ToU32(ImVec4(mainA.x, mainA.y, mainA.z, 1.0f));
 
-        // Drop shadow (5 layers, rounded) — drawn on window drawlist clipped to menu bounds
+        const float headerH = 55.0f * sc;
+        const float sbW = UI::SidebarW;
+
+        // Drop shadow (soft, subtle) — drawn on window drawlist
         for (int i = 4; i >= 0; i--)
         {
-            float spread = 18.0f + i * 11.0f;
-            int shAlpha = (int)((12.0f - i * 1.85f) * menuAlpha);
-            draw->AddRectFilled(
-                ImVec2(p.x - spread, p.y - spread * 0.55f),
-                ImVec2(p.x + s.x + spread, p.y + s.y + spread),
-                IM_COL32(7, 13, 21, shAlpha), (14.0f + spread) * sc);
-        }
-
-        // Accent glow behind window — single subtle layer
-        {
-            float spread = 30.0f * sc;
-            float alpha = 0.04f * menuAlpha;
+            float spread = 16.0f + i * 10.0f;
+            int shAlpha = (int)((11.0f - i * 1.8f) * menuAlpha);
             draw->AddRectFilled(
                 ImVec2(p.x - spread, p.y - spread * 0.5f),
-                ImVec2(p.x + s.x + spread, p.y + s.y + spread * 0.5f),
-                ImGui::ColorConvertFloat4ToU32(ImVec4(UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, alpha)),
-                (14.0f + spread * 0.5f) * sc);
+                ImVec2(p.x + s.x + spread, p.y + s.y + spread),
+                IM_COL32(4, 4, 6, shAlpha), (13.0f + spread) * sc);
         }
 
-        // Main window fill — dark glassmorphism (translucent; real backdrop blur
-        // isn't available in a D3D overlay, so the effect is approximated with a
-        // translucent fill + soft blue glow border).
+        // Window frame fill (rounded, near-black translucent)
         draw->AddRectFilled(ImVec2(p.x, p.y), ImVec2(p.x + s.x, p.y + s.y),
-            IM_COL32(12, 12, 18, 217), 16.0f * sc);
-        // Inner accent tint (subtle theme accent wash)
+            colWin, 16.0f * sc);
+
+        // Header fill (rounded top only)
+        draw->AddRectFilled(ImVec2(p.x, p.y), ImVec2(p.x + s.x, p.y + headerH),
+            IM_COL32(13, 14, 16, (int)(229.0f * menuAlpha)), 16.0f * sc, ImDrawFlags_RoundCornersTop);
+
+        // Accent strip at bottom of header (0,52)-(827,55)
         draw->AddRectFilled(
-            ImVec2(p.x + 1.0f * sc, p.y + 1.0f * sc),
-            ImVec2(p.x + s.x - 1.0f * sc, p.y + s.y - 1.0f * sc),
-            ImGui::ColorConvertFloat4ToU32(ImVec4(UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, 0.007f)),
-            (14.0f - 1.0f) * sc);
+            ImVec2(p.x, p.y + 52.0f * sc),
+            ImVec2(p.x + s.x, p.y + 55.0f * sc),
+            colMainStr);
 
-        // Outer border — soft blue (rgba(59,130,246,0.25))
-        draw->AddRect(ImVec2(p.x, p.y), ImVec2(p.x + s.x, p.y + s.y),
-            IM_COL32(59, 130, 246, 64), 16.0f * sc, 0, 1.0f * sc);
-        // Inner glow border (accent pulse) — blue outer glow
-        float gA = 0.18f + 0.12f * glow;
-        ImU32 glowCol = ImGui::ColorConvertFloat4ToU32(
-            ImVec4(UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, gA));
-        draw->AddRect(
-            ImVec2(p.x + 1.0f * sc, p.y + 1.0f * sc),
-            ImVec2(p.x + s.x - 1.0f * sc, p.y + s.y - 1.0f * sc),
-            glowCol, (16.0f - 1.0f) * sc, 0, 1.0f * sc);
-
-        // Sidebar panel (left column) — autopsy-style 178px, slightly transparent
-        const float sbW = UI::SidebarW;
-        const ImVec2 sideMin = ImVec2(p.x, p.y);
-        const ImVec2 sideMax = ImVec2(p.x + sbW, p.y + s.y);
-        // Dark fill with left-rounded corners
-        draw->AddRectFilled(sideMin, sideMax,
-            IM_COL32(4, 10, 17, 220), 14.0f * sc, ImDrawFlags_RoundCornersLeft);
-        // Top white highlight + bottom accent tint
-        draw->AddRectFilled(sideMin, sideMax,
-            IM_COL32(255, 255, 255, 10), 14.0f * sc, ImDrawFlags_RoundCornersLeft);
-        // Inner top glow (first 92px)
-        draw->AddRectFilled(
-            ImVec2(sideMin.x + 1.0f * sc, sideMin.y + 1.0f * sc),
-            ImVec2(sideMax.x - 1.0f * sc, sideMin.y + 92.0f * sc),
-            IM_COL32(255, 255, 255, 8), (14.0f - 1.0f) * sc, ImDrawFlags_RoundCornersTopLeft);
-        // White hairline border
-        draw->AddRect(sideMin, sideMax,
-            IM_COL32(255, 255, 255, 18), 14.0f * sc, ImDrawFlags_RoundCornersLeft, 1.0f * sc);
-        // Divider line (right edge of sidebar)
-        draw->AddLine(
-            ImVec2(p.x + sbW, p.y + 10.0f * sc),
-            ImVec2(p.x + sbW, p.y + s.y - 10.0f * sc),
-            ImGui::ColorConvertFloat4ToU32(ImVec4(UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, 0.16f)), 1.0f * sc);
-
-        // Logo area: animated accent bar + "SERAPH" + "BETA" badge
+        // Logo: "SERAPH" 25px Bold, centered in header (0,0)-(827,52)
         {
-            const float logoY = p.y + 25.0f * sc;
-            const float logoX = p.x + 22.0f * sc;
-            const float time = (float)ImGui::GetTime();
-            
-            // Animated accent bar - pulsing height and color shift
-            float barPulse = 0.5f + 0.5f * sinf(time * 2.5f);
-            float barH = 18.0f * sc + barPulse * 4.0f * sc;
-            float barY = logoY + (22.0f * sc - barH) * 0.5f;
-            
-            // Gradient accent bar
-            for (int i = 0; i < 3; i++) {
-                float t = (float)i / 2.0f;
-                ImU32 barCol = ImGui::ColorConvertFloat4ToU32(ImVec4(
-                    UI::P.accent.x + (UI::P.accent2.x - UI::P.accent.x) * t,
-                    UI::P.accent.y + (UI::P.accent2.y - UI::P.accent.y) * t,
-                    UI::P.accent.z + (UI::P.accent2.z - UI::P.accent.z) * t,
-                    0.8f + 0.2f * barPulse
-                ));
-                draw->AddRectFilled(
-                    ImVec2(logoX + i * 1.0f * sc, barY),
-                    ImVec2(logoX + (i + 1) * 1.0f * sc, barY + barH),
-                    barCol, 2.0f * sc);
-            }
-            
-            // Title text with subtle glow
             const std::string logoText = SX("SERAPH");
-            ImFont* logoFont = (MenuFonts::Count > 0 && Options::Misc::MenuFont >= 0
-                && Options::Misc::MenuFont < MenuFonts::Count && MenuFonts::Fonts[Options::Misc::MenuFont])
-                ? MenuFonts::Fonts[Options::Misc::MenuFont] : io.FontDefault;
-            
-            float textGlow = 0.15f + 0.1f * sinf(time * 3.0f);
-            ImU32 glowCol = IM_COL32(
-                (int)(UI::P.accent.x * 255 * textGlow),
-                (int)(UI::P.accent.y * 255 * textGlow),
-                (int)(UI::P.accent.z * 255 * textGlow),
-                255
-            );
-            
-            // Text glow (behind)
-            draw->AddText(logoFont, 21.0f * sc,
-                ImVec2(logoX + 8.0f * sc + 1, logoY + 1),
-                glowCol, logoText.c_str());
-            draw->AddText(logoFont, 21.0f * sc,
-                ImVec2(logoX + 8.0f * sc - 1, logoY - 1),
-                glowCol, logoText.c_str());
-            
-            // Main text
-            draw->AddText(logoFont, 21.0f * sc,
-                ImVec2(logoX + 8.0f * sc, logoY),
-                IM_COL32(255, 255, 255, 255), logoText.c_str());
-            
-            ImVec2 textSize = logoFont->CalcTextSizeA(21.0f * sc, FLT_MAX, 0, logoText.c_str());
-            
-            // Animated BETA badge - pulsing
-            float badgePulse = 0.7f + 0.3f * sinf(time * 4.0f);
-            ImU32 badgeCol = ImGui::ColorConvertFloat4ToU32(ImVec4(
-                UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, badgePulse
-            ));
-            
-            draw->AddRectFilled(
-                ImVec2(logoX + 8.0f * sc + textSize.x + 7.0f * sc, logoY + 2.0f * sc),
-                ImVec2(logoX + 8.0f * sc + textSize.x + 7.0f * sc + 36.0f * sc, logoY + 15.0f * sc),
-                badgeCol, 4.0f * sc);
-            
-            draw->AddText(io.FontDefault, 10.0f * sc,
-                ImVec2(logoX + 8.0f * sc + textSize.x + 11.0f * sc, logoY + 1.5f * sc),
-                IM_COL32(255, 255, 255, 255), "BETA");
-            
-            // Separator line below logo with gradient
-            for (int i = 0; i < 60; i++) {
-                float t = (float)i / 59.0f;
-                ImU32 sepCol = ImGui::ColorConvertFloat4ToU32(ImVec4(
-                    UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, 
-                    0.16f * (1.0f - t)
-                ));
-                draw->AddLine(
-                    ImVec2(logoX - 2.0f * sc + i * 3.0f * sc, logoY + 59.0f * sc),
-                    ImVec2(logoX - 2.0f * sc + (i + 1) * 3.0f * sc, logoY + 59.0f * sc),
-                    sepCol, 1.0f * sc);
-            }
+            ImFont* lf = UI::logo_font ? UI::logo_font : io.FontDefault;
+            const float logoSize = UI::logo_font ? lf->FontSize : 25.0f * sc;
+            ImVec2 tsz = lf->CalcTextSizeA(logoSize, FLT_MAX, 0.f, logoText.c_str());
+            ImVec2 c = ImVec2(p.x + (s.x - tsz.x) * 0.5f, p.y + (52.0f * sc - logoSize) * 0.5f);
+            ImU32 lc = ImGui::ColorConvertFloat4ToU32(ImVec4(0.9f, 0.9f, 0.94f, 1.0f));
+            // soft glow behind logo
+            draw->AddText(lf, logoSize, ImVec2(c.x + 1.2f, c.y + 1.2f),
+                ImGui::ColorConvertFloat4ToU32(ImVec4(mainA.x, mainA.y, mainA.z, 0.20f)), logoText.c_str());
+            draw->AddText(lf, logoSize, c, lc, logoText.c_str());
         }
 
-        // Header panel (right of sidebar, top strip)
-        const float contentX = p.x + sbW;
-        const float headerH = 62.0f * sc;
-        draw->AddRectFilled(
-            ImVec2(contentX, p.y),
-            ImVec2(p.x + s.x, p.y + headerH),
-            ImGui::ColorConvertFloat4ToU32(UI::P.surface), 14.0f * sc, ImDrawFlags_RoundCornersTopRight);
-        // Subtle accent tint on header
-        draw->AddRectFilled(
-            ImVec2(contentX, p.y),
-            ImVec2(p.x + s.x, p.y + headerH),
-            ImGui::ColorConvertFloat4ToU32(ImVec4(UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, 0.005f)),
-            14.0f * sc, ImDrawFlags_RoundCornersTopRight);
-        // Divider under header
+        // Sidebar panel (0,55)-(187,604), near-black, bottom-left rounded
+        const ImVec2 sideMin = ImVec2(p.x, p.y + headerH);
+        const ImVec2 sideMax = ImVec2(p.x + sbW, p.y + s.y);
+        draw->AddRectFilled(sideMin, sideMax, colPanel, 14.0f * sc,
+            ImDrawFlags_RoundCornersBottom + ImDrawFlags_RoundCornersLeft);
+        // right hairline of sidebar
         draw->AddLine(
-            ImVec2(contentX, p.y + headerH),
-            ImVec2(p.x + s.x, p.y + headerH),
-            ImGui::ColorConvertFloat4ToU32(UI::P.divider), 1.0f * sc);
+            ImVec2(sideMax.x, sideMin.y),
+            ImVec2(sideMax.x, sideMax.y),
+            colStroke, 1.0f * sc);
 
-        // Content area background (below header, right of sidebar)
+        // Content cards area background (right of sidebar, below header)
         draw->AddRectFilled(
-            ImVec2(contentX, p.y + headerH + 1.0f * sc),
+            ImVec2(p.x + sbW, p.y + headerH),
             ImVec2(p.x + s.x, p.y + s.y),
-             IM_COL32(5, 9, 15, 210), 14.0f * sc, ImDrawFlags_RoundCornersBottomRight);
-
-// Animated top accent line: gradient (main_color -> main_color2) when
-// enabled, otherwise a single fading accent.
-{
-const int fade_line_count = 60;
-const float center_point = s.x / 2.0f;
-for (int i = 0; i < fade_line_count; i++)
-{
-float alpha = 1.0f - (i * (1.0f / fade_line_count));
-ImVec2 start_right = ImVec2(p.x + s.x - i * (center_point / fade_line_count), p.y + 25 * sc);
-ImVec2 end_right = ImVec2(p.x + s.x - (i + 1) * (center_point / fade_line_count), p.y + 25 * sc);
-ImColor fade_color;
-if (useGradient)
-{
-float mix = static_cast<float>(i) / static_cast<float>(fade_line_count);
-fade_color = ImColor(
-main_color.x + (main_color2.x - main_color.x) * mix,
-main_color.y + (main_color2.y - main_color.y) * mix,
-main_color.z + (main_color2.z - main_color.z) * mix,
-alpha);
-}
-else
-{
-fade_color = ImColor(main_color.x, main_color.y, main_color.z, alpha * 0.9f);
-}
-draw->AddLine(start_right, end_right, fade_color);
-}
-}
+            colWin, 16.0f * sc, ImDrawFlags_RoundCornersBottomRight);
 
 // Use the chosen menu font. Fall back to ImGui's default font
 // if MenuFonts hasn't populated yet (only on the very first
@@ -1742,89 +1624,74 @@ ImFont* menuFont = (MenuFonts::Count > 0
 : io.FontDefault;
         ImGui::PushFont(menuFont);
 
-
-// â”€â”€ Footer status bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// â”€â”€ Animated Exterium ambient background (behind content only) â”€â”€â”€â”€
 {
-const float fH = 32 * sc;
-const float fy = p.y + s.y - fH;
-// dedicated status bar background + top hairline
-draw->AddRectFilled(ImVec2(p.x, fy), ImVec2(p.x + s.x, p.y + s.y),
-IM_COL32(
-static_cast<int>(themePanel[0] * 255 * 0.45f),
-static_cast<int>(themePanel[1] * 255 * 0.45f),
-static_cast<int>(themePanel[2] * 255 * 0.45f), 255), 0.0f, 0);
-draw->AddLine(ImVec2(p.x, fy), ImVec2(p.x + s.x, fy),
-ImGui::ColorConvertFloat4ToU32(UI::P.line), 1.0f * sc);
+    const float bgW = s.x - sbW;
+    const ImVec2 bgOrigin = ImVec2(p.x + sbW, p.y + headerH);
+    UI::ExteriumBG_Update(bgW, s.y - headerH);
+    UI::ExteriumBG_Render(draw, bgOrigin, ImVec2(bgW, s.y - headerH), menuAlpha);
+}
 
-        const float ty = fy + (fH - 11 * sc) / 2.0f;
-        const ImU32 dim = ImGui::ColorConvertFloat4ToU32(UI::P.textDim);
-        const ImU32 txt = ImGui::ColorConvertFloat4ToU32(UI::P.text);
-        const ImU32 sep = ImGui::ColorConvertFloat4ToU32(UI::P.line);
+// â”€â”€ Sidebar footer status line (small, muted) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+{
+    char fpsBuf[64];    sprintf_s(fpsBuf, "%d FPS", (int)ImGui::GetIO().Framerate);
+    bool connected = (Globals::Roblox::LocalPlayer.address != 0);
+    std::string uname = connected ? Globals::Roblox::LocalPlayer.Name() : "";
+    const char* nameStr = uname.empty() ? "Not connected" : uname.c_str();
+    const ImU32 muted = ImGui::ColorConvertFloat4ToU32(ImVec4(1, 1, 1, 0.30f));
+    ImFont* sf = UI::small_font ? UI::small_font : ImGui::GetFont();
+    const float fs = UI::small_font ? sf->FontSize : 17.0f * sc;
+    float yy = sideMax.y - 46.0f * sc;
+    ImVec2 ns = sf->CalcTextSizeA(fs, FLT_MAX, 0.f, nameStr);
+    draw->AddText(sf, fs, ImVec2(sideMin.x + 18.0f * sc, yy), muted, nameStr);
+    yy += fs + 3.0f * sc;
+    draw->AddText(sf, fs, ImVec2(sideMin.x + 18.0f * sc, yy), muted, fpsBuf);
+}
 
-        // ── Footer: Status dot · Username | FPS ──
-        char fpsBuf[64];    sprintf_s(fpsBuf, "FPS: %d", (int)ImGui::GetIO().Framerate);
-        bool connected = (Globals::Roblox::LocalPlayer.address != 0);
-        std::string uname;
-        if (connected)
-            uname = Globals::Roblox::LocalPlayer.Name();
-
-        float x = p.x + 16 * sc;
-        const float segGap = 6.0f * sc;
-        ImFont* safeFont = font ? font : ImGui::GetFont();
-
-        // Status dot
-        ImU32 dotCol = connected
-            ? ImGui::ColorConvertFloat4ToU32(ImVec4(0.28f, 0.82f, 0.50f, 1.0f))
-            : ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 0.31f, 0.41f, 1.0f));
-        draw->AddCircleFilled(ImVec2(x + 5.0f * sc, ty + 5.5f * sc), 3.5f * sc, dotCol);
-        x += 14.0f * sc;
-
-        // Username
-        const char* nameStr = uname.empty() ? "Not connected" : uname.c_str();
-        draw->AddText(ImVec2(x, ty), txt, nameStr);
-        x += safeFont->CalcTextSizeA(11.0f * sc, FLT_MAX, 0.f, nameStr).x + segGap;
-
-        // Separator
-        draw->AddText(ImVec2(x, ty), sep, "|");
-        x += safeFont->CalcTextSizeA(11.0f * sc, FLT_MAX, 0.f, "|").x + segGap;
-
-        // FPS (muted, low-contrast so it stays subtle)
-        const ImU32 fpsCol = ImGui::ColorConvertFloat4ToU32(ImVec4(0.40f, 0.45f, 0.53f, 0.80f));
-        draw->AddText(ImVec2(x, ty), fpsCol, fpsBuf);
-        }
-
-        // â”€â”€ Top tab bar: full width, 7 equal segments, even gaps â”€â”€â”€â”€â”€
+        // â”€â”€ Sidebar grouped nav tabs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         {
-            // Sidebar vertical nav tabs (autopsy-style)
-        {
-            const float tabStartY = p.y + 100.0f * sc;
-            const float tabX = p.x + UI::SidebarX;
-            const float tabW = UI::SidebarW;
+            // Sidebar vertical nav tabs
+            {
+            const float tabX = p.x + UI::SidebarX + 10.0f * sc;
 
-                struct TabDef { int icon; const char* label; };
-                static const TabDef tabs[] = {
-                    {1,"Aim"}, {2,"Visuals"}, {3,"Rage"}, {4,"Misc"},
-                    {5,"Movement"}, {6,"Configs"}, {7,"Game"}, {8,"Executor"}
-                };
+            // category label helper (white @ 0.30, small font)
+            auto catLabel = [&](const char* t, float y) {
+                ImFont* sf = UI::small_font ? UI::small_font : ImGui::GetFont();
+                const float fs = UI::small_font ? sf->FontSize : 15.0f * sc;
+                draw->AddText(sf, fs, ImVec2(tabX + 2.0f * sc, y),
+                    ImGui::ColorConvertFloat4ToU32(ImVec4(1, 1, 1, 0.30f)), t);
+            };
 
-                for (int i = 0; i < 8; i++)
+            // groups: AIMBOT, VISUALS, MISC, CONFIGS
+            const char* const catN[] = { "AIMBOT", "VISUALS", "MISC", "CONFIGS" };
+            // per-group (row indices -> tab id, glyph, label)
+            struct Row { int id; const char* glyph; const char* name; };
+            const Row g0[] = { {0,"9","Aim"}, {2,"0","Rage"} };
+            const Row g1[] = { {1,"8","Visuals"} };
+            const Row g2[] = { {3,"1","Misc"}, {4,"5","Movement"} };
+            const Row g3[] = { {5,"6","Configs"}, {6,"3","Game"}, {7,"2","Executor"} };
+            const Row* groups[4] = { g0, g1, g2, g3 };
+            const int groupN[4] = { 2, 1, 2, 3 };
+
+            float yy = sideMin.y + 15.0f * sc;
+            for (int g = 0; g < 4; g++)
+            {
+                catLabel(catN[g], yy);
+                yy += 8.0f * sc - 0.0f;
+                for (int k = 0; k < groupN[g]; k++)
                 {
-                    if (UI::SidebarTab(tabs[i].icon, tabs[i].label, tab == i,
-                        tabX, tabStartY + i * 48.0f * sc, tabW))
-                        tab = i;
+                    const Row& r = groups[g][k];
+                    if (UI::Tab(r.name, r.glyph, tab == r.id, tabX, yy)) tab = r.id;
+                    yy += 40.0f * sc + 5.0f * sc;
                 }
-
-                // Footer separator + user info
-                draw->AddLine(
-                    ImVec2(tabX + 20.0f * sc, p.y + s.y - 66.0f * sc),
-                    ImVec2(tabX + tabW - 20.0f * sc, p.y + s.y - 66.0f * sc),
-                    ImGui::ColorConvertFloat4ToU32(UI::P.divider), 1.0f * sc);
-
+                yy += 10.0f * sc;
+            }
         }
 
 // Reset cursor to content area top (after header)
-ImGui::SetCursorPos(ImVec2(UI::ContentX, 58.0f * sc));
+ImGui::SetCursorPos(ImVec2(UI::ContentX, 72.0f * sc));
         }
+
 
 if (tab != lastTab)
 {
@@ -1832,13 +1699,13 @@ tab2 = 0;
 lastTab = tab;
 }
 
-        // ── Content area layout constants (autopsy-style) ────────
-        const float ctX = UI::ContentX + 16.0f * sc;
+        // ── Content area layout constants (Exterium-style) ────────
+        const float ctX = UI::ContentX;
         const float ctPad = 16.0f * sc;
-        const float ctW = s.x - UI::ContentX - 32.0f * sc;
-        const float halfW = (ctW - 12.0f * sc) * 0.5f;
-        const float fullW = ctW;
-        const float hdrY = 58.0f * sc;
+        const float ctW = UI::ContentW;
+        const float halfW = UI::CardW;
+        const float fullW = s.x - UI::ContentX - 10.0f * sc;
+        const float hdrY = 72.0f * sc;
 
 if (tab == 0)
 {
@@ -2029,7 +1896,7 @@ if (tab == 0)
 
             // ── Aimbot: Targeting + Silent Aim (right column) ──
             ImGui::SetCursorPosY(panelY);
-            ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+            ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
             if (UI::CollapsibleSection("TARGETING", halfW))
             {
                 UI::labelsection("HITBOX");
@@ -2207,7 +2074,7 @@ if (tab == 0)
 
             // ── Triggerbot: Settings (right) ──
             ImGui::SetCursorPosY(panelY);
-            ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+            ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
             if (UI::CollapsibleSection("SETTINGS", halfW))
             {
                 UI::labelsection("BASIC");
@@ -2309,7 +2176,7 @@ if (tab == 0)
 
             // Preview panel
             ImGui::SetCursorPosY(panelY);
-            ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+            ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
             // (preview rendered in ESP overlay)
         }
         else if (tab2 == 3)
@@ -2365,7 +2232,7 @@ if (tab == 0)
 
             // Right column: FOV VISUALS
             ImGui::SetCursorPosY(panelY);
-            ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+            ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
             if (UI::CollapsibleSection("FOV VISUALS", halfW))
             {
                 UI::labelsection("DISPLAY");
@@ -2500,15 +2367,15 @@ else if (tab == 2)
             static float sa[6] = {};
             ImGui::SetCursorPosX(ctX);
             if (UI::ContentSubtab("Ragebot", tab2 == 0, sa[0])) tab2 = 0;
-            ImGui::SameLine(0, 4.0f * sc);
+            ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Orbit", tab2 == 1, sa[1])) tab2 = 1;
-            ImGui::SameLine(0, 4.0f * sc);
+            ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Anti-Aim", tab2 == 2, sa[2])) tab2 = 2;
-            ImGui::SameLine(0, 4.0f * sc);
+            ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Desync", tab2 == 3, sa[3])) tab2 = 3;
-            ImGui::SameLine(0, 4.0f * sc);
+            ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("VoidHide", tab2 == 4, sa[4])) tab2 = 4;
-            ImGui::SameLine(0, 4.0f * sc);
+            ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Bhop", tab2 == 5, sa[5])) tab2 = 5;
             ImGui::Dummy(ImVec2(0, 8 * sc));
         }
@@ -2528,13 +2395,13 @@ else if (tab == 1)
             static float sa[5] = {};
             ImGui::SetCursorPosX(ctX);
             if (UI::ContentSubtab("ESP", tab2 == 0, sa[0])) tab2 = 0;
-            ImGui::SameLine(0, 4.0f * sc);
+            ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Combat", tab2 == 1, sa[1])) tab2 = 1;
-            ImGui::SameLine(0, 4.0f * sc);
+            ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("World", tab2 == 2, sa[2])) tab2 = 2;
-            ImGui::SameLine(0, 4.0f * sc);
+            ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Colours", tab2 == 3, sa[3])) tab2 = 3;
-            ImGui::SameLine(0, 4.0f * sc);
+            ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Crosshair", tab2 == 4, sa[4])) tab2 = 4;
             ImGui::Dummy(ImVec2(0, 8 * sc));
         }
@@ -2667,7 +2534,7 @@ UI::labelsection("PLAYER INFO");
 UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
-ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
 if (UI::CollapsibleSection("ESP SETTINGS", halfW))
 {
 	UI::labelsection("BOX");
@@ -2770,7 +2637,7 @@ if (ImGui::IsItemHovered()) ImGui::SetTooltip("Draws tracer lines from your posi
 UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
-ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
 if (UI::CollapsibleSection("HIT SETTINGS", halfW))
 {
 UI::labelsection("DAMAGE");
@@ -2812,7 +2679,7 @@ if (UI::CollapsibleSection("WORLD", halfW))
             UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
-ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
 if (UI::CollapsibleSection("LIGHTING", halfW))
 {
 	UI::labelsection("TIME & BRIGHTNESS");
@@ -2895,7 +2762,7 @@ UI::ColorEdit3("Hidden", Options::ESP::HiddenColor, ImGuiColorEditFlags_NoInputs
 UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
-ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
 if (UI::CollapsibleSection("FOV & MENU", halfW))
 {
 UI::labelsection("THEME");
@@ -2985,11 +2852,11 @@ if (Options::Misc::MenuTheme == 0)
 
 UI::labelsection("ACCENT");
 UI::ColorEdit3("FOV Color", Options::Aimbot::FOVColor, ImGuiColorEditFlags_NoInputs);
-if (UI::ColorEdit3("Menu Accent", Options::Misc::MenuAccentColor, ImGuiColorEditFlags_NoInputs))
+UI::ColorEdit3("Menu Accent", Options::Misc::MenuAccentColor, ImGuiColorEditFlags_NoInputs);
 main_color = ImVec4(Options::Misc::MenuAccentColor[0], Options::Misc::MenuAccentColor[1], Options::Misc::MenuAccentColor[2], 1.0f);
 UI::Checkbox("Menu Gradient", &Options::Misc::MenuGradient);
 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Blend the two accent colors across the menu header.");
-if (UI::ColorEdit3("Menu Accent 2", Options::Misc::MenuAccentColor2, ImGuiColorEditFlags_NoInputs))
+UI::ColorEdit3("Menu Accent 2", Options::Misc::MenuAccentColor2, ImGuiColorEditFlags_NoInputs);
 main_color2 = ImVec4(Options::Misc::MenuAccentColor2[0], Options::Misc::MenuAccentColor2[1], Options::Misc::MenuAccentColor2[2], 1.0f);
 
 UI::labelsection("FOV FILL");
@@ -3130,7 +2997,7 @@ if (ImGui::IsItemHovered()) ImGui::SetTooltip("Falling snowflakes or rain streak
 UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
-ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
 if (UI::CollapsibleSection("SETTINGS", halfW))
 {
 if (Options::Misc::FOVEnabled)
@@ -3164,17 +3031,17 @@ else if (tab == 4)
             static float sa[7] = {};
             ImGui::SetCursorPosX(ctX);
             if (UI::ContentSubtab("Fly", tab2 == 0, sa[0])) tab2 = 0;
-            ImGui::SameLine(0, 4.0f * sc);
+            ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("WalkSpeed", tab2 == 1, sa[1])) tab2 = 1;
-            ImGui::SameLine(0, 4.0f * sc);
+            ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("TickRate", tab2 == 2, sa[2])) tab2 = 2;
-            ImGui::SameLine(0, 4.0f * sc);
+            ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Noclip", tab2 == 3, sa[3])) tab2 = 3;
-            ImGui::SameLine(0, 4.0f * sc);
+            ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Ramp Fling", tab2 == 4, sa[4])) tab2 = 4;
-            ImGui::SameLine(0, 4.0f * sc);
+            ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("360 Spin", tab2 == 5, sa[5])) tab2 = 5;
-            ImGui::SameLine(0, 4.0f * sc);
+            ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Extra", tab2 == 6, sa[6])) tab2 = 6;
             ImGui::Dummy(ImVec2(0, 8 * sc));
         }
@@ -3190,7 +3057,7 @@ UI::Checkbox("Enabled", &Options::Fly::Enabled);
 UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
-ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
         if (UI::CollapsibleSection("SETTINGS", halfW))
         {
             UI::labelsection("PARAMETERS");
@@ -3227,7 +3094,7 @@ UI::Checkbox("Enabled", &Options::WalkSpeed::Enabled);
 UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
-ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
 if (UI::CollapsibleSection("SETTINGS", halfW))
 {
 UI::labelsection("PARAMETERS");
@@ -3249,7 +3116,7 @@ UI::Checkbox("Enabled", &Options::TickRate::Enabled);
 UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
-ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
 if (UI::CollapsibleSection("SETTINGS", halfW))
 {
 UI::labelsection("RATE");
@@ -3281,7 +3148,7 @@ UI::Status(noclipActive ? "ACTIVE" : "INACTIVE", noclipActive);
 UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
-ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
 if (UI::CollapsibleSection("SETTINGS", halfW))
 {
 UI::labelsection("TOGGLE");
@@ -3330,7 +3197,7 @@ ImGui::PopStyleColor(2);
 UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
-ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
 if (UI::CollapsibleSection("SETTINGS", halfW))
 {
 UI::labelsection("PARAMETERS");
@@ -3354,7 +3221,7 @@ UI::Tooltip("Spins your camera in a full 360 circle while the key is held.");
 UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
-ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
 if (UI::CollapsibleSection("SETTINGS", halfW))
 {
 UI::labelsection("CONTROLS");
@@ -3378,7 +3245,7 @@ UI::Checkbox("Enabled", &Options::ClickTP::Enabled);
 UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
-ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
 if (UI::CollapsibleSection("HIP HEIGHT", halfW))
 {
 UI::labelsection("MAIN");
@@ -3389,7 +3256,7 @@ UI::SliderFloat("Height", &Options::HipHeight::Value, 0.0f, 20.0f, "%.1f");
 UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 8.0f * sc);
-ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
 if (UI::CollapsibleSection("FREE CAM", halfW))
 {
 UI::labelsection("MAIN");
@@ -3400,7 +3267,7 @@ UI::SliderFloat("Speed", &Options::FreeCam::Speed, 10.0f, 200.0f, "%.0f");
 UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 8.0f * sc);
-ImGui::SetCursorPosX(ctX + halfW + 6.0f * sc);
+ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
 if (UI::CollapsibleSection("STRETCH RES", halfW))
 {
 UI::labelsection("MAIN");

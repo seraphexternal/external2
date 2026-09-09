@@ -53,7 +53,7 @@ inline void RenderRagebotSubtab(ImVec4 main_color)
 	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
-	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + 6.0f * UI::sc);
+	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + UI::ColGap);
 	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("TARGET");
@@ -93,7 +93,7 @@ inline void RenderOrbitSubtab(ImVec4 main_color)
 	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
-	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + 6.0f * UI::sc);
+	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + UI::ColGap);
 	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("ORBIT");
@@ -158,7 +158,7 @@ inline void RenderAntiAimSubtab(ImVec4 main_color)
 	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
-	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + 6.0f * UI::sc);
+	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + UI::ColGap);
 	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("PARAMETERS");
@@ -204,7 +204,7 @@ inline void RenderDesyncSubtab(ImVec4 main_color)
 	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
-	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + 6.0f * UI::sc);
+	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + UI::ColGap);
 	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("METHOD");
@@ -252,7 +252,7 @@ inline void RenderVoidHideSubtab(ImVec4 main_color)
 	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
-	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + 6.0f * UI::sc);
+	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + UI::ColGap);
 	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("TOGGLE");
@@ -288,7 +288,7 @@ inline void RenderBhopSubtab(ImVec4 main_color)
 	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
-	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + 6.0f * UI::sc);
+	ImGui::SetCursorPosX(UI::ContentX + UI::CardW + UI::ColGap);
 	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("KEYBIND");
