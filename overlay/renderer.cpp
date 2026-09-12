@@ -586,13 +586,14 @@ ImGui::TextDisabled("No autoload config set");
 else
 ImGui::TextColored(UI::P.accent, "Autoload: %s", autoloadSettings.configName.c_str());
 
-if (ImGui::Button("Refresh List", ImVec2(-1, 24)))
+if (ImGui::Button("Refresh List", ImVec2(-1, 28)))
 configsList = ListConfigFiles();
 
 char _clsBuf[64]; snprintf(_clsBuf, sizeof(_clsBuf), "CONFIG LIST (%d)", (int)configsList.size()); UI::labelsection(_clsBuf);
 
 const float listHeight = ImGui::GetContentRegionAvail().y;
 ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 4));
+ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.38f));
 ImGui::BeginChild("##config_list_scroll", ImVec2(-1, listHeight > 24.0f ? listHeight : 24.0f), false);
 for (int i = 0; i < (int)configsList.size(); i++)
 {
@@ -608,7 +609,7 @@ ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.06f, 0.06f, 0.06f, 1.0f))
 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, 0.30f));
 ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, 0.55f));
 
-if (ImGui::Button(rowLabel.c_str(), ImVec2(-1, 22)))
+if (ImGui::Button(rowLabel.c_str(), ImVec2(-1, 28)))
 {
 selectedConfigIndex = i;
 strncpy_s(configNameBuffer, configsList[i].c_str(), _TRUNCATE);
@@ -633,7 +634,7 @@ ImGui::PopStyleColor(3);
 ImGui::PopID();
 }
 ImGui::EndChild();
-ImGui::PopStyleVar();
+ImGui::PopStyleVar(2);
 }
 UI::CollapsibleEnd();
 
@@ -641,8 +642,8 @@ ImGui::SetCursorPosY(panelY);
     ImGui::SetCursorPosX(16.0f * sc + UI::CardW + 6.0f * sc);
     if (UI::CollapsibleSection("ACTIONS", UI::CardW))
     {
-        // Nudge button labels slightly above the vertical center.
-        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.42f));
+        // Keep config action labels clear of the lower edge of the button frame.
+        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.38f));
         if (!configStatusMessage.empty())
 {
 const ImVec4 statusColor = configStatusSuccess
@@ -658,7 +659,7 @@ UI::labelsection("CONFIG NAME");
 ImGui::InputText("##config_name_edit", configNameBuffer, IM_ARRAYSIZE(configNameBuffer));
 ImGui::Dummy(ImVec2(0, 6));
 
-if (ImGui::Button("Load", ImVec2(-1, 24)))
+if (ImGui::Button("Load", ImVec2(-1, 28)))
 {
 const std::string name = NormalizeConfigFilename(configNameBuffer);
 if (name.empty())
@@ -685,7 +686,7 @@ configStatusMessage = Config::lastError.empty() ? ("Failed to load " + name) : C
 
 ImGui::Dummy(ImVec2(0, 3));
 
-if (ImGui::Button("Save", ImVec2(-1, 24)))
+if (ImGui::Button("Save", ImVec2(-1, 28)))
 {
 const std::string name = NormalizeConfigFilename(configNameBuffer);
 if (name.empty())
@@ -721,7 +722,7 @@ configStatusMessage = Config::lastError.empty() ? ("Failed to save " + name) : C
 
 ImGui::Dummy(ImVec2(0, 3));
 
-if (ImGui::Button("Set Autoload", ImVec2(-1, 24)))
+if (ImGui::Button("Set Autoload", ImVec2(-1, 28)))
 {
 const std::string name = NormalizeConfigFilename(configNameBuffer);
 if (name.empty())
@@ -754,7 +755,7 @@ configStatusMessage = Config::lastError.empty() ? "Failed to save autoload" : Co
 
 ImGui::Dummy(ImVec2(0, 3));
 
-if (ImGui::Button("Delete", ImVec2(-1, 24)))
+if (ImGui::Button("Delete", ImVec2(-1, 28)))
 {
 const std::string name = NormalizeConfigFilename(configNameBuffer);
 if (name.empty())
@@ -796,7 +797,7 @@ configStatusMessage = "Config not found";
 
 UI::labelsection("FILE ACTIONS");
 
-if (ImGui::Button("Import Config...", ImVec2(-1, 24)))
+if (ImGui::Button("Import Config...", ImVec2(-1, 28)))
 {
 std::string pickedPath;
 if (OpenWindowsFileDialog(true, pickedPath, "*.json\0*.json\0All Files\0*.*\0", SX("Import Seraph config").c_str()))
@@ -825,7 +826,7 @@ const std::string exportSource = configsList.empty()
 ? NormalizeConfigFilename(configsList[selectedConfigIndex])
 : NormalizeConfigFilename(configNameBuffer));
 
-if (ImGui::Button("Export Config...", ImVec2(-1, 24)))
+if (ImGui::Button("Export Config...", ImVec2(-1, 28)))
 {
 if (exportSource.empty())
 {
@@ -1372,6 +1373,9 @@ ImGui_ImplWin32_Init(hwnd);
     int tab = 0;
     int tab2 = 0;
     int lastTab = -1;
+    static float sScrollTarget = 0.0f;
+    static float sScrollCurrent = 0.0f;
+    static bool  sScrollActive = false;
     static ImVec2 menuPos = ImVec2(-1, -1); // persisted menu window position; -1 = center on first show
     static bool menuDragging = false;
     static ImVec2 menuDragOffset = ImVec2(0, 0);
@@ -1613,6 +1617,7 @@ auto draw = ImGui::GetWindowDrawList();
 
 // â”€â”€ Title-bar drag (top 25*sc px is the grab region) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         {
+            static ImVec2 menuDragTarget = ImVec2(-1, -1);
             const ImVec2 titleMin = ImVec2(p.x, p.y);
             const ImVec2 titleMax = ImVec2(p.x + s.x, p.y + 25.0f * sc);
             if (ImGui::IsMouseHoveringRect(titleMin, titleMax) && !ImGui::IsAnyItemHovered())
@@ -1621,14 +1626,27 @@ auto draw = ImGui::GetWindowDrawList();
                 {
                     menuDragging = true;
                     menuDragOffset = ImVec2(io.MousePos.x - menuPos.x, io.MousePos.y - menuPos.y);
+                    menuDragTarget = menuPos;
                 }
             }
             if (menuDragging)
             {
                 if (ImGui::IsMouseDown(0))
-                    menuPos = ImVec2(io.MousePos.x - menuDragOffset.x, io.MousePos.y - menuDragOffset.y);
+                    menuDragTarget = ImVec2(io.MousePos.x - menuDragOffset.x, io.MousePos.y - menuDragOffset.y);
                 else
                     menuDragging = false;
+            }
+            // Smooth easing toward target position
+            if (menuDragTarget.x >= 0)
+            {
+                const float rate = 1.0f - expf(-io.DeltaTime * 30.0f);
+                menuPos.x += (menuDragTarget.x - menuPos.x) * rate;
+                menuPos.y += (menuDragTarget.y - menuPos.y) * rate;
+                if (fabsf(menuPos.x - menuDragTarget.x) < 0.5f && fabsf(menuPos.y - menuDragTarget.y) < 0.5f)
+                {
+                    menuPos = menuDragTarget;
+                    menuDragTarget = ImVec2(-1, -1);
+                }
             }
         }
 
@@ -1731,8 +1749,6 @@ ImFont* menuFont = (MenuFonts::Count > 0
     const ImVec2 bgOrigin = ImVec2(p.x + sbW, p.y + headerH);
     UI::ExteriumBG_Update(bgW, s.y - headerH);
     UI::ExteriumBG_Render(draw, bgOrigin, ImVec2(bgW, s.y - headerH), menuAlpha);
-    if (Options::Misc::ExteriumSword)
-        UI::ExteriumSword_Render(draw, bgOrigin, ImVec2(bgW, s.y - headerH), menuAlpha);
 }
 
 // ═══ Sidebar footer status line (small, muted) ══════════════════════
@@ -1829,22 +1845,55 @@ if (tab != lastTab)
 {
 tab2 = 0;
 lastTab = tab;
+sScrollTarget = 0.0f;
+sScrollCurrent = 0.0f;
+sScrollActive = false;
 }
 
         // ── Content area layout constants (Exterium-style) ────────
         const float ctX = 16.0f * sc; // child-relative (padding from child left edge)
-        const float ctPad = 16.0f * sc;
-        const float ctW = UI::ContentW;
         const float fullW = s.x - UI::ContentX - 10.0f * sc;
-        const float halfW = (fullW - UI::ColGap) * 0.5f; // left card
-        const float cardW = halfW; // right card mirrors left (symmetrical layout)
-        const float rightCardW = cardW; // use full width for right column
+        const float ctW = fullW - ctX; // full-width cards fit inside the child padding
+        const float halfW = (fullW - ctX - UI::ColGap) * 0.5f;
+        const float cardW = halfW;
 
         // Content area scrollable child (allows mouse wheel scrolling for all tabs)
         // Transparent ChildBg so the animated Exterium background stays visible
         // in the gaps between the buttons/cards.
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
-        ImGui::BeginChild("##content_area", ImVec2(fullW, s.y - 72.0f * sc - 8.0f * sc), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, ImVec4(1, 1, 1, 0.14f));
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, ImVec4(1, 1, 1, 0.24f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 6.0f * sc);
+        ImGui::BeginChild("##content_area", ImVec2(fullW, s.y - 72.0f * sc - 8.0f * sc), false,
+            ImGuiWindowFlags_NoScrollWithMouse);
+
+        // Smooth, subtle content scrolling: wheel input eases toward a target
+        // instead of jumping instantly, so the cards glide rather than snap.
+        {
+            ImGuiWindow* cwin = ImGui::GetCurrentWindow();
+            const float maxY = cwin->ScrollMax.y;
+            if (GImGui->HoveredWindow == cwin && io.MouseWheel != 0.0f && maxY > 0.0f)
+            {
+                sScrollTarget = UI::ClampF(sScrollCurrent - io.MouseWheel * (52.0f * sc), 0.0f, maxY);
+                sScrollActive = true;
+            }
+            if (sScrollActive)
+            {
+                const float rate = 1.0f - expf(-io.DeltaTime * 16.0f);
+                sScrollCurrent += (sScrollTarget - sScrollCurrent) * rate;
+                if (fabsf(sScrollCurrent - sScrollTarget) < 0.4f)
+                {
+                    sScrollCurrent = sScrollTarget;
+                    sScrollActive = false;
+                }
+                ImGui::SetScrollY(sScrollCurrent);
+            }
+            else
+            {
+                // Follow scrollbar drags / tab switches directly.
+                sScrollCurrent = cwin->Scroll.y;
+            }
+        }
 
 if (tab == 0)
 {
@@ -3117,29 +3166,6 @@ UI::Checkbox("Crosshair",      &Options::Crosshair::Enabled);
 
 	UI::Checkbox("Stream Proof", &Options::Misc::StreamProof);
 	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Attempts to hide overlay from OBS/Discord stream capture (DWM exclusion).");
-
-	UI::labelsection("MENU FONT");
-UI::Combo("Font", &Options::Misc::MenuFont, MenuFonts::Names, IM_ARRAYSIZE(MenuFonts::Names));
-if (ImGui::IsItemHovered()) ImGui::SetTooltip("Live-switches the menu typography. Applies immediately.");
-UI::SliderFloat("Menu Scale", &Options::Misc::MenuScale, 0.6f, 2.5f, "%.2fx");
-if (ImGui::IsItemHovered()) ImGui::SetTooltip("Zooms the entire menu (text, panels and graphics). Drag the title bar to move it.");
-
-UI::labelsection("MENU EFFECT");
-UI::Checkbox("Enable##weather", &MenuWeather::Enabled);
-
-static const char* weatherKinds[] = { "Snow", "Rain" };
-UI::Combo("Type", &MenuWeather::Type, weatherKinds, 2);
-ImGui::SliderInt ("Intensity",       &MenuWeather::Intensity,     64,   2000, "%d particles");
-UI::SliderFloat("Fall Speed",     &MenuWeather::Speed,         0.2f, 6.0f,  "%.2fx");
-UI::SliderFloat("Wind",           &MenuWeather::Wind,         -3.f,  3.f,   "%.2fx");
-UI::SliderFloat("Snow Size",      &MenuWeather::SnowSize,      0.5f, 4.0f,  "%.1f px");
-UI::SliderFloat("Rain Thickness", &MenuWeather::RainThickness, 0.5f, 3.0f,  "%.1f px");
-ImGui::ColorEdit3 ("Particle Color", MenuWeather::Color, ImGuiColorEditFlags_NoInputs);
-if (ImGui::IsItemHovered()) ImGui::SetTooltip("Falling snowflakes or rain streaks across the menu background. Settings are saved with your config.");
-
-UI::labelsection("EXTERIUM BACKDROP");
-UI::Checkbox("Sword Emblem", &Options::Misc::ExteriumSword);
-if (ImGui::IsItemHovered()) ImGui::SetTooltip("Draws the theme-tinted Exterium sword behind the menu panels.");
 }
 UI::CollapsibleEnd();
 
@@ -3156,6 +3182,25 @@ UI::SliderFloat("Position Y", &Options::Misc::KeybindListY, 0.0f, 1080.0f, "%.0f
 
 UI::labelsection("MENU KEY");
 UI::Bind("##menu_key", &Options::Misc::MenuKey);
+
+UI::labelsection("MENU FONT");
+UI::Combo("Font", &Options::Misc::MenuFont, MenuFonts::Names, IM_ARRAYSIZE(MenuFonts::Names));
+if (ImGui::IsItemHovered()) ImGui::SetTooltip("Live-switches the menu typography. Applies immediately.");
+UI::SliderFloat("Menu Scale", &Options::Misc::MenuScale, 0.6f, 2.5f, "%.2fx");
+if (ImGui::IsItemHovered()) ImGui::SetTooltip("Zooms the entire menu (text, panels and graphics). Drag the title bar to move it.");
+
+UI::labelsection("MENU EFFECT");
+UI::Checkbox("Enable##weather", &MenuWeather::Enabled);
+
+static const char* weatherKinds[] = { "Snow", "Rain" };
+UI::Combo("Type", &MenuWeather::Type, weatherKinds, 2);
+UI::SliderInt("Intensity", &MenuWeather::Intensity, 64, 2000, "%d particles");
+UI::SliderFloat("Fall Speed",     &MenuWeather::Speed,         0.2f, 6.0f,  "%.2fx");
+UI::SliderFloat("Wind",           &MenuWeather::Wind,         -3.f,  3.f,   "%.2fx");
+UI::SliderFloat("Snow Size",      &MenuWeather::SnowSize,      0.5f, 4.0f,  "%.1f px");
+UI::SliderFloat("Rain Thickness", &MenuWeather::RainThickness, 0.5f, 3.0f,  "%.1f px");
+ImGui::ColorEdit3 ("Particle Color", MenuWeather::Color, ImGuiColorEditFlags_NoInputs);
+if (ImGui::IsItemHovered()) ImGui::SetTooltip("Falling snowflakes or rain streaks across the menu background. Settings are saved with your config.");
 
 ImGui::Dummy(ImVec2(0, 15));
 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 0.6f));
@@ -3578,7 +3623,8 @@ else if (tab == 7)
     ImGui::EndChild();
 }
     ImGui::EndChild(); // ##content_area
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar();
 
 ImGui::PopFont();
 }
@@ -3593,7 +3639,8 @@ if (tab == 1 && tab2 == 0 && Options::ESP::Enabled && menuAlpha > 0.0f && menuPo
     ImVec2 display = ImGui::GetIO().DisplaySize;
     float previewW = 320.0f * UI::sc;
     float previewH = 470.0f * UI::sc;
-    float idealX = menuPos.x + 960.0f + 12.0f;
+    float menuWidth = 997.0f * UI::sc;
+    float idealX = menuPos.x + menuWidth + 12.0f;
     float maxX = display.x - previewW - 8.0f;
     float px = (idealX > maxX) ? maxX : idealX;
     if (px < 8.0f) px = 8.0f;

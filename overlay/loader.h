@@ -119,6 +119,12 @@ namespace Loader
     static float g_InjectGlow = 0.0f;
     static float g_ScrollY = 0.0f;
     static float g_ConfigListWidth = 0.0f;
+    
+    // Loader window drag state
+    static ImVec2 g_WindowPos = ImVec2(-1, -1);
+    static ImVec2 g_WindowTarget = ImVec2(-1, -1);
+    static bool g_Dragging = false;
+    static ImVec2 g_DragOffset = ImVec2(0, 0);
 
     static float s_MessageFade = 1.0f;
     static int   s_CurrentMessage = 0;
@@ -698,7 +704,15 @@ namespace Loader
         g_EntranceAlpha = LerpF(g_EntranceAlpha, 1.0f, dt * 4.0f);
         g_EntranceSlide = LerpF(g_EntranceSlide, 0.0f, dt * 6.0f);
 
-        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        // Initialize window position to center of screen on first frame
+        if (g_WindowPos.x < 0.0f)
+        {
+            ImVec2 display = ImGui::GetIO().DisplaySize;
+            g_WindowPos = ImVec2((display.x - 480.0f) * 0.5f, (display.y - 600.0f) * 0.5f);
+            g_WindowTarget = g_WindowPos;
+        }
+
+        ImGui::SetNextWindowPos(g_WindowPos);
         ImGui::SetNextWindowSize(ImVec2(480, 600));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
@@ -724,6 +738,50 @@ namespace Loader
         float pulse = Pulse();
         float slideY = g_EntranceSlide;
 
+        // Header drag (top 56px)
+        ImGuiIO& io = ImGui::GetIO();
+        float headerH = 56.0f;
+        ImVec2 hdrMin(wp.x, wp.y);
+        ImVec2 hdrMax(wp.x + ws.x, wp.y + headerH);
+        if (ImGui::IsMouseHoveringRect(hdrMin, hdrMax) && !ImGui::IsAnyItemHovered())
+        {
+            if (ImGui::IsMouseClicked(0))
+            {
+                g_Dragging = true;
+                g_DragOffset = ImVec2(io.MousePos.x - g_WindowPos.x, io.MousePos.y - g_WindowPos.y);
+            }
+        }
+        if (g_Dragging)
+        {
+            if (ImGui::IsMouseDown(0))
+                g_WindowTarget = ImVec2(io.MousePos.x - g_DragOffset.x, io.MousePos.y - g_DragOffset.y);
+            else
+            {
+                g_Dragging = false;
+                g_WindowTarget = g_WindowPos;
+            }
+        }
+        // Smooth easing toward target position
+        if (g_WindowTarget.x >= 0.0f)
+        {
+            const float rate = 1.0f - expf(-dt * 40.0f);
+            g_WindowPos.x += (g_WindowTarget.x - g_WindowPos.x) * rate;
+            g_WindowPos.y += (g_WindowTarget.y - g_WindowPos.y) * rate;
+            if (fabsf(g_WindowPos.x - g_WindowTarget.x) < 0.5f && fabsf(g_WindowPos.y - g_WindowTarget.y) < 0.5f)
+            {
+                g_WindowPos = g_WindowTarget;
+                g_WindowTarget = ImVec2(-1, -1);
+            }
+        }
+        // Clamp to screen bounds
+        {
+            ImVec2 display = io.DisplaySize;
+            g_WindowPos.x = ClampF(g_WindowPos.x, 0.0f, display.x - ws.x);
+            g_WindowPos.y = ClampF(g_WindowPos.y, 0.0f, display.y - ws.y);
+        }
+        // Re-fetch window pos after potential clamping (next frame will use clamped pos)
+        wp = ImGui::GetWindowPos();
+
         // ── Background — theme-derived gradient ─────────────
         {
             int steps = 60;
@@ -743,9 +801,6 @@ namespace Loader
         }
 
         // ── Header — subtle gradient, slightly brighter top ────────────
-        float headerH = 56.0f;
-        ImVec2 hdrMin(wp.x, wp.y);
-        ImVec2 hdrMax(wp.x + ws.x, wp.y + headerH);
         {
             int hSteps = 20;
             for (int i = 0; i < hSteps; i++) {

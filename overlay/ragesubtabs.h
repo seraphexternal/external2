@@ -12,8 +12,8 @@
 inline void RenderRagebotSubtab(ImVec4 main_color)
 {
 	const float panelY = ImGui::GetCursorPosY();
-	ImGui::SetCursorPosX(16.0f * ImGui::GetIO().FontGlobalScale); // ctX equivalent
-	if (UI::CollapsibleSection("RAGEBOT", 340.0f * ImGui::GetIO().FontGlobalScale))
+	ImGui::SetCursorPosX(16.0f * UI::sc); // ctX equivalent
+	if (UI::CollapsibleSection("RAGEBOT", UI::CardW))
 	{
 		UI::labelsection("MAIN");
 		UI::Checkbox("Enabled", &Options::Rage::Enabled);
@@ -53,8 +53,8 @@ inline void RenderRagebotSubtab(ImVec4 main_color)
 	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
-	ImGui::SetCursorPosX(16.0f * ImGui::GetIO().FontGlobalScale + 340.0f * ImGui::GetIO().FontGlobalScale + 10.0f * ImGui::GetIO().FontGlobalScale);
-	if (UI::CollapsibleSection("SETTINGS", 340.0f * ImGui::GetIO().FontGlobalScale))
+	ImGui::SetCursorPosX(16.0f * UI::sc + UI::CardW + 10.0f * UI::sc);
+	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("TARGET");
 		static const char* targetModes[]{ "Aimed At", "By Username" };
@@ -72,7 +72,7 @@ inline void RenderRagebotSubtab(ImVec4 main_color)
 inline void RenderOrbitSubtab(ImVec4 main_color)
 {
 	const float panelY = ImGui::GetCursorPosY();
-	ImGui::SetCursorPosX(UI::ContentX);
+	ImGui::SetCursorPosX(16.0f * UI::sc);
 	if (UI::CollapsibleSection("ORBIT", UI::CardW))
 	{
 		UI::labelsection("MAIN");
@@ -93,8 +93,8 @@ inline void RenderOrbitSubtab(ImVec4 main_color)
 	UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
-	ImGui::SetCursorPosX(16.0f * ImGui::GetIO().FontGlobalScale + 340.0f * ImGui::GetIO().FontGlobalScale + 10.0f * ImGui::GetIO().FontGlobalScale);
-	if (UI::CollapsibleSection("SETTINGS", 340.0f * ImGui::GetIO().FontGlobalScale))
+	ImGui::SetCursorPosX(16.0f * UI::sc + UI::CardW + 10.0f * UI::sc);
+	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("ORBIT");
 		UI::SliderFloat("Orbit Speed", &Options::Orbit::Speed, 0.1f, 10.f, "%.1f");
@@ -137,8 +137,8 @@ ImGui::SetCursorPosY(panelY);
 inline void RenderAntiAimSubtab(ImVec4 main_color)
 {
 	const float panelY = ImGui::GetCursorPosY();
-	ImGui::SetCursorPosX(16.0f * ImGui::GetIO().FontGlobalScale);
-	if (UI::CollapsibleSection("ANTI-AIM", 340.0f * ImGui::GetIO().FontGlobalScale))
+	ImGui::SetCursorPosX(16.0f * UI::sc);
+	if (UI::CollapsibleSection("ANTI-AIM", UI::CardW))
 	{
 		UI::labelsection("MAIN");
 		UI::Checkbox("Enabled", &Options::AntiAim::Enabled);
@@ -158,8 +158,8 @@ inline void RenderAntiAimSubtab(ImVec4 main_color)
 	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
-	ImGui::SetCursorPosX(16.0f * ImGui::GetIO().FontGlobalScale + 340.0f * ImGui::GetIO().FontGlobalScale + 10.0f * ImGui::GetIO().FontGlobalScale);
-	if (UI::CollapsibleSection("SETTINGS", 340.0f * ImGui::GetIO().FontGlobalScale))
+	ImGui::SetCursorPosX(16.0f * UI::sc + UI::CardW + 10.0f * UI::sc);
+	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("PARAMETERS");
 		UI::SliderFloat("Speed", &Options::AntiAim::Speed, 1.0f, 50.0f, "%.1f");
@@ -171,8 +171,8 @@ inline void RenderAntiAimSubtab(ImVec4 main_color)
 inline void RenderDesyncSubtab(ImVec4 main_color)
 {
 	const float panelY = ImGui::GetCursorPosY();
-	ImGui::SetCursorPosX(16.0f * ImGui::GetIO().FontGlobalScale);
-	if (UI::CollapsibleSection("DESYNC", 340.0f * ImGui::GetIO().FontGlobalScale))
+	ImGui::SetCursorPosX(16.0f * UI::sc);
+	if (UI::CollapsibleSection("DESYNC", UI::CardW))
 	{
 		UI::labelsection("MAIN");
 		UI::Checkbox("Enabled", &Options::Desync::Enabled);
@@ -204,8 +204,8 @@ inline void RenderDesyncSubtab(ImVec4 main_color)
 	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
-	ImGui::SetCursorPosX(16.0f * ImGui::GetIO().FontGlobalScale + 340.0f * ImGui::GetIO().FontGlobalScale + 10.0f * ImGui::GetIO().FontGlobalScale);
-	if (UI::CollapsibleSection("SETTINGS", 340.0f * ImGui::GetIO().FontGlobalScale))
+	ImGui::SetCursorPosX(16.0f * UI::sc + UI::CardW + 10.0f * UI::sc);
+	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("METHOD");
 		static const char* methodNames[]{ "Freeze Server", "Velocity Boost" };
@@ -237,8 +237,8 @@ inline void RenderDesyncSubtab(ImVec4 main_color)
 inline void RenderVoidHideSubtab(ImVec4 main_color)
 {
 	const float panelY = ImGui::GetCursorPosY();
-	ImGui::SetCursorPosX(16.0f * ImGui::GetIO().FontGlobalScale);
-	if (UI::CollapsibleSection("VOIDHIDE", 340.0f * ImGui::GetIO().FontGlobalScale))
+	ImGui::SetCursorPosX(16.0f * UI::sc);
+	if (UI::CollapsibleSection("VOIDHIDE", UI::CardW))
 	{
 		UI::labelsection("MAIN");
 		UI::Checkbox("Enabled", &Options::VoidHide::Enabled);
@@ -252,8 +252,8 @@ inline void RenderVoidHideSubtab(ImVec4 main_color)
 	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
-	ImGui::SetCursorPosX(16.0f * ImGui::GetIO().FontGlobalScale + 340.0f * ImGui::GetIO().FontGlobalScale + 10.0f * ImGui::GetIO().FontGlobalScale);
-	if (UI::CollapsibleSection("SETTINGS", 340.0f * ImGui::GetIO().FontGlobalScale))
+	ImGui::SetCursorPosX(16.0f * UI::sc + UI::CardW + 10.0f * UI::sc);
+	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("TOGGLE");
 		static const char* voidHideModes[]{ "Hold", "Toggle", "Always On" };
@@ -278,8 +278,8 @@ inline void RenderVoidHideSubtab(ImVec4 main_color)
 inline void RenderBhopSubtab(ImVec4 main_color)
 {
 	const float panelY = ImGui::GetCursorPosY();
-	ImGui::SetCursorPosX(16.0f * ImGui::GetIO().FontGlobalScale);
-	if (UI::CollapsibleSection("BHOP", 340.0f * ImGui::GetIO().FontGlobalScale))
+	ImGui::SetCursorPosX(16.0f * UI::sc);
+	if (UI::CollapsibleSection("BHOP", UI::CardW))
 	{
 		UI::labelsection("MAIN");
 		UI::Checkbox("Enabled", &Options::Bhop::Enabled);
@@ -288,8 +288,8 @@ inline void RenderBhopSubtab(ImVec4 main_color)
 	UI::CollapsibleEnd();
 
 	ImGui::SetCursorPosY(panelY);
-	ImGui::SetCursorPosX(16.0f * ImGui::GetIO().FontGlobalScale + 340.0f * ImGui::GetIO().FontGlobalScale + 10.0f * ImGui::GetIO().FontGlobalScale);
-	if (UI::CollapsibleSection("SETTINGS", 340.0f * ImGui::GetIO().FontGlobalScale))
+	ImGui::SetCursorPosX(16.0f * UI::sc + UI::CardW + 10.0f * UI::sc);
+	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
 	{
 		UI::labelsection("KEYBIND");
 		UI::Bind("##bhop_key", &Options::Bhop::BhopKey);

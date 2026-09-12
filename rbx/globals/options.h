@@ -36,8 +36,6 @@ namespace Options
 		inline bool PlayerListEnabled = false;
 		inline float MenuScale = 0.9f;
 		inline bool ThirdPerson = false;
-		// Theme-tinted Exterium sword emblem drawn in the menu backdrop.
-		inline bool ExteriumSword = true;
 
 		// ── Stealth ──
 		inline bool HideFromTabs = true;     // WS_EX_TOOLWINDOW + remove from taskbar

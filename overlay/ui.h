@@ -236,6 +236,16 @@ namespace UI
         ImGui::GetWindowDrawList()->AddText(f, fs, pos, color, text);
     }
 
+    // Display-only label: strips the "##ID" suffix ImGui uses to keep IDs unique
+    // (e.g. "method##desync" renders as "method", "Enable##weather" as "Enable").
+    static inline std::string StripLabel(const char* label)
+    {
+        std::string s = label ? label : "";
+        const size_t p = s.find("##");
+        if (p != std::string::npos) s.resize(p);
+        return s;
+    }
+
     // ── rows ──────────────────────────────────────────────────────
     inline void BeginRow(const ImVec2& pos, bool bg = true)
     {
@@ -318,7 +328,7 @@ namespace UI
 
         // label
         dl->AddText(ImVec2(total_bb.Min.x + 12.0f * Sc, total_bb.Min.y + (frame_size.y * Sc - ImGui::GetFontSize()) * 0.5f),
-            hovered ? U(text_color[0]) : U(text_color[1]), label);
+            hovered ? U(text_color[0]) : U(text_color[1]), StripLabel(label).c_str());
 
         return changed;
     }
@@ -470,17 +480,6 @@ namespace UI
                 v = nv;
                 norm = ClampF((v - v_min) / (v_max - v_min), 0.0f, 1.0f);
             }
-            if (io.MouseWheel != 0.0f)
-            {
-                float step = (v_max - v_min) * 0.02f;
-                float nv = v + io.MouseWheel * step * 4.0f;
-                nv = ClampF(nv, v_min, v_max);
-                if (data_type == ImGuiDataType_Float) { *(float*)p_data = nv; }
-                else { *(int*)p_data = (int)(nv + 0.5f); }
-                changed = true;
-                v = nv;
-                norm = ClampF((v - v_min) / (v_max - v_min), 0.0f, 1.0f);
-            }
         }
 
         // value box (top right)
@@ -503,7 +502,7 @@ namespace UI
 
         // label
         ImU32 labelCol = hovered ? U(text_color[0]) : U(text_color[1]);
-        dl->AddText(ImVec2(total_bb.Min.x + 12.0f * Sc, total_bb.Min.y + 10.0f * Sc), labelCol, label);
+        dl->AddText(ImVec2(total_bb.Min.x + 12.0f * Sc, total_bb.Min.y + 10.0f * Sc), labelCol, StripLabel(label).c_str());
 
         // value box
         dl->AddRectFilled(input_bb.Min, input_bb.Max, U(second_color), round_4 * Sc);
@@ -574,10 +573,25 @@ namespace UI
         const char* preview_value = (current_item && *current_item >= 0 && *current_item < items_count) ? items[*current_item] : NULL;
         const ImVec2 preview_sz = preview_value ? CalcText(small_font, 17.0f * Sc, preview_value) : ImVec2(0, 0);
 
-        const ImRect rect_bb(ImVec2(total_bb.Max.x - (56.0f + preview_sz.x) * Sc, total_bb.Min.y + 11.0f * Sc),
-                             ImVec2(total_bb.Max.x - 40.0f * Sc, total_bb.Max.y - 11.0f * Sc));
+        // The value box is sized from the WIDEST option so every dropdown
+        // entry (e.g. "Closest Part", "Fixed Bone") stays fully visible and
+        // the box never resizes while switching selection.
+        float widest = preview_sz.x;
+        for (int i = 0; i < items_count; i++)
+        {
+            const float w = CalcText(small_font, 17.0f * Sc, items[i]).x;
+            if (w > widest) widest = w;
+        }
+        const float valRight = total_bb.Max.x - 40.0f * Sc;
+        const std::string dispLabel = StripLabel(label);
+        const float labelW = CalcText(small_font, 17.0f * Sc, dispLabel.c_str()).x;
+        float valLeft = valRight - (widest + 18.0f * Sc);
+        float labelEnd = total_bb.Min.x + 12.0f * Sc + labelW + 6.0f * Sc;
+        if (valLeft < labelEnd) valLeft = labelEnd;
+        const ImRect rect_bb(ImVec2(valLeft, total_bb.Min.y + 11.0f * Sc),
+                             ImVec2(valRight, total_bb.Max.y - 11.0f * Sc));
         const ImRect arrow_bb(ImVec2(total_bb.Max.x - 33.0f * Sc, total_bb.Min.y + 20.0f * Sc),
-                              ImVec2(total_bb.Max.x - 4.0f * Sc, total_bb.Max.y - 4.0f * Sc));
+                              ImVec2(total_bb.Max.x - 6.0f * Sc, total_bb.Max.y - 6.0f * Sc));
         const ImVec2 label_pos(total_bb.Min.x + 12.0f * Sc, total_bb.Min.y + 12.0f * Sc);
 
         if (hovered && ImGui::IsMouseClicked(0))
@@ -591,7 +605,7 @@ namespace UI
 
         // label
         ImU32 labelCol = hovered ? U(text_color[0]) : U(text_color[1]);
-        dl->AddText(label_pos, labelCol, label);
+        dl->AddText(label_pos, labelCol, StripLabel(label).c_str());
 
         // value box
         float value_alpha = hovered ? 1.0f : 0.8f;
@@ -606,17 +620,18 @@ namespace UI
             ImGui::PopFont();
         }
 
-        // arrow box
-        dl->AddRectFilled(arrow_bb.Min, arrow_bb.Max, U(background_color), round_4 * Sc);
-        if (icon_font)
+        // arrow (transparent background - the chevron sits directly on the row)
         {
-            ImGui::PushFont(icon_font);
-            ImVec2 sz = CalcText(icon_font, 18.0f * Sc, "7");
-            dl->AddText(icon_font, 18.0f * Sc,
-                ImVec2(arrow_bb.Min.x + (arrow_bb.GetWidth() - sz.x) * 0.5f,
-                       arrow_bb.Min.y + (arrow_bb.GetHeight() - sz.y) * 0.5f),
-                hovered ? U(text_color[1]) : U(text_color[2]), "7");
-            ImGui::PopFont();
+            const ImVec2 ac(arrow_bb.Min.x + arrow_bb.GetWidth() * 0.5f,
+                            arrow_bb.Min.y + arrow_bb.GetHeight() * 0.5f);
+            const float as = 4.2f * Sc;
+            const ImVec4 main = ImVec4(main_color.Value.x, main_color.Value.y, main_color.Value.z, 1.0f);
+            const ImU32 chevCol = hovered ? U(main) : U(text_color[1]);
+            dl->AddTriangleFilled(
+                ImVec2(ac.x - as, ac.y - as * 0.7f),
+                ImVec2(ac.x + as, ac.y - as * 0.7f),
+                ImVec2(ac.x, ac.y + as),
+                chevCol);
         }
 
         bool value_changed = false;
@@ -629,7 +644,7 @@ namespace UI
             state.anim += (1.0f - state.anim) * rate;
             if (state.anim > 0.999f) state.anim = 1.0f;
             ImGui::SetNextWindowSize(ImVec2(total_bb.GetWidth(), target_size * EaseOutCubic(state.anim)));
-            ImGui::SetNextWindowPos(ImVec2(total_bb.Min.x, rect_bb.Max.y + 5.0f * Sc), ImGuiCond_Always);
+            ImGui::SetNextWindowPos(ImVec2(total_bb.Min.x, total_bb.Max.y + 4.0f * Sc), ImGuiCond_Always);
         }
 
         if (popup_open && ImGui::BeginPopup(label))
@@ -645,8 +660,8 @@ namespace UI
             {
                 if (i > 0) ImGui::Dummy(ImVec2(0.0f, 2.0f * Sc));
                 ImGui::PushID(i);
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 0.0f);
-                if (ImGui::Selectable(items[i], *current_item == i, 0, ImVec2(total_bb.GetWidth(), 28.0f * Sc)))
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 12.0f * Sc);
+                if (ImGui::Selectable(items[i], *current_item == i, 0, ImVec2(total_bb.GetWidth() - 12.0f * Sc, 28.0f * Sc)))
                 {
                     *current_item = i;
                     value_changed = true;
@@ -682,10 +697,6 @@ namespace UI
 
         bool hovered = ImGui::IsItemHovered();
         KeybindState& st = keybind_states[id];
-
-        const ImRect button_bb(ImVec2(total_bb.Min.x + 10.0f * Sc, total_bb.Min.y + 20.0f * Sc),
-                               ImVec2(total_bb.Max.x - 10.0f * Sc, total_bb.Max.y - 20.0f * Sc));
-
         if (hovered && ImGui::IsMouseClicked(0))
         {
             st.listening = true;
@@ -718,36 +729,39 @@ namespace UI
             }
         }
 
-        // row background
         dl->AddRectFilled(total_bb.Min, total_bb.Max, U(background_color), round_5 * Sc);
-
-        // button (whole row area)
-        dl->AddRectFilled(button_bb.Min, button_bb.Max, U(second_color), round_5 * Sc);
-        if (st.listening)
-            dl->AddRect(button_bb.Min, button_bb.Max, U(main_color), round_5 * Sc, 0, 1.0f);
 
         const ImVec4 main = ImVec4(main_color.Value.x, main_color.Value.y, main_color.Value.z, 1.0f);
         const char* kn = st.listening ? "..." : VKName(*key);
         const ImVec2 key_sz = CalcText(small_font, 17.0f * Sc, kn);
         const bool hidden = (label[0] == '#');
-
-        const ImRect mode_bb(ImVec2(total_bb.Max.x - 66.0f * Sc, total_bb.Min.y + 20.0f * Sc),
-                             ImVec2(total_bb.Max.x - 14.0f * Sc, total_bb.Max.y - 20.0f * Sc));
+        const float controlH = 28.0f * Sc;
+        const float controlTop = total_bb.Min.y + (total_bb.GetHeight() - controlH) * 0.5f;
+        const ImRect mode_bb(ImVec2(total_bb.Max.x - 66.0f * Sc, controlTop),
+                             ImVec2(total_bb.Max.x - 14.0f * Sc, controlTop + controlH));
+        const float keyW = ImMax(key_sz.x + 32.0f * Sc, hidden ? 92.0f * Sc : 76.0f * Sc);
+        float keyRight;
+        if (hidden)
+            keyRight = total_bb.Min.x + (total_bb.GetWidth() + keyW) * 0.5f;
+        else
+            keyRight = mode ? mode_bb.Min.x - 8.0f * Sc : total_bb.Max.x - 14.0f * Sc;
+        const ImRect key_bb(ImVec2(keyRight - keyW, controlTop),
+                            ImVec2(keyRight, controlTop + controlH));
 
         if (hidden)
         {
-            centerText(button_bb.Min, button_bb.Max, kn, st.listening ? U(main) : U(text_color[1]), 17.0f * Sc, small_font);
+            centerText(key_bb.Min, key_bb.Max, kn, st.listening ? U(main) : U(text_color[1]), 17.0f * Sc, small_font);
         }
         else
         {
-dl->AddText(ImVec2(total_bb.Min.x + 12.0f * Sc, total_bb.Min.y + (frame_size.y * Sc - ImGui::GetFontSize()) * 0.5f),
-                hovered ? U(text_color[0]) : U(text_color[1]), label);
-            const float kbRight = (mode ? mode_bb.Min.x - 8.0f * Sc : total_bb.Max.x - 14.0f * Sc);
-            const ImRect key_bb(ImVec2(kbRight - key_sz.x - 16.0f * Sc, total_bb.Min.y + 20.0f * Sc),
-                                ImVec2(kbRight, total_bb.Max.y - 20.0f * Sc));
+            dl->AddText(ImVec2(total_bb.Min.x + 12.0f * Sc, total_bb.Min.y + (frame_size.y * Sc - ImGui::GetFontSize()) * 0.5f),
+                hovered ? U(text_color[0]) : U(text_color[1]), StripLabel(label).c_str());
             dl->AddRectFilled(key_bb.Min, key_bb.Max, U(second_color), round_5 * Sc);
             centerText(key_bb.Min, key_bb.Max, kn, st.listening ? U(main) : U(text_color[1]), 17.0f * Sc, small_font);
         }
+
+        if (st.listening)
+            dl->AddRect(key_bb.Min, key_bb.Max, U(main_color), round_5 * Sc, 0, 1.0f * Sc);
 
         if (mode)
         {
@@ -830,7 +844,7 @@ dl->AddText(ImVec2(total_bb.Min.x + 12.0f * Sc, total_bb.Min.y + (frame_size.y *
 
         dl->AddRectFilled(total_bb.Min, total_bb.Max, U(background_color), round_5 * Sc);
         dl->AddText(ImVec2(total_bb.Min.x + 12.0f * Sc, total_bb.Min.y + (frame_size.y * Sc - ImGui::GetFontSize()) * 0.5f),
-            hovered ? U(text_color[0]) : U(text_color[1]), label);
+            hovered ? U(text_color[0]) : U(text_color[1]), StripLabel(label).c_str());
 
         const ImRect box(ImVec2(total_bb.Max.x - 62.0f * Sc, total_bb.Min.y + 16.0f * Sc),
                          ImVec2(total_bb.Max.x - 14.0f * Sc, total_bb.Min.y + 30.0f * Sc));
@@ -932,8 +946,8 @@ dl->AddText(ImVec2(total_bb.Min.x + 12.0f * Sc, total_bb.Min.y + (frame_size.y *
         const float Sc = sc;
         const ImGuiID id = window->GetID(label);
 
-        const float w = (24.0f + ImGui::CalcTextSize(label).x) * Sc;
-        const float h = 30.0f * Sc;
+        const float w = (18.0f + ImGui::CalcTextSize(label).x + 18.0f) * Sc;
+        const float h = 32.0f * Sc;
         const ImVec2 pos = ImGui::GetCursorScreenPos();
         const ImRect bb(pos, pos + ImVec2(w, h));
         ImGui::ItemSize(bb, ImGui::GetStyle().ItemSpacing.y * 0.5f);
@@ -946,13 +960,25 @@ dl->AddText(ImVec2(total_bb.Min.x + 12.0f * Sc, total_bb.Min.y + (frame_size.y *
         bool pressed = false;
         if (hovered && ImGui::IsMouseClicked(0)) pressed = true;
 
-        if (active || hovered)
+        if (anim > 0.02f)
         {
+            // soft glow beneath the pill (accent bloom when active)
+            if (active)
+                SoftRectBloom(dl, pos, pos + ImVec2(w, h), ImVec4(main.x, main.y, main.z, 0.10f), 8.0f * Sc, round_5 * Sc);
             ImU32 bg = LerpU32(U(second_color), U(ImVec4(1, 1, 1, 45.0f / 255.0f)), anim);
+            ImU32 border = LerpU32(IM_COL32(0, 0, 0, 0), U(ImVec4(main.x, main.y, main.z, 0.55f)), anim);
             dl->AddRectFilled(pos, pos + ImVec2(w, h), bg, round_5 * Sc);
+            dl->AddRect(pos, pos + ImVec2(w, h), border, round_5 * Sc, 0, 1.0f * Sc);
+
+            // crisp accent underline for the active pill
+            if (active)
+                dl->AddRectFilled(ImVec2(pos.x + 10.0f * Sc, pos.y + h - 2.0f * Sc),
+                    ImVec2(pos.x + w - 10.0f * Sc, pos.y + h),
+                    U(ImVec4(main.x, main.y, main.z, 0.85f)), 1.0f);
         }
 
-        dl->AddText(ImVec2(pos.x + (w - ImGui::CalcTextSize(label).x) * 0.5f, pos.y + (h - ImGui::GetFontSize()) * 0.5f),
+        const ImVec2 tpos(pos.x + (w - ImGui::CalcTextSize(label).x) * 0.5f, pos.y + (h - ImGui::GetFontSize()) * 0.5f);
+        dl->AddText(tpos,
             active ? U(text_color[0]) : LerpU32(U(text_color[2]), U(text_color[1]), anim), label);
 
         return pressed;
@@ -1039,17 +1065,16 @@ dl->AddText(ImVec2(total_bb.Min.x + 12.0f * Sc, total_bb.Min.y + (frame_size.y *
         bool open = store->GetBool(id, defaultOpen);
         const float Sc = sc;
         const float hdrH = SECTION_HEADER_HEIGHT * Sc;
-        bool begin_child = open;
 
-        if (begin_child)
-        {
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0)); // transparent
-            ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0)); // no border
-            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, round_5 * Sc);
-            ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-            ImGui::BeginChild(label, ImVec2(width, 0), false, 0);
-        }
+        // Always begin the child (even when collapsed) so the matching
+        // CollapsibleEnd()/EndChild() call is unconditionally balanced.
+        // A collapsed section then just renders its header row.
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0)); // transparent
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0)); // no border
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, round_5 * Sc);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+        ImGui::BeginChild(label, ImVec2(width, 0), false, 0);
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
         ImVec2 p = ImGui::GetCursorScreenPos();
@@ -1166,91 +1191,9 @@ dl->AddText(ImVec2(total_bb.Min.x + 12.0f * Sc, total_bb.Min.y + (frame_size.y *
             cpts[1] = ImVec2(c.x + s.sz * cr + s.sz * sr, c.y - s.sz * sr + s.sz * cr);
             cpts[2] = ImVec2(c.x + s.sz * cr - s.sz * sr, c.y + s.sz * sr + s.sz * cr);
             cpts[3] = ImVec2(c.x - s.sz * cr - s.sz * sr, c.y + s.sz * sr - s.sz * cr);
+            SoftCircleBloom(dl, c, s.sz * 1.6f, ImVec4(mc.x, mc.y, mc.z, 0.04f * pulse), 6.0f);
             dl->AddConvexPolyFilled(cpts, 4, (accent & 0x00FFFFFFu) | ((ImU32)a << 24));
         }
-        dl->PopClipRect();
-    }
-
-    // ── Exterium sword emblem (procedural, theme-tinted) ──────────
-    // A large stylized sword (blade + crossguard + grip + pommel) drawn
-    // behind the content, echoing the theme accent and gently swaying.
-    inline void ExteriumSword_Render(ImDrawList* dl, const ImVec2& origin, const ImVec2& size, float menuAlpha)
-    {
-        const ImVec4 mc = ImVec4(main_color.Value.x, main_color.Value.y, main_color.Value.z, 1.0f);
-        const ImU32 accent = U(mc);
-        const float t = (float)ImGui::GetTime();
-        const ImU32 bladeCol  = (accent & 0x00FFFFFFu) | ((ImU32)(int)(0.035f * menuAlpha * 255.0f) << 24);
-        const ImU32 edgeCol   = (accent & 0x00FFFFFFu) | ((ImU32)(int)(0.075f * menuAlpha * 255.0f) << 24);
-        const ImU32 hintCol   = (accent & 0x00FFFFFFu) | ((ImU32)(int)(0.14f  * menuAlpha * 255.0f) << 24);
-
-        const float L = ImClamp(size.y * 0.42f, 220.0f, 460.0f); // blade length (px)
-        const float w = L * 0.078f;                              // blade width
-        const float hx = L * 0.26f;                              // crossguard half-width
-        const float hy = w * 0.55f;                              // crossguard thickness
-        const float gx = w * 0.34f;                              // grip width
-        const float gy = L * 0.16f;                              // grip length
-        const float pr = w * 0.46f;                              // pommel radius
-
-        const float sway = sinf(t * 0.4f) * 0.06f;               // gentle idle rotation
-        const float bob  = sinf(t * 0.6f) * 4.0f;                // subtle vertical drift
-        const float ca = cosf(sway), sa = sinf(sway);
-        const ImVec2 c = ImVec2(origin.x + size.x * 0.85f, origin.y + size.y * 0.52f + bob);
-
-        auto R = [&](float lx, float ly) -> ImVec2
-        {
-            return ImVec2(c.x + lx * ca - ly * sa, c.y + lx * sa + ly * ca);
-        };
-
-        dl->PushClipRect(origin, origin + size, true);
-
-        // blade outline (slightly wider path beneath the fill for an edge)
-        {
-            ImVec2 bpts[5];
-            bpts[0] = R(0.0f, -L);
-            bpts[1] = R(w, -L * 0.44f);
-            bpts[2] = R(w * 0.62f, 0.0f);
-            bpts[3] = R(-w * 0.62f, 0.0f);
-            bpts[4] = R(-w, -L * 0.44f);
-            dl->AddPolyline(bpts, 5, edgeCol, ImDrawFlags_Closed, w * 0.35f);
-        }
-        // blade fill
-        {
-            ImVec2 fpts[5];
-            fpts[0] = R(0.0f, -L);
-            fpts[1] = R(w * 0.86f, -L * 0.46f);
-            fpts[2] = R(w * 0.52f, 0.0f);
-            fpts[3] = R(-w * 0.52f, 0.0f);
-            fpts[4] = R(-w * 0.86f, -L * 0.46f);
-            dl->AddConvexPolyFilled(fpts, 5, bladeCol);
-        }
-        // fuller (center ridge toward the tip)
-        dl->AddLine(R(0.0f, 0.0f), R(0.0f, -L * 0.78f), edgeCol, w * 0.10f);
-        // crossguard (faceted diamond bar)
-        {
-            ImVec2 gpts[6];
-            gpts[0] = R(-hx, 0.0f);
-            gpts[1] = R(-hx * 0.72f, -hy);
-            gpts[2] = R(hx * 0.72f, -hy);
-            gpts[3] = R(hx, 0.0f);
-            gpts[4] = R(hx * 0.72f, hy);
-            gpts[5] = R(-hx * 0.72f, hy);
-            dl->AddConvexPolyFilled(gpts, 6, edgeCol);
-        }
-        // grip + pommel
-        {
-            ImVec2 gpts[4];
-            gpts[0] = R(-gx, hy);
-            gpts[1] = R(gx, hy);
-            gpts[2] = R(gx, hy + gy);
-            gpts[3] = R(-gx, hy + gy);
-            dl->AddConvexPolyFilled(gpts, 4, edgeCol);
-        }
-        dl->AddCircleFilled(R(0.0f, hy + gy + pr), pr, edgeCol, 16);
-        dl->AddCircleFilled(R(0.0f, hy + gy + pr), pr * 0.38f, hintCol, 12);
-
-        // tip sparkle
-        const ImVec2 tip = R(0.0f, -L);
-        dl->AddCircleFilled(tip, w * 0.28f, hintCol, 16);
         dl->PopClipRect();
     }
 
