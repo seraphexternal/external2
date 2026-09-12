@@ -104,6 +104,31 @@ inline void CachePlayerObjects()
 					p.ToolName = FindToolName(backpack, 0);
 			}
 
+			// Rivals keeps every player's currently equipped weapon in
+			// Workspace > ViewModels as "<Name> - <Weapon> - <Weapon>" models,
+			// visible even in the lobby/hub. Use it as ground truth whenever the
+			// character/backpack scan came up empty (the prefix match makes it
+			// Rivals-specific, so it is safe to run regardless of place-ID).
+			if (p.ToolName.empty() && Globals::Roblox::Workspace.address)
+			{
+				auto vm = Globals::Roblox::Workspace.FindFirstChild("ViewModels");
+				if (vm.address)
+				{
+					std::string prefix = p.Name + " - ";
+					for (auto& c : vm.GetChildren())
+					{
+						std::string nm = c.Name();
+						if (nm.size() > prefix.size() && nm.compare(0, prefix.size(), prefix) == 0)
+						{
+							std::string rest = nm.substr(prefix.size());
+							size_t sep = rest.find(" - ");
+							p.ToolName = (sep != std::string::npos) ? rest.substr(0, sep) : rest;
+							break;
+						}
+					}
+				}
+			}
+
 			switch (p.RigType)
 			{
 			case 0: // R6

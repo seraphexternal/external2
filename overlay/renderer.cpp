@@ -15,6 +15,7 @@
 #include "../features/aimbot.h"
 #include "../features/playerfilter.h"
 #include "../features/orbit.h"
+#include "../features/PlayerAvatars.h"
 #include "animation.h"
 #include "explorer/explorer_window.h"
 #include "explorer/lua_editor.h"
@@ -26,6 +27,7 @@
 
 #include <random>
 #include <algorithm>
+#include <cctype>
 
 #ifdef _MSC_VER
 #pragma warning (disable: 26812)    // [Static Analyzer] The enum type 'xxx' is unscoped. Prefer 'enum class' over 'enum' (Enum.3). ImGui uses unscoped enum flag bitmasks heavily.
@@ -114,6 +116,58 @@ accent = Options::Misc::MenuAccentColor;
 accent2 = Options::Misc::MenuAccentColor2;
 gradient = Options::Misc::MenuGradient;
 }
+}
+
+// Rainbox/whatever: apply the theme accent colors to the in-game feature
+// colors so switching themes re-styles the whole overlay. Each feature keeps
+// its own picker afterwards, so a theme change is the only thing that rewrites
+// these — per-feature customization is still fully available.
+inline void ApplyFeatureColors(const float* accent, const float* accent2)
+{
+const float r = accent[0], g = accent[1], b = accent[2];
+const float r2 = accent2[0], g2 = accent2[1], b2 = accent2[2];
+
+// ESP primary visuals follow the theme accent.
+float* esp = &Options::ESP::Color[0];
+esp[0] = r; esp[1] = g; esp[2] = b;
+float* esp2 = &Options::ESP::BoxColor[0];
+esp2[0] = r; esp2[1] = g; esp2[2] = b;
+float* esp3 = &Options::ESP::CornerColor[0];
+esp3[0] = r; esp3[1] = g; esp3[2] = b;
+float* esp4 = &Options::ESP::SkeletonColor[0];
+esp4[0] = r; esp4[1] = g; esp4[2] = b;
+float* esp5 = &Options::ESP::ESP3DColor[0];
+esp5[0] = r; esp5[1] = g; esp5[2] = b;
+float* esp6 = &Options::ESP::HeadCircleColor[0];
+esp6[0] = r; esp6[1] = g; esp6[2] = b;
+
+// Accent2 goes to secondary / distance / tracer elements.
+float* esc = &Options::ESP::DistanceColor[0];
+esc[0] = r2; esc[1] = g2; esc[2] = b2;
+float* esc2 = &Options::ESP::TracerColor[0];
+esc2[0] = r2; esc2[1] = g2; esc2[2] = b2;
+float* esc3 = &Options::ESP::HeadDotColor[0];
+esc3[0] = r2; esc3[1] = g2; esc3[2] = b2;
+
+// Chams + aimbot also pick up the theme.
+float* cc = &Options::Chams::FillColor[0];
+cc[0] = r; cc[1] = g; cc[2] = b; cc[3] = 0.5f;
+float* cc2 = &Options::Chams::OutlineColor[0];
+cc2[0] = r2; cc2[1] = g2; cc2[2] = b2; cc2[3] = 1.0f;
+float* ac = &Options::Aimbot::FOVColor[0];
+ac[0] = r; ac[1] = g; ac[2] = b;
+float* ac2 = &Options::Aimbot::FOVFillColor[0];
+ac2[0] = r; ac2[1] = g; ac2[2] = b; ac2[3] = 0.1f;
+float* ac3 = &Options::Aimbot::TargetLineColor[0];
+ac3[0] = r2; ac3[1] = g2; ac3[2] = b2;
+
+// Crosshair + Desync visuals.
+float* cr = &Options::Crosshair::Color[0];
+cr[0] = r; cr[1] = g; cr[2] = b;
+float* dv = &Options::Desync::VisualColor[0];
+dv[0] = r; dv[1] = g; dv[2] = b;
+float* dv2 = &Options::Desync::LineColor[0];
+dv2[0] = r2; dv2[1] = g2; dv2[2] = b2;
 }
 }
 
@@ -508,9 +562,9 @@ listInitialized = true;
 }
 
 const float panelY = ImGui::GetCursorPosY();
-ImGui::SetCursorPosX(UI::ContentX);
-if (UI::CollapsibleSection("MANAGE CONFIGS", UI::CardW))
-{
+    ImGui::SetCursorPosX(16.0f * sc);
+    if (UI::CollapsibleSection("MANAGE CONFIGS", UI::CardW))
+{
 UI::labelsection("AUTOLOAD");
 if (ImGui::Checkbox("Autoload on startup", &autoloadEnabled))
 {
@@ -584,11 +638,13 @@ ImGui::PopStyleVar();
 UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
-ImGui::SetCursorPosX(UI::ContentX + UI::CardW + 6.0f * sc);
-if (UI::CollapsibleSection("ACTIONS", UI::CardW))
-{
-if (!configStatusMessage.empty())
-{
+    ImGui::SetCursorPosX(16.0f * sc + UI::CardW + 6.0f * sc);
+    if (UI::CollapsibleSection("ACTIONS", UI::CardW))
+    {
+        // Nudge button labels slightly above the vertical center.
+        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.42f));
+        if (!configStatusMessage.empty())
+{
 const ImVec4 statusColor = configStatusSuccess
 ? ImVec4(UI::P.accent.x, UI::P.accent.y, UI::P.accent.z, 1.0f)
 : ImVec4(1.0f, 0.45f, 0.45f, 1.0f);
@@ -797,6 +853,7 @@ configStatusMessage = Config::lastError.empty() ? "Export failed" : Config::last
 }
 }
 }
+ImGui::PopStyleVar();
 UI::CollapsibleEnd();
 }
 
@@ -915,6 +972,39 @@ drawList->AddText(ImVec2(textX + nameWidth + 5, yOffset), IM_COL32(main_color.x 
 
 yOffset += lineHeight;
 }
+}
+
+// ── Katana Alert ─────────────────────────────────────────────────────────
+// Red animated "PARRYING" warning drawn to the center of the screen while any
+// enemy has a katana out (Rivals). Heart-beat pulse + two staggered expanding
+// rings that evoke the incoming deflection.
+static void RenderKatanaAlert(ImDrawList* dl)
+{
+    const ImVec2 dims = ImGui::GetIO().DisplaySize;
+    const float t = (float)ImGui::GetTime();
+    const float cycle = fmodf(t * 1.15f, 1.0f);
+
+    ImFont* font = UI::logo_font ? UI::logo_font : ImGui::GetFont();
+    const float size = (font == UI::logo_font) ? font->FontSize : 25.0f;
+    const char* txt = "> PARRYING <";
+    ImVec2 tsz = font->CalcTextSizeA(size, FLT_MAX, 0.0f, txt);
+    const ImVec2 c = ImVec2((dims.x - tsz.x) * 0.5f, dims.y * 0.30f - tsz.y * 0.5f);
+    const ImVec2 ctr = ImVec2(dims.x * 0.5f, c.y + tsz.y * 0.5f);
+
+    // two staggered expanding rings, a fresh one every ~0.43s
+    for (int i = 0; i < 2; i++)
+    {
+        float ph = fmodf(cycle + i * 0.5f, 1.0f);
+        float rr = 26.0f + ph * 58.0f;
+        int a = (int)(130.0f * (1.0f - ph));
+        dl->AddCircle(ctr, rr, IM_COL32(255, 46, 60, a), 48, 2.0f);
+    }
+
+    const float pulse = (sinf(t * 6.0f) + 1.0f) * 0.5f;
+    const ImU32 col = IM_COL32(255, 46, 60, (int)(230 + pulse * 25));
+    dl->AddText(font, size, ImVec2(c.x + 2.5f, c.y + 2.8f), IM_COL32(12, 10, 12, 215), txt);
+    dl->AddText(font, size, ImVec2(c.x - 0.8f, c.y - 0.8f), IM_COL32(80, 8, 12, 160), txt);
+    dl->AddText(font, size, c, col, txt);
 }
 
 // ── Player List window (Misc -> "Player List") ────────────────────────────
@@ -1340,6 +1430,9 @@ ImGui::NewFrame();
 // Pump the external executor: resumes due coroutines, fires RunService events.
 Executor::Tick();
 
+// Update player avatars
+Cheat::Features::PlayerAvatars::Tick();
+
 Globals::Viewport::Update();
 
 // Bootstrap from persistent Options on the first frame, and again
@@ -1464,6 +1557,14 @@ const float* themeAccent = nullptr;
 const float* themeAccent2 = nullptr;
 bool themeGradient = false;
 MenuThemes::Resolve(themeBg, themePanel, themeAccent, themeAccent2, themeGradient);
+// Whenever the user switches themes, restyle in-game feature colors so the
+// overlay matches. Per-feature pickers stay available afterwards.
+static int lastAppliedTheme = -1;
+if (Options::Misc::MenuTheme != lastAppliedTheme)
+{
+MenuThemes::ApplyFeatureColors(themeAccent, themeAccent2);
+lastAppliedTheme = Options::Misc::MenuTheme;
+}
 // Always use preset accent colors (even for Custom) to prevent old saved configs from overriding
 main_color = ImVec4(themeAccent[0], themeAccent[1], themeAccent[2], 1.0f);
 main_color2 = ImVec4(themeAccent2[0], themeAccent2[1], themeAccent2[2], 1.0f);
@@ -1481,15 +1582,15 @@ if (menu_open || menuAlpha > 0.0f)
         // MenuScale acts as a uniform zoom factor for the whole UI.
         const float sc = std::clamp(Options::Misc::MenuScale, 0.6f, 2.5f);
         // keep every subtab pill a uniform width, aligned inside the left rail
-        // Exterium layout: 187px sidebar + 630px content, two 305px cards.
+        // Wider layout: 187px sidebar + 800px content, two 390px cards.
         UI::sc = sc;
         UI::SidebarX = 10.0f * sc;
         UI::SidebarW = 187.0f * sc;
         UI::ContentX = 197.0f * sc;
-        UI::ContentW = 630.0f * sc;
-        UI::CardW = 305.0f * sc;
-        const float menuWidth = 827.0f;
-        const float menuHeight = 604.0f;
+        UI::ContentW = 800.0f * sc;
+        UI::CardW = 340.0f * sc;
+        const float menuWidth = 997.0f * sc;
+        const float menuHeight = 680.0f * sc;
 // Window frame stays a fixed size so dragging the scale slider doesn't
 // resize the window under the cursor (which caused a big/small feedback loop).
 // Zoom is applied to content via SetWindowFontScale + scaled positions.
@@ -1536,7 +1637,7 @@ auto draw = ImGui::GetWindowDrawList();
 
         // Apply the cohesive Seraph design system: unified palette +
         // global style so every widget (built-in or UI::) matches.
-        UI::ApplyStyle(main_color,
+        UI::ApplyStyle(main_color, main_color2,
         ImVec4(themeBg[0], themeBg[1], themeBg[2], 1.0f),
         ImVec4(themePanel[0], themePanel[1], themePanel[2], 1.0f));
 
@@ -1572,9 +1673,10 @@ auto draw = ImGui::GetWindowDrawList();
         draw->AddRectFilled(ImVec2(p.x, p.y), ImVec2(p.x + s.x, p.y + s.y),
             colWin, 16.0f * sc);
 
-        // Header fill (rounded top only)
+        // Header fill (rounded top only) — matches theme
+        const ImVec4 headerBg = ImVec4(UI::winbg_color.x + 0.004f, UI::winbg_color.y + 0.004f, UI::winbg_color.z + 0.006f, 1.0f);
         draw->AddRectFilled(ImVec2(p.x, p.y), ImVec2(p.x + s.x, p.y + headerH),
-            IM_COL32(13, 14, 16, (int)(229.0f * menuAlpha)), 16.0f * sc, ImDrawFlags_RoundCornersTop);
+            ImGui::ColorConvertFloat4ToU32(headerBg), 16.0f * sc, ImDrawFlags_RoundCornersTop);
 
         // Accent strip at bottom of header (0,52)-(827,55)
         draw->AddRectFilled(
@@ -1582,7 +1684,7 @@ auto draw = ImGui::GetWindowDrawList();
             ImVec2(p.x + s.x, p.y + 55.0f * sc),
             colMainStr);
 
-        // Logo: "SERAPH" 25px Bold, centered in header (0,0)-(827,52)
+        // Logo: "SERAPH" centered in header
         {
             const std::string logoText = SX("SERAPH");
             ImFont* lf = UI::logo_font ? UI::logo_font : io.FontDefault;
@@ -1590,7 +1692,6 @@ auto draw = ImGui::GetWindowDrawList();
             ImVec2 tsz = lf->CalcTextSizeA(logoSize, FLT_MAX, 0.f, logoText.c_str());
             ImVec2 c = ImVec2(p.x + (s.x - tsz.x) * 0.5f, p.y + (52.0f * sc - logoSize) * 0.5f);
             ImU32 lc = ImGui::ColorConvertFloat4ToU32(ImVec4(0.9f, 0.9f, 0.94f, 1.0f));
-            // soft glow behind logo
             draw->AddText(lf, logoSize, ImVec2(c.x + 1.2f, c.y + 1.2f),
                 ImGui::ColorConvertFloat4ToU32(ImVec4(mainA.x, mainA.y, mainA.z, 0.20f)), logoText.c_str());
             draw->AddText(lf, logoSize, c, lc, logoText.c_str());
@@ -1630,9 +1731,11 @@ ImFont* menuFont = (MenuFonts::Count > 0
     const ImVec2 bgOrigin = ImVec2(p.x + sbW, p.y + headerH);
     UI::ExteriumBG_Update(bgW, s.y - headerH);
     UI::ExteriumBG_Render(draw, bgOrigin, ImVec2(bgW, s.y - headerH), menuAlpha);
+    if (Options::Misc::ExteriumSword)
+        UI::ExteriumSword_Render(draw, bgOrigin, ImVec2(bgW, s.y - headerH), menuAlpha);
 }
 
-// â”€â”€ Sidebar footer status line (small, muted) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ═══ Sidebar footer status line (small, muted) ══════════════════════
 {
     char fpsBuf[64];    sprintf_s(fpsBuf, "%d FPS", (int)ImGui::GetIO().Framerate);
     bool connected = (Globals::Roblox::LocalPlayer.address != 0);
@@ -1641,7 +1744,36 @@ ImFont* menuFont = (MenuFonts::Count > 0
     const ImU32 muted = ImGui::ColorConvertFloat4ToU32(ImVec4(1, 1, 1, 0.30f));
     ImFont* sf = UI::small_font ? UI::small_font : ImGui::GetFont();
     const float fs = UI::small_font ? sf->FontSize : 17.0f * sc;
-    float yy = sideMax.y - 46.0f * sc;
+    float yy = sideMax.y - 130.0f * sc;
+
+// Avatar (circular profile icon)
+        {
+            const float avSize = 72.0f * sc;
+            const float avX = sideMin.x + 12.0f * sc;
+            const float avY = yy - 2.0f * sc;
+            const ImVec2 avCenter(avX + avSize * 0.5f, avY + avSize * 0.5f);
+            const float avR = avSize * 0.5f;
+            const ImU32 avBorder = ImGui::ColorConvertFloat4ToU32(UI::P.borderDim);
+            draw->AddCircleFilled(avCenter, avR, ImGui::ColorConvertFloat4ToU32(ImVec4(0, 0, 0, 0.30f)));
+            draw->AddCircle(avCenter, avR, avBorder, 0, 1.0f * sc);
+
+            if (connected) {
+                std::int64_t uid = Cheat::Features::PlayerAvatars::LookupUserId(uname);
+                ID3D11ShaderResourceView* av = uid != 0 ? Cheat::Features::PlayerAvatars::Get(uid) : nullptr;
+                if (av) {
+                    const ImVec2 avMin(avX, avY);
+                    const ImVec2 avMax(avX + avSize, avY + avSize);
+                    draw->AddImageRounded((ImTextureID)av, avMin, avMax, ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE, avR);
+                } else if (!uname.empty()) {
+                    char ini[2] = { (char)std::toupper((unsigned char)uname[0]), 0 };
+                    ImVec2 tsz = sf->CalcTextSizeA(fs, FLT_MAX, 0.f, ini);
+                    ImVec2 tpos(avX + (avSize - tsz.x) * 0.5f, avY + (avSize - tsz.y) * 0.5f);
+                    draw->AddText(sf, fs, tpos, muted, ini);
+                }
+            }
+            yy += avSize + 4.0f * sc;
+        }
+
     ImVec2 ns = sf->CalcTextSizeA(fs, FLT_MAX, 0.f, nameStr);
     draw->AddText(sf, fs, ImVec2(sideMin.x + 18.0f * sc, yy), muted, nameStr);
     yy += fs + 3.0f * sc;
@@ -1700,27 +1832,38 @@ lastTab = tab;
 }
 
         // ── Content area layout constants (Exterium-style) ────────
-        const float ctX = UI::ContentX;
+        const float ctX = 16.0f * sc; // child-relative (padding from child left edge)
         const float ctPad = 16.0f * sc;
         const float ctW = UI::ContentW;
-        const float halfW = UI::CardW;
         const float fullW = s.x - UI::ContentX - 10.0f * sc;
-        const float hdrY = 72.0f * sc;
+        const float halfW = (fullW - UI::ColGap) * 0.5f; // left card
+        const float cardW = halfW; // right card mirrors left (symmetrical layout)
+        const float rightCardW = cardW; // use full width for right column
+
+        // Content area scrollable child (allows mouse wheel scrolling for all tabs)
+        // Transparent ChildBg so the animated Exterium background stays visible
+        // in the gaps between the buttons/cards.
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+        ImGui::BeginChild("##content_area", ImVec2(fullW, s.y - 72.0f * sc - 8.0f * sc), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
 if (tab == 0)
 {
         // ── Content header + horizontal subtab bar ────────────────
         UI::ContentHeader("AIM");
+        
         {
             static float sa[5] = {};
+            
             ImGui::SetCursorPosX(ctX);
-            if (UI::ContentSubtab("Aimbot", tab2 == 0, sa[0])) tab2 = 0;
+            if (UI::ContentSubtab("Aim", tab2 == 0, sa[0])) tab2 = 0;
             ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Triggerbot", tab2 == 1, sa[1])) tab2 = 1;
             ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Hitbox", tab2 == 2, sa[2])) tab2 = 2;
             ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Weapon", tab2 == 3, sa[3])) tab2 = 3;
+            ImGui::SameLine(0, 6.0f * sc);
+            if (UI::ContentSubtab("Autoclicker", tab2 == 4, sa[4])) tab2 = 4;
             ImGui::Dummy(ImVec2(0, 8 * sc));
         }
 
@@ -1746,12 +1889,12 @@ if (tab == 0)
                 UI::SliderFloat("Range", &Options::Aimbot::Range, 1.f, 1000.f, "%.0f");
                 UI::SliderFloat("FOV", &Options::Aimbot::FOV, 10.f, 360.f, "%.0f");
 
-                UI::labelsection("SMOOTHING & FEEL");
-                static const char* aimingMethods[]{ "Camera", "Mouse", "Silent" };
-                UI::Combo("Method", &Options::Aimbot::AimingType, aimingMethods, IM_ARRAYSIZE(aimingMethods));
+UI::labelsection("SMOOTHING & FEEL");
+            static const char* aimingMethods[]{ "Camera", "Mouse", "Silent" };
+            UI::Combo("Method", &Options::Aimbot::AimingType, aimingMethods, IM_ARRAYSIZE(aimingMethods), halfW);
 
-                static const char* smoothnessCurves[]{ "Linear", "Ease In", "Ease Out", "Ease In-Out", "Custom" };
-                UI::Combo("Curve", &Options::Aimbot::SmoothnessCurve, smoothnessCurves, IM_ARRAYSIZE(smoothnessCurves));
+            static const char* smoothnessCurves[]{ "Linear", "Ease In", "Ease Out", "Ease In-Out", "Custom" };
+            UI::Combo("Curve", &Options::Aimbot::SmoothnessCurve, smoothnessCurves, IM_ARRAYSIZE(smoothnessCurves), halfW);
 
                 UI::SliderFloat("Smoothness", &Options::Aimbot::Smoothness, 0.f, 1.f, "%.3f");
 
@@ -1766,18 +1909,19 @@ if (tab == 0)
                     ImVec2 graphPos = ImGui::GetCursorScreenPos();
                     ImDrawList* drawList = ImGui::GetWindowDrawList();
 
-                    drawList->AddRectFilled(graphPos, ImVec2(graphPos.x + graphSize.x, graphPos.y + graphSize.y), IM_COL32(8, 8, 8, 255), 2.0f);
-                    drawList->AddRect(graphPos, ImVec2(graphPos.x + graphSize.x, graphPos.y + graphSize.y), IM_COL32(27, 27, 27, 255), 2.0f);
+                    drawList->AddRectFilled(graphPos, ImVec2(graphPos.x + graphSize.x, graphPos.y + graphSize.y), UI::U(UI::P.surface), 2.0f);
+                    drawList->AddRect(graphPos, ImVec2(graphPos.x + graphSize.x, graphPos.y + graphSize.y), UI::U(UI::P.accentSoft), 2.0f);
 
+                    const ImU32 gridCol = UI::U(UI::P.divider);
                     for (int i = 1; i < 4; i++)
                     {
                         float y = graphPos.y + (graphSize.y / 4.0f) * i;
-                        drawList->AddLine(ImVec2(graphPos.x, y), ImVec2(graphPos.x + graphSize.x, y), IM_COL32(20, 20, 20, 255), 1.0f);
+                        drawList->AddLine(ImVec2(graphPos.x, y), ImVec2(graphPos.x + graphSize.x, y), gridCol, 1.0f);
                     }
                     for (int i = 1; i < 4; i++)
                     {
                         float x = graphPos.x + (graphSize.x / 4.0f) * i;
-                        drawList->AddLine(ImVec2(x, graphPos.y), ImVec2(x, graphPos.y + graphSize.y), IM_COL32(20, 20, 20, 255), 1.0f);
+                        drawList->AddLine(ImVec2(x, graphPos.y), ImVec2(x, graphPos.y + graphSize.y), gridCol, 1.0f);
                     }
 
                     ImVec2 prevPoint = ImVec2(graphPos.x, graphPos.y + graphSize.y);
@@ -1897,23 +2041,23 @@ if (tab == 0)
             // ── Aimbot: Targeting + Silent Aim (right column) ──
             ImGui::SetCursorPosY(panelY);
             ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
-            if (UI::CollapsibleSection("TARGETING", halfW))
+            if (UI::CollapsibleSection("TARGETING", cardW))
             {
                 UI::labelsection("HITBOX");
                 static const char* hitboxModes[]{ "Fixed Bone", "Closest Part" };
-                UI::Combo("Hitbox Mode", &Options::Aimbot::HitboxMode, hitboxModes, IM_ARRAYSIZE(hitboxModes));
+                UI::Combo("Hitbox Mode", &Options::Aimbot::HitboxMode, hitboxModes, IM_ARRAYSIZE(hitboxModes), cardW);
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Fixed Bone uses the Hit Part / Air Hit Part selectors.\nClosest Part aims at the body part nearest your cursor.");
                 Options::Aimbot::ClosestPart = (Options::Aimbot::HitboxMode == 1);
 
                 static const char* hitParts[]{ "Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg", "Lower Torso", "Upper Torso" };
                 if (!Options::Aimbot::ClosestPart)
                 {
-                    UI::Combo("Hit Part", &Options::Aimbot::TargetBone, hitParts, IM_ARRAYSIZE(hitParts));
-                    UI::Combo("Air Hit Part", &Options::Aimbot::AirTargetBone, hitParts, IM_ARRAYSIZE(hitParts));
+                    UI::Combo("Hit Part", &Options::Aimbot::TargetBone, hitParts, IM_ARRAYSIZE(hitParts), cardW);
+                    UI::Combo("Air Hit Part", &Options::Aimbot::AirTargetBone, hitParts, IM_ARRAYSIZE(hitParts), cardW);
                 }
 
                 static const char* priorities[]{ "Closest Part", "Crosshair", "Lowest Health", "Farthest", "Highest Health" };
-                UI::Combo("Target Priority", &Options::Aimbot::TargetPriority, priorities, IM_ARRAYSIZE(priorities));
+                UI::Combo("Target Priority", &Options::Aimbot::TargetPriority, priorities, IM_ARRAYSIZE(priorities), cardW);
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Which enemy wins when several are inside FOV.");
 
                 UI::labelsection("SWITCHING");
@@ -1925,7 +2069,7 @@ if (tab == 0)
                 if (Options::Aimbot::SilentAim || Options::Aimbot::AimingType == 2)
                 {
                     static const char* silentModes[]{ "Camera Only", "Camera + Mouse Spoof" };
-                    UI::Combo("Silent Mode", &Options::Aimbot::SilentAimMode, silentModes, IM_ARRAYSIZE(silentModes));
+                    UI::Combo("Silent Mode", &Options::Aimbot::SilentAimMode, silentModes, IM_ARRAYSIZE(silentModes), cardW);
                     UI::Checkbox("Real Cursor Snap (hits on Overkill)", &Options::Aimbot::SilentAimRealCursor);
                     UI::Tooltip("Snaps your real cursor onto the target while firing so the shot lands. Visible flick on Overkill.");
                     UI::Checkbox("Teleport (no crosshair move)", &Options::Aimbot::SilentAimTeleport);
@@ -1938,7 +2082,7 @@ if (tab == 0)
                 UI::Bind("##sa_key", &Options::Aimbot::SilentAimKey, &Options::Aimbot::SilentAimToggleType);
 
                 static const char* saToggleTypes[]{ "Hold", "Toggle", "Always On" };
-                UI::Combo("Mode##sa", &Options::Aimbot::SilentAimToggleType, saToggleTypes, IM_ARRAYSIZE(saToggleTypes));
+                UI::Combo("Mode##sa", &Options::Aimbot::SilentAimToggleType, saToggleTypes, IM_ARRAYSIZE(saToggleTypes), cardW);
 
                 if (Options::Aimbot::SilentAimEnabled)
                 {
@@ -1947,7 +2091,7 @@ if (tab == 0)
                     UI::Tooltip("0 = instant snap. Higher = smoother camera movement.");
 
                     static const char* saModes[]{ "Camera Rotation", "Mouse Move", "Both" };
-                    UI::Combo("Method", reinterpret_cast<int*>(&Options::Aimbot::SilentAimMethod), saModes, IM_ARRAYSIZE(saModes));
+                    UI::Combo("Method", reinterpret_cast<int*>(&Options::Aimbot::SilentAimMethod), saModes, IM_ARRAYSIZE(saModes), cardW);
                     
                     UI::Checkbox("Team Check", &Options::Aimbot::SilentAimTeamCheck);
                     UI::Checkbox("Prediction", &Options::Aimbot::SilentAimPrediction);
@@ -1958,7 +2102,7 @@ if (tab == 0)
                     }
 
                     static const char* saBones[]{ "Head", "UpperTorso", "LowerTorso", "HumanoidRootPart" };
-                    UI::Combo("Target Part", &Options::Aimbot::SilentAimTargetBone, saBones, IM_ARRAYSIZE(saBones));
+                    UI::Combo("Target Part", &Options::Aimbot::SilentAimTargetBone, saBones, IM_ARRAYSIZE(saBones), cardW);
                 }
 
                 UI::labelsection("SILENT LOCK");
@@ -1969,7 +2113,7 @@ if (tab == 0)
                 if (Options::Aimbot::SilentLock)
                 {
                     static const char* lockModes[]{ "Camera Rotation", "Viewport Offset" };
-                    UI::Combo("Lock Mode", &Options::Aimbot::SilentLockMode, lockModes, IM_ARRAYSIZE(lockModes));
+                    UI::Combo("Lock Mode", &Options::Aimbot::SilentLockMode, lockModes, IM_ARRAYSIZE(lockModes), cardW);
                     UI::Checkbox("Target Line", &Options::Aimbot::TargetLine);
                 }
 
@@ -2013,41 +2157,6 @@ if (tab == 0)
                 }
             }
             UI::CollapsibleEnd();
-
-            // ── Aimbot: FOV Visuals (third panel, full width below) ──
-            ImGui::SetCursorPosY(panelY + 470 * sc + 12.0f * sc);
-            ImGui::SetCursorPosX(ctX);
-            if (UI::CollapsibleSection("FOV VISUALS", ctW))
-            {
-                UI::labelsection("DISPLAY");
-                UI::Checkbox("Show FOV", &Options::Aimbot::ShowFOV);
-                UI::Checkbox("Show FOV Fill", &Options::Aimbot::ShowFOVFill);
-                UI::Checkbox("Show FOV Text", &Options::Aimbot::ShowFOVText);
-
-                static const char* fovPositions[]{ "Screen Center", "Follow Target" };
-                UI::Combo("FOV Position", &Options::Aimbot::FOVPositionMode, fovPositions, IM_ARRAYSIZE(fovPositions));
-
-                static const char* fovShapes[]{ "Circle", "Square", "Triangle", "Hexagon" };
-                UI::Combo("FOV Shape", &Options::Aimbot::FOVShape, fovShapes, IM_ARRAYSIZE(fovShapes));
-
-                static const char* fovColorModes[]{ "Solid", "Gradient", "Shift", "Pulse" };
-                UI::Combo("FOV Color Mode", &Options::Aimbot::FOVColorMode, fovColorModes, IM_ARRAYSIZE(fovColorModes));
-
-                UI::Checkbox("FOV Glow", &Options::Aimbot::FOVGlow);
-                UI::Checkbox("FOV Breathing", &Options::Aimbot::FOVBreathing);
-                UI::Checkbox("FOV Spin", &Options::Aimbot::FOVSpin);
-
-                UI::labelsection("STYLING");
-                UI::SliderFloat("FOV Thickness", &Options::Aimbot::FOVThickness, 1.0f, 10.0f, "%.1f");
-                if (Options::Aimbot::FOVColorMode == 1 || Options::Aimbot::FOVColorMode == 2)
-                    UI::SliderFloat("Gradient Speed", &Options::Aimbot::FOVGradientSpeed, 0.1f, 5.0f, "%.2f");
-                if (Options::Aimbot::FOVSpin)
-                    UI::SliderFloat("Spin Speed", &Options::Aimbot::FOVSpinSpeed, 0.1f, 5.0f, "%.2f");
-
-                UI::ColorEdit3("FOV Color", Options::Aimbot::FOVColor, ImGuiColorEditFlags_NoInputs);
-                UI::ColorEdit3("FOV Fill", Options::Aimbot::FOVFillColor, ImGuiColorEditFlags_NoInputs);
-            }
-            UI::CollapsibleEnd();
         }
         else if (tab2 == 1)
         {
@@ -2075,7 +2184,7 @@ if (tab == 0)
             // ── Triggerbot: Settings (right) ──
             ImGui::SetCursorPosY(panelY);
             ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
-            if (UI::CollapsibleSection("SETTINGS", halfW))
+            if (UI::CollapsibleSection("SETTINGS", cardW))
             {
                 UI::labelsection("BASIC");
                 if (!Options::Triggerbot::AdvancedFOV)
@@ -2182,9 +2291,7 @@ if (tab == 0)
         else if (tab2 == 3)
         {
             // ── Weapon + FOV subtab ──
-            // Two columns (CURRENT WEAPON | FOV VISUALS) side by side at top,
-            // then a full-width WEAPON PROFILES panel below — mirroring the
-            // Aimbot subtab layout that renders reliably in this ImGui fork.
+            // Current weapon selector on the left, full-width weapon profiles below.
 
             static const char* wpWeapons[] = {
                 "Assault Rifle", "Warper", "Bow", "Burst Rifle", "Chainsaw",
@@ -2201,17 +2308,17 @@ if (tab == 0)
 
             const float panelY = ImGui::GetCursorPosY();
 
-            // Left column: CURRENT WEAPON
+            // Full-width: CURRENT WEAPON (FOV VISUALS moved to the VISUALS tab)
             ImGui::SetCursorPosX(ctX);
-            if (UI::CollapsibleSection("CURRENT WEAPON", halfW))
+            if (UI::CollapsibleSection("CURRENT WEAPON", ctW))
             {
                 static int curIdx = -1;
                 int match = -1;
                 for (int k = 0; k < IM_ARRAYSIZE(wpWeapons); k++)
                     if (Options::WeaponProfiles::CurrentWeapon == wpWeapons[k]) { match = k; break; }
                 curIdx = match;
-                ImGui::SetNextItemWidth(halfW - 28.0f * sc);
-                if (UI::Combo("##curweapon", &curIdx, wpWeapons, IM_ARRAYSIZE(wpWeapons)))
+                ImGui::SetNextItemWidth(ctW - 28.0f * sc);
+                if (UI::Combo("Weapon", &curIdx, wpWeapons, IM_ARRAYSIZE(wpWeapons)))
                     Options::WeaponProfiles::CurrentWeapon =
                         (curIdx >= 0 && curIdx < (int)IM_ARRAYSIZE(wpWeapons)) ? wpWeapons[curIdx] : "";
 
@@ -2230,43 +2337,8 @@ if (tab == 0)
             }
             UI::CollapsibleEnd();
 
-            // Right column: FOV VISUALS
-            ImGui::SetCursorPosY(panelY);
-            ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
-            if (UI::CollapsibleSection("FOV VISUALS", halfW))
-            {
-                UI::labelsection("DISPLAY");
-                UI::Checkbox("Show FOV", &Options::Aimbot::ShowFOV);
-                UI::Checkbox("Show FOV Fill", &Options::Aimbot::ShowFOVFill);
-                UI::Checkbox("Show FOV Text", &Options::Aimbot::ShowFOVText);
-
-                static const char* fovPositions[]{ "Screen Center", "Follow Target" };
-                UI::Combo("FOV Position", &Options::Aimbot::FOVPositionMode, fovPositions, IM_ARRAYSIZE(fovPositions));
-
-                static const char* fovShapes[]{ "Circle", "Square", "Triangle", "Hexagon" };
-                UI::Combo("FOV Shape", &Options::Aimbot::FOVShape, fovShapes, IM_ARRAYSIZE(fovShapes));
-
-                static const char* fovColorModes[]{ "Solid", "Gradient", "Shift", "Pulse" };
-                UI::Combo("FOV Color Mode", &Options::Aimbot::FOVColorMode, fovColorModes, IM_ARRAYSIZE(fovColorModes));
-
-                UI::Checkbox("FOV Glow", &Options::Aimbot::FOVGlow);
-                UI::Checkbox("FOV Breathing", &Options::Aimbot::FOVBreathing);
-                UI::Checkbox("FOV Spin", &Options::Aimbot::FOVSpin);
-
-                UI::labelsection("STYLING");
-                UI::SliderFloat("FOV Thickness", &Options::Aimbot::FOVThickness, 1.0f, 10.0f, "%.1f");
-                if (Options::Aimbot::FOVColorMode == 1 || Options::Aimbot::FOVColorMode == 2)
-                    UI::SliderFloat("Gradient Speed", &Options::Aimbot::FOVGradientSpeed, 0.1f, 5.0f, "%.2f");
-                if (Options::Aimbot::FOVSpin)
-                    UI::SliderFloat("Spin Speed", &Options::Aimbot::FOVSpinSpeed, 0.1f, 5.0f, "%.2f");
-
-                UI::ColorEdit3("FOV Color", Options::Aimbot::FOVColor, ImGuiColorEditFlags_NoInputs);
-                UI::ColorEdit3("FOV Fill", Options::Aimbot::FOVFillColor, ImGuiColorEditFlags_NoInputs);
-            }
-            UI::CollapsibleEnd();
-
-            // Full-width WEAPON PROFILES panel below the two columns
-            ImGui::SetCursorPosY(panelY + 490 * sc + 12.0f * sc);
+            // Full-width WEAPON PROFILES panel below
+            ImGui::SetCursorPosY(panelY + 160 * sc + 12.0f * sc);
             ImGui::SetCursorPosX(ctX);
             if (UI::CollapsibleSection("WEAPON PROFILES", ctW))
             {
@@ -2296,7 +2368,7 @@ if (tab == 0)
                         names.push_back(stable.back().c_str());
                     }
                     int sel = Options::WeaponProfiles::SelectedProfile;
-                    UI::Combo("##profile_sel", &sel, names.data(), (int)names.size());
+                    UI::Combo("Profile", &sel, names.data(), (int)names.size());
                     Options::WeaponProfiles::SelectedProfile = std::clamp(sel, 0, (int)Options::WeaponProfiles::Profiles.size() - 1);
 
                     if (sel >= 0 && sel < (int)Options::WeaponProfiles::Profiles.size())
@@ -2357,6 +2429,29 @@ if (tab == 0)
             }
             UI::CollapsibleEnd();
         }
+        else if (tab2 == 4)
+        {
+            // ── Autoclicker (moved from Movement) ──
+            const float panelY = ImGui::GetCursorPosY();
+            ImGui::SetCursorPosX(ctX);
+            if (UI::CollapsibleSection("AUTOCLICKER", halfW))
+            {
+                UI::labelsection("MAIN");
+                UI::Checkbox("Enabled", &Options::Autoclicker::Enabled);
+                UI::SliderFloat("CPS", &Options::Autoclicker::CPS, 1.f, 100.f, "%.0f");
+                UI::Checkbox("Right Click", &Options::Autoclicker::RightClick);
+                UI::Checkbox("Only On Hold (LMB)", &Options::Autoclicker::OnlyOnHold);
+            }
+            UI::CollapsibleEnd();
+            ImGui::SetCursorPosY(panelY);
+            ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
+            if (UI::CollapsibleSection("BIND", cardW))
+            {
+                UI::labelsection("KEYBIND");
+                UI::Bind("##ac_key", &Options::Autoclicker::Key, &Options::Autoclicker::ToggleType);
+            }
+            UI::CollapsibleEnd();
+        }
 }
 else if (tab == 2)
 {
@@ -2392,7 +2487,7 @@ else if (tab == 1)
         // Content header + horizontal subtab bar
         UI::ContentHeader("VISUALS");
         {
-            static float sa[5] = {};
+            static float sa[6] = {};
             ImGui::SetCursorPosX(ctX);
             if (UI::ContentSubtab("ESP", tab2 == 0, sa[0])) tab2 = 0;
             ImGui::SameLine(0, 6.0f * sc);
@@ -2403,6 +2498,8 @@ else if (tab == 1)
             if (UI::ContentSubtab("Colours", tab2 == 3, sa[3])) tab2 = 3;
             ImGui::SameLine(0, 6.0f * sc);
             if (UI::ContentSubtab("Crosshair", tab2 == 4, sa[4])) tab2 = 4;
+            ImGui::SameLine(0, 6.0f * sc);
+            if (UI::ContentSubtab("FOV", tab2 == 5, sa[5])) tab2 = 5;
             ImGui::Dummy(ImVec2(0, 8 * sc));
         }
 
@@ -2535,7 +2632,7 @@ UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
-if (UI::CollapsibleSection("ESP SETTINGS", halfW))
+if (UI::CollapsibleSection("ESP SETTINGS", cardW))
 {
 	UI::labelsection("BOX");
 	UI::SliderFloat("Box Thickness", &Options::ESP::BoxThickness, 1.0f, 10.0f);
@@ -2548,6 +2645,9 @@ UI::SliderFloat("Skeleton Thickness", &Options::ESP::SkeletonThickness, 1.0f, 10
 UI::labelsection("TEXT");
 UI::SliderFloat("Name Size", &Options::ESP::NameSize, 8.0f, 24.0f, "%.1f");
 UI::SliderFloat("Name Thickness", &Options::ESP::NameThickness, 0.0f, 5.0f, "%.1f");
+UI::SliderFloat("Distance Size", &Options::ESP::DistanceSize, 8.0f, 24.0f, "%.1f");
+UI::SliderFloat("Rig Type Size", &Options::ESP::RigTypeSize, 8.0f, 24.0f, "%.1f");
+UI::SliderFloat("Arrow Size", &Options::ESP::ArrowSize, 8.0f, 32.0f, "%.1f");
 
 UI::labelsection("HEAD");
 UI::SliderFloat("Circle Thickness", &Options::ESP::HeadCircleThickness, 1.0f, 10.0f);
@@ -2638,7 +2738,7 @@ UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
-if (UI::CollapsibleSection("HIT SETTINGS", halfW))
+if (UI::CollapsibleSection("HIT SETTINGS", cardW))
 {
 UI::labelsection("DAMAGE");
 UI::SliderFloat("Min Damage", &Options::Combat::MinDamage, 1.0f, 50.0f, "%.0f");
@@ -2680,7 +2780,7 @@ if (UI::CollapsibleSection("WORLD", halfW))
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
-if (UI::CollapsibleSection("LIGHTING", halfW))
+if (UI::CollapsibleSection("LIGHTING", cardW))
 {
 	UI::labelsection("TIME & BRIGHTNESS");
 	UI::SliderFloat("Clock Time", &Options::World::ClockTime, 0.0f, 24.0f, "%.1f");
@@ -2763,7 +2863,7 @@ UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
-if (UI::CollapsibleSection("FOV & MENU", halfW))
+if (UI::CollapsibleSection("FOV & MENU", cardW))
 {
 UI::labelsection("THEME");
 {
@@ -2914,6 +3014,49 @@ UI::ColorEdit4("Color", Options::Crosshair::Color, ImGuiColorEditFlags_NoInputs)
 }
 UI::CollapsibleEnd();
 }
+else if (tab2 == 5)
+{
+const float panelY = ImGui::GetCursorPosY();
+ImGui::SetCursorPosX(ctX);
+if (UI::CollapsibleSection("FOV VISUALS", halfW))
+{
+UI::labelsection("DISPLAY");
+UI::Checkbox("Show FOV", &Options::Aimbot::ShowFOV);
+UI::Checkbox("Show FOV Fill", &Options::Aimbot::ShowFOVFill);
+UI::Checkbox("Show FOV Text", &Options::Aimbot::ShowFOVText);
+
+static const char* fovPositions[]{ "Screen Center", "Follow Target" };
+UI::Combo("FOV Position", &Options::Aimbot::FOVPositionMode, fovPositions, IM_ARRAYSIZE(fovPositions), halfW);
+
+static const char* fovShapes[]{ "Circle", "Square", "Triangle", "Hexagon" };
+UI::Combo("FOV Shape", &Options::Aimbot::FOVShape, fovShapes, IM_ARRAYSIZE(fovShapes), halfW);
+
+static const char* fovColorModes[]{ "Solid", "Gradient", "Shift", "Pulse" };
+UI::Combo("FOV Color Mode", &Options::Aimbot::FOVColorMode, fovColorModes, IM_ARRAYSIZE(fovColorModes), halfW);
+
+UI::Checkbox("FOV Glow", &Options::Aimbot::FOVGlow);
+UI::Checkbox("FOV Breathing", &Options::Aimbot::FOVBreathing);
+UI::Checkbox("FOV Spin", &Options::Aimbot::FOVSpin);
+}
+UI::CollapsibleEnd();
+
+ImGui::SetCursorPosY(panelY);
+ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
+if (UI::CollapsibleSection("STYLING", halfW))
+{
+UI::labelsection("STYLING");
+UI::SliderFloat("FOV Thickness", &Options::Aimbot::FOVThickness, 1.0f, 10.0f, "%.1f");
+if (Options::Aimbot::FOVColorMode == 1 || Options::Aimbot::FOVColorMode == 2)
+    UI::SliderFloat("Gradient Speed", &Options::Aimbot::FOVGradientSpeed, 0.1f, 5.0f, "%.2f");
+if (Options::Aimbot::FOVSpin)
+    UI::SliderFloat("Spin Speed", &Options::Aimbot::FOVSpinSpeed, 0.1f, 5.0f, "%.2f");
+
+UI::labelsection("COLOURS");
+UI::ColorEdit3("FOV Color", Options::Aimbot::FOVColor, ImGuiColorEditFlags_NoInputs);
+UI::ColorEdit3("FOV Fill", Options::Aimbot::FOVFillColor, ImGuiColorEditFlags_NoInputs);
+}
+UI::CollapsibleEnd();
+}
 }
 else if (tab == 3)
 {
@@ -2993,6 +3136,10 @@ UI::SliderFloat("Snow Size",      &MenuWeather::SnowSize,      0.5f, 4.0f,  "%.1
 UI::SliderFloat("Rain Thickness", &MenuWeather::RainThickness, 0.5f, 3.0f,  "%.1f px");
 ImGui::ColorEdit3 ("Particle Color", MenuWeather::Color, ImGuiColorEditFlags_NoInputs);
 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Falling snowflakes or rain streaks across the menu background. Settings are saved with your config.");
+
+UI::labelsection("EXTERIUM BACKDROP");
+UI::Checkbox("Sword Emblem", &Options::Misc::ExteriumSword);
+if (ImGui::IsItemHovered()) ImGui::SetTooltip("Draws the theme-tinted Exterium sword behind the menu panels.");
 }
 UI::CollapsibleEnd();
 
@@ -3058,7 +3205,7 @@ UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
-        if (UI::CollapsibleSection("SETTINGS", halfW))
+if (UI::CollapsibleSection("SETTINGS", cardW))
         {
             UI::labelsection("PARAMETERS");
             UI::SliderFloat("Fly Speed", &Options::Fly::Speed, 10.f, 200.f, "%.0f");
@@ -3067,23 +3214,8 @@ ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
             UI::Bind("##fly_key", &Options::Fly::FlyKey, &Options::Fly::ToggleType);
         }
         UI::CollapsibleEnd();
-
-        ImGui::SetCursorPosY(panelY + 476 * sc);
-        ImGui::SetCursorPosX(ctX);
-        if (UI::CollapsibleSection("AUTOCLICKER", halfW))
-        {
-            UI::labelsection("MAIN");
-            UI::Checkbox("Enabled", &Options::Autoclicker::Enabled);
-            UI::SliderFloat("CPS", &Options::Autoclicker::CPS, 1.f, 100.f, "%.0f");
-            UI::Checkbox("Right Click", &Options::Autoclicker::RightClick);
-            UI::Checkbox("Only On Hold (LMB)", &Options::Autoclicker::OnlyOnHold);
-
-            UI::labelsection("KEYBIND");
-            UI::Bind("##ac_key", &Options::Autoclicker::Key, &Options::Autoclicker::ToggleType);
-        }
-        UI::CollapsibleEnd();
 }
-else if (tab2 == 1) {
+    else if (tab2 == 1) {
 const float panelY = ImGui::GetCursorPosY();
 ImGui::SetCursorPosX(ctX);
 if (UI::CollapsibleSection("WALKSPEED", halfW))
@@ -3095,7 +3227,7 @@ UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
-if (UI::CollapsibleSection("SETTINGS", halfW))
+if (UI::CollapsibleSection("SETTINGS", cardW))
 {
 UI::labelsection("PARAMETERS");
 UI::SliderFloat("Walk Speed", &Options::WalkSpeed::Speed, 16.f, 1000.f, "%.0f");
@@ -3117,7 +3249,7 @@ UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
-if (UI::CollapsibleSection("SETTINGS", halfW))
+if (UI::CollapsibleSection("SETTINGS", cardW))
 {
 UI::labelsection("RATE");
 UI::SliderFloat("Tick Rate", &Options::TickRate::Rate, 10.0f, 1000.0f, "%.0f");
@@ -3149,7 +3281,7 @@ UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
-if (UI::CollapsibleSection("SETTINGS", halfW))
+if (UI::CollapsibleSection("SETTINGS", cardW))
 {
 UI::labelsection("TOGGLE");
 static const char* noclipModes[]{ "Hold", "Toggle", "Always On" };
@@ -3198,7 +3330,7 @@ UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
-if (UI::CollapsibleSection("SETTINGS", halfW))
+if (UI::CollapsibleSection("SETTINGS", cardW))
 {
 UI::labelsection("PARAMETERS");
 UI::SliderFloat("Fling Force", &Options::RampFling::FlingForce, 10.f, 300.f, "%.0f");
@@ -3222,7 +3354,7 @@ UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
-if (UI::CollapsibleSection("SETTINGS", halfW))
+if (UI::CollapsibleSection("SETTINGS", cardW))
 {
 UI::labelsection("CONTROLS");
 UI::SliderFloat("Spin Speed", &Options::Spin360::Speed, 1.0f, 45.0f, "%.1f deg/tick");
@@ -3246,7 +3378,7 @@ UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
 ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
-if (UI::CollapsibleSection("HIP HEIGHT", halfW))
+if (UI::CollapsibleSection("HIP HEIGHT", cardW))
 {
 UI::labelsection("MAIN");
 UI::Checkbox("Enabled##hipheight", &Options::HipHeight::Enabled);
@@ -3257,7 +3389,7 @@ UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 8.0f * sc);
 ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
-if (UI::CollapsibleSection("FREE CAM", halfW))
+if (UI::CollapsibleSection("FREE CAM", cardW))
 {
 UI::labelsection("MAIN");
 UI::Checkbox("Enabled##freecam", &Options::FreeCam::Enabled);
@@ -3268,7 +3400,7 @@ UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 8.0f * sc);
 ImGui::SetCursorPosX(ctX + halfW + UI::ColGap);
-if (UI::CollapsibleSection("STRETCH RES", halfW))
+if (UI::CollapsibleSection("STRETCH RES", cardW))
 {
 UI::labelsection("MAIN");
 UI::Checkbox("Enabled##stretchres", &Options::StretchRes::Enabled);
@@ -3445,6 +3577,8 @@ else if (tab == 7)
     }
     ImGui::EndChild();
 }
+    ImGui::EndChild(); // ##content_area
+    ImGui::PopStyleColor();
 
 ImGui::PopFont();
 }
@@ -3602,6 +3736,7 @@ line.c_str());
 
 if (IsGameOnTop("Roblox"))
 {
+	AntiKatanaFiringBlocked();
 	CombatFeedback::Update();
 	if (!menu_open)
 	{
@@ -3616,6 +3751,8 @@ if (IsGameOnTop("Roblox"))
 
 	RenderAdvancedFOV(ImGui::GetBackgroundDrawList());
 	RenderCrosshair(ImGui::GetBackgroundDrawList());
+	if (Options::Rivals::KatanaAlert && AnyRivalsKatanaUser())
+		RenderKatanaAlert(ImGui::GetBackgroundDrawList());
 	CombatFeedback::Render(ImGui::GetBackgroundDrawList());
 	RenderESP(ImGui::GetBackgroundDrawList());
 
@@ -3637,12 +3774,6 @@ MenuWeather::Render(ImGui::GetBackgroundDrawList(), ImVec2(0.0f, 0.0f), displayS
 }
 
 RenderKeybindList(ImGui::GetBackgroundDrawList());
-
-std::string str = SX("S") + std::string(" | ") + std::to_string(static_cast<int>(io.Framerate)) + " FPS";
-ImVec2 textSize = ImGui::CalcTextSize(str.c_str());
-ImVec2 pos = ImVec2(io.DisplaySize.x - textSize.x - 10.0f, 10.0f);
-ImDrawList* drawList = ImGui::GetBackgroundDrawList();
-drawList->AddText(pos, IM_COL32(255, 255, 255, 255), str.c_str());
 }
 
 if (Options::Misc::ExplorerEnabled)

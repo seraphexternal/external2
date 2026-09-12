@@ -1545,8 +1545,9 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
     const ImVec2 rectMax(origin.x + size.x, origin.y + size.y);
 
     drawList->PushClipRect(rectMin, rectMax, true);
-    drawList->AddRectFilled(rectMin, rectMax, IM_COL32(8, 8, 8, 255), 4.0f);
-    drawList->AddRect(rectMin, rectMax, IM_COL32(27, 27, 27, 255), 4.0f);
+    // Dark purple-gray background matching menu theme
+    drawList->AddRectFilled(rectMin, rectMax, IM_COL32(15, 12, 22, 255), 4.0f);
+    drawList->AddRect(rectMin, rectMax, IM_COL32(40, 30, 55, 255), 4.0f);
 
     // Perspective grid floor (3D-like depth)
     {

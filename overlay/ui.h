@@ -16,18 +16,18 @@
 namespace UI
 {
     // ── EXTERIUM style values ──────────────────────────────────────
-    inline const ImColor main_color = ImColor(230, 134, 224, 255);
+    inline ImColor main_color = ImColor(230, 134, 224, 255);
     inline const ImVec4 text_color[3] = {
         ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
         ImVec4(1.0f, 1.0f, 1.0f, 200.0f / 255.0f),
         ImVec4(1.0f, 1.0f, 1.0f, 150.0f / 255.0f) };
-    inline const ImVec4 background_color(13.0f / 255.0f, 14.0f / 255.0f, 16.0f / 255.0f, 200.0f / 255.0f);
+    inline ImVec4 background_color(13.0f / 255.0f, 14.0f / 255.0f, 16.0f / 255.0f, 200.0f / 255.0f);
     inline const ImVec4 second_color(1.0f, 1.0f, 1.0f, 20.0f / 255.0f);
-    inline const ImVec4 stroke_color(35.0f / 255.0f, 35.0f / 255.0f, 35.0f / 255.0f, 1.0f);
-    inline const ImVec4 child_color(19.0f / 255.0f, 19.0f / 255.0f, 19.0f / 255.0f, 1.0f);
-    inline const ImVec4 scroll_bg_col(24.0f / 255.0f, 24.0f / 255.0f, 24.0f / 255.0f, 1.0f);
-    inline const ImVec4 winbg_color(15.0f / 255.0f, 16.0f / 255.0f, 18.0f / 255.0f, 200.0f / 255.0f);
-    inline ImVec2 frame_size = ImVec2(305.0f, 46.0f);
+    inline ImVec4 stroke_color(35.0f / 255.0f, 35.0f / 255.0f, 35.0f / 255.0f, 1.0f);
+    inline ImVec4 child_color(19.0f / 255.0f, 19.0f / 255.0f, 19.0f / 255.0f, 1.0f);
+    inline ImVec4 scroll_bg_col(24.0f / 255.0f, 24.0f / 255.0f, 24.0f / 255.0f, 1.0f);
+    inline ImVec4 winbg_color(15.0f / 255.0f, 16.0f / 255.0f, 18.0f / 255.0f, 200.0f / 255.0f);
+    inline ImVec2 frame_size = ImVec2(340.0f, 46.0f);
     inline const float round_4 = 4.0f;
     inline const float round_5 = 5.0f;
     inline const float round_360 = 360.0f;
@@ -93,8 +93,8 @@ namespace UI
     inline float SidebarX = 10.0f;
     inline float SidebarW = 187.0f;
     inline float ContentX = 197.0f;
-    inline float ContentW = 630.0f;
-    inline float CardW = 305.0f;
+    inline float ContentW = 800.0f;
+    inline float CardW = 340.0f;
     inline float CardH = 532.0f;
     inline float ColGap = 10.0f;
     static const float RADIUS    = 10.0f;
@@ -553,7 +553,7 @@ namespace UI
     struct ComboState { bool opened = false; float anim = 0.0f; };
     static std::map<ImGuiID, ComboState> combo_states;
 
-    static inline bool Combo(const char* label, int* current_item, const char* const items[], int items_count)
+    static inline bool Combo(const char* label, int* current_item, const char* const items[], int items_count, float width_override = 0.0f)
     {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
         if (window->SkipItems) return false;
@@ -563,7 +563,8 @@ namespace UI
         const float Sc = sc;
 
         const ImVec2 pos = ImGui::GetCursorScreenPos();
-        const ImRect total_bb(pos, pos + ImVec2(frame_size.x * Sc, frame_size.y * Sc));
+        const float cw = width_override > 0.0f ? width_override : frame_size.x * Sc;
+        const ImRect total_bb(pos, pos + ImVec2(cw, frame_size.y * Sc));
         ImGui::ItemSize(total_bb, ImGui::GetStyle().ItemSpacing.y * 0.5f);
         if (!ImGui::ItemAdd(total_bb, id)) return false;
 
@@ -573,9 +574,9 @@ namespace UI
         const char* preview_value = (current_item && *current_item >= 0 && *current_item < items_count) ? items[*current_item] : NULL;
         const ImVec2 preview_sz = preview_value ? CalcText(small_font, 17.0f * Sc, preview_value) : ImVec2(0, 0);
 
-        const ImRect rect_bb(ImVec2(total_bb.Max.x - (22.0f + preview_sz.x) * Sc, total_bb.Min.y + 11.0f * Sc),
-                             ImVec2(total_bb.Max.x - 14.0f * Sc, total_bb.Max.y - 11.0f * Sc));
-        const ImRect arrow_bb(ImVec2(total_bb.Max.x - 25.0f * Sc, total_bb.Min.y + 20.0f * Sc),
+        const ImRect rect_bb(ImVec2(total_bb.Max.x - (56.0f + preview_sz.x) * Sc, total_bb.Min.y + 11.0f * Sc),
+                             ImVec2(total_bb.Max.x - 40.0f * Sc, total_bb.Max.y - 11.0f * Sc));
+        const ImRect arrow_bb(ImVec2(total_bb.Max.x - 33.0f * Sc, total_bb.Min.y + 20.0f * Sc),
                               ImVec2(total_bb.Max.x - 4.0f * Sc, total_bb.Max.y - 4.0f * Sc));
         const ImVec2 label_pos(total_bb.Min.x + 12.0f * Sc, total_bb.Min.y + 12.0f * Sc);
 
@@ -627,8 +628,8 @@ namespace UI
             const float rate = 1.0f - expf(-io.DeltaTime * 12.0f);
             state.anim += (1.0f - state.anim) * rate;
             if (state.anim > 0.999f) state.anim = 1.0f;
-            ImGui::SetNextWindowSize(ImVec2(rect_bb.GetWidth(), target_size * EaseOutCubic(state.anim)));
-            ImGui::SetNextWindowPos(ImVec2(rect_bb.Min.x, rect_bb.Max.y + 5.0f * Sc), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(total_bb.GetWidth(), target_size * EaseOutCubic(state.anim)));
+            ImGui::SetNextWindowPos(ImVec2(total_bb.Min.x, rect_bb.Max.y + 5.0f * Sc), ImGuiCond_Always);
         }
 
         if (popup_open && ImGui::BeginPopup(label))
@@ -645,7 +646,7 @@ namespace UI
                 if (i > 0) ImGui::Dummy(ImVec2(0.0f, 2.0f * Sc));
                 ImGui::PushID(i);
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 0.0f);
-                if (ImGui::Selectable(items[i], *current_item == i, 0, ImVec2(rect_bb.GetWidth(), 28.0f * Sc)))
+                if (ImGui::Selectable(items[i], *current_item == i, 0, ImVec2(total_bb.GetWidth(), 28.0f * Sc)))
                 {
                     *current_item = i;
                     value_changed = true;
@@ -1042,12 +1043,12 @@ dl->AddText(ImVec2(total_bb.Min.x + 12.0f * Sc, total_bb.Min.y + (frame_size.y *
 
         if (begin_child)
         {
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, U(child_color));
-            ImGui::PushStyleColor(ImGuiCol_Border, U(stroke_color));
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0)); // transparent
+            ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0)); // no border
             ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, round_5 * Sc);
-            ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 0.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-            ImGui::BeginChild(label, ImVec2(width, 0), true, ImGuiWindowFlags_NoScrollWithMouse);
+            ImGui::BeginChild(label, ImVec2(width, 0), false, 0);
         }
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1170,27 +1171,128 @@ dl->AddText(ImVec2(total_bb.Min.x + 12.0f * Sc, total_bb.Min.y + (frame_size.y *
         dl->PopClipRect();
     }
 
-    // ── global style ──────────────────────────────────────────────
-    static inline void ApplyStyle(ImVec4 /*accent*/, ImVec4 /*bg*/, ImVec4 /*panel*/)
+    // ── Exterium sword emblem (procedural, theme-tinted) ──────────
+    // A large stylized sword (blade + crossguard + grip + pommel) drawn
+    // behind the content, echoing the theme accent and gently swaying.
+    inline void ExteriumSword_Render(ImDrawList* dl, const ImVec2& origin, const ImVec2& size, float menuAlpha)
     {
-        const float cx = 230.0f / 255.0f, cy = 134.0f / 255.0f, cz = 224.0f / 255.0f;
+        const ImVec4 mc = ImVec4(main_color.Value.x, main_color.Value.y, main_color.Value.z, 1.0f);
+        const ImU32 accent = U(mc);
+        const float t = (float)ImGui::GetTime();
+        const ImU32 bladeCol  = (accent & 0x00FFFFFFu) | ((ImU32)(int)(0.035f * menuAlpha * 255.0f) << 24);
+        const ImU32 edgeCol   = (accent & 0x00FFFFFFu) | ((ImU32)(int)(0.075f * menuAlpha * 255.0f) << 24);
+        const ImU32 hintCol   = (accent & 0x00FFFFFFu) | ((ImU32)(int)(0.14f  * menuAlpha * 255.0f) << 24);
 
-        P.accent    = ImVec4(cx, cy, cz, 1.0f);
-        P.accent2   = ImVec4(0.73f, 0.33f, 0.83f, 1.0f);
-        P.accentHover = ImVec4(0.95f, 0.63f, 0.93f, 1.0f);
-        P.accentDim = ImVec4(cx, cy, cz, 0.35f);
-        P.accentSoft = ImVec4(cx, cy, cz, 0.12f);
-        P.accentGlow = ImVec4(cx, cy, cz, 0.25f);
-        P.glow      = P.accentGlow;
-        P.glowPurple = ImVec4(0.55f, 0.25f, 0.95f, 0.22f);
+        const float L = ImClamp(size.y * 0.42f, 220.0f, 460.0f); // blade length (px)
+        const float w = L * 0.078f;                              // blade width
+        const float hx = L * 0.26f;                              // crossguard half-width
+        const float hy = w * 0.55f;                              // crossguard thickness
+        const float gx = w * 0.34f;                              // grip width
+        const float gy = L * 0.16f;                              // grip length
+        const float pr = w * 0.46f;                              // pommel radius
+
+        const float sway = sinf(t * 0.4f) * 0.06f;               // gentle idle rotation
+        const float bob  = sinf(t * 0.6f) * 4.0f;                // subtle vertical drift
+        const float ca = cosf(sway), sa = sinf(sway);
+        const ImVec2 c = ImVec2(origin.x + size.x * 0.85f, origin.y + size.y * 0.52f + bob);
+
+        auto R = [&](float lx, float ly) -> ImVec2
+        {
+            return ImVec2(c.x + lx * ca - ly * sa, c.y + lx * sa + ly * ca);
+        };
+
+        dl->PushClipRect(origin, origin + size, true);
+
+        // blade outline (slightly wider path beneath the fill for an edge)
+        {
+            ImVec2 bpts[5];
+            bpts[0] = R(0.0f, -L);
+            bpts[1] = R(w, -L * 0.44f);
+            bpts[2] = R(w * 0.62f, 0.0f);
+            bpts[3] = R(-w * 0.62f, 0.0f);
+            bpts[4] = R(-w, -L * 0.44f);
+            dl->AddPolyline(bpts, 5, edgeCol, ImDrawFlags_Closed, w * 0.35f);
+        }
+        // blade fill
+        {
+            ImVec2 fpts[5];
+            fpts[0] = R(0.0f, -L);
+            fpts[1] = R(w * 0.86f, -L * 0.46f);
+            fpts[2] = R(w * 0.52f, 0.0f);
+            fpts[3] = R(-w * 0.52f, 0.0f);
+            fpts[4] = R(-w * 0.86f, -L * 0.46f);
+            dl->AddConvexPolyFilled(fpts, 5, bladeCol);
+        }
+        // fuller (center ridge toward the tip)
+        dl->AddLine(R(0.0f, 0.0f), R(0.0f, -L * 0.78f), edgeCol, w * 0.10f);
+        // crossguard (faceted diamond bar)
+        {
+            ImVec2 gpts[6];
+            gpts[0] = R(-hx, 0.0f);
+            gpts[1] = R(-hx * 0.72f, -hy);
+            gpts[2] = R(hx * 0.72f, -hy);
+            gpts[3] = R(hx, 0.0f);
+            gpts[4] = R(hx * 0.72f, hy);
+            gpts[5] = R(-hx * 0.72f, hy);
+            dl->AddConvexPolyFilled(gpts, 6, edgeCol);
+        }
+        // grip + pommel
+        {
+            ImVec2 gpts[4];
+            gpts[0] = R(-gx, hy);
+            gpts[1] = R(gx, hy);
+            gpts[2] = R(gx, hy + gy);
+            gpts[3] = R(-gx, hy + gy);
+            dl->AddConvexPolyFilled(gpts, 4, edgeCol);
+        }
+        dl->AddCircleFilled(R(0.0f, hy + gy + pr), pr, edgeCol, 16);
+        dl->AddCircleFilled(R(0.0f, hy + gy + pr), pr * 0.38f, hintCol, 12);
+
+        // tip sparkle
+        const ImVec2 tip = R(0.0f, -L);
+        dl->AddCircleFilled(tip, w * 0.28f, hintCol, 16);
+        dl->PopClipRect();
+    }
+
+    // ── global style ──────────────────────────────────────────────
+    static inline void ApplyStyle(ImVec4 accent, ImVec4 accent2, ImVec4 bg, ImVec4 panel)
+    {
+        const float cx = accent.x, cy = accent.y, cz = accent.z;
+        const float ax = accent2.x, ay = accent2.y, az = accent2.z;
+
+        // drive the UI helper accent used across all widgets + ExteriumBG
+        main_color = ImColor((int)(cx * 255), (int)(cy * 255), (int)(cz * 255), 255);
+
+        // accent palette
+        P.accent      = ImVec4(cx, cy, cz, 1.0f);
+        P.accent2     = ImVec4(ax, ay, az, 1.0f);
+        P.accentHover = ImVec4(ImClamp(cx + 0.12f, 0.f, 1.f), ImClamp(cy + 0.12f, 0.f, 1.f), ImClamp(cz + 0.12f, 0.f, 1.f), 1.0f);
+        P.accentDim   = ImVec4(cx, cy, cz, 0.35f);
+        P.accentSoft  = ImVec4(cx, cy, cz, 0.12f);
+        P.accentGlow  = ImVec4(cx, cy, cz, 0.25f);
+        P.glow        = P.accentGlow;
+        P.glowPurple  = ImVec4(ax, ay, az, 0.22f);
+
+        // background / surface derived from bg + panel
+        winbg_color   = bg;
+        background_color = ImVec4(panel.x, panel.y, panel.z, 200.0f / 255.0f);
+        child_color   = panel;
+        P.card        = panel;
+        P.cardHov     = ImVec4(ImClamp(panel.x + 0.02f, 0.f, 1.f), ImClamp(panel.y + 0.02f, 0.f, 1.f), ImClamp(panel.z + 0.02f, 0.f, 1.f), 1.0f);
+        P.surface     = ImVec4(bg.x, bg.y, bg.z, 1.0f);
+        P.surfaceAlt  = ImVec4(ImClamp(bg.x + 0.02f, 0.f, 1.f), ImClamp(bg.y + 0.02f, 0.f, 1.f), ImClamp(bg.z + 0.02f, 0.f, 1.f), 1.0f);
+        P.surfaceHi   = ImVec4(ImClamp(bg.x + 0.04f, 0.f, 1.f), ImClamp(bg.y + 0.04f, 0.f, 1.f), ImClamp(bg.z + 0.04f, 0.f, 1.f), 1.0f);
+
+        // border derived from panel
+        float bx = ImClamp(panel.x * 1.6f, 0.f, 1.f);
+        float by = ImClamp(panel.y * 1.6f, 0.f, 1.f);
+        float bz = ImClamp(panel.z * 1.6f, 0.f, 1.f);
+        stroke_color  = ImVec4(bx, by, bz, 1.0f);
+        P.borderDim   = stroke_color;
+        scroll_bg_col = ImVec4(ImClamp(bg.x + 0.03f, 0.f, 1.f), ImClamp(bg.y + 0.03f, 0.f, 1.f), ImClamp(bg.z + 0.03f, 0.f, 1.f), 1.0f);
+
         P.divider   = ImVec4(1, 1, 1, 0.06f);
         P.line      = ImVec4(1, 1, 1, 0.06f);
-        P.card      = child_color;
-        P.cardHov   = ImVec4(26.0f / 255.0f, 26.0f / 255.0f, 26.0f / 255.0f, 1.0f);
-        P.surface   = ImVec4(13.0f / 255.0f, 14.0f / 255.0f, 16.0f / 255.0f, 1.0f);
-        P.surfaceAlt = ImVec4(17.0f / 255.0f, 17.0f / 255.0f, 17.0f / 255.0f, 1.0f);
-        P.surfaceHi = ImVec4(23.0f / 255.0f, 23.0f / 255.0f, 23.0f / 255.0f, 1.0f);
-        P.borderDim = stroke_color;
         P.track     = second_color;
         P.shadow    = ImVec4(0, 0, 0, 0.3f);
         P.textStrong = ImVec4(1, 1, 1, 1.0f);
@@ -1201,14 +1303,14 @@ dl->AddText(ImVec2(total_bb.Min.x + 12.0f * Sc, total_bb.Min.y + (frame_size.y *
         P.good      = ImVec4(0.28f, 0.82f, 0.50f, 1.0f);
         P.bad       = ImVec4(1.0f, 0.31f, 0.41f, 1.0f);
 
-        // global style for the few stock widgets that still render
+        // ImGui global style
         ImGuiStyle& g = ImGui::GetStyle();
         ImVec4* c = g.Colors;
         c[ImGuiCol_Text]                  = ImVec4(1, 1, 1, 0.85f);
         c[ImGuiCol_TextDisabled]          = ImVec4(1, 1, 1, 0.30f);
         c[ImGuiCol_WindowBg]              = winbg_color;
         c[ImGuiCol_ChildBg]               = child_color;
-        c[ImGuiCol_PopupBg]               = ImVec4(13.0f / 255.0f, 14.0f / 255.0f, 16.0f / 255.0f, 0.94f);
+        c[ImGuiCol_PopupBg]               = ImVec4(bg.x, bg.y, bg.z, 0.94f);
         c[ImGuiCol_Border]                = stroke_color;
         c[ImGuiCol_BorderShadow]          = ImVec4(0, 0, 0, 0);
         c[ImGuiCol_FrameBg]               = second_color;

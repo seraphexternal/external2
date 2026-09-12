@@ -1,0 +1,2 @@
+@echo off
+"C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" C:\Users\ncomp\source\repos\BackupExternal\Seraph\Seraph.vcxproj /t:ClCompile /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:VCToolsVersion=14.44.35207 /p:WindowsTargetPlatformVersion=10.0 /v:detailed /nologo 2>&1 | findstr /C:"cl.exe" /C:"/IC" /C:"/D" /C:"VC\Tools" /C:"error C"

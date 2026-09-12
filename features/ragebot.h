@@ -179,6 +179,11 @@ inline void RunRagebot()
         return;
     }
 
+    // Anti-katana: stop firing while any enemy holds a katana, including
+    // releasing a fire button that is already held so an in-progress shot halts.
+    if (AntiKatanaFiringBlocked())
+        return;
+
     if (!Globals::Roblox::Camera.address)
         return;
 
@@ -374,7 +379,7 @@ inline void RageKillLoop()
             RageVisual::realPos = realPos;
             RageVisual::hasGhost = Options::Rage::ShowGhost;
 
-            if (Options::Rage::KillOnOrbit)
+            if (Options::Rage::KillOnOrbit && !AntiKatanaFiringBlocked())
             {
                 // Briefly teleport the real character next to the target so the
                 // hit registers, auto-fire, then restore so the player can walk.

@@ -67,11 +67,13 @@ struct VERTEX_CONSTANT_BUFFER
 
 static void ImGui_ImplDX11_SetupRenderState(ImDrawData* draw_data, ID3D11DeviceContext* ctx)
 {
-    // Setup viewport
+    // Setup viewport (honor FramebufferScale for half-res back buffers)
+    const float fb_sx = (draw_data->FramebufferScale.x > 0.0f) ? draw_data->FramebufferScale.x : 1.0f;
+    const float fb_sy = (draw_data->FramebufferScale.y > 0.0f) ? draw_data->FramebufferScale.y : 1.0f;
     D3D11_VIEWPORT vp;
     memset(&vp, 0, sizeof(D3D11_VIEWPORT));
-    vp.Width = draw_data->DisplaySize.x;
-    vp.Height = draw_data->DisplaySize.y;
+    vp.Width = draw_data->DisplaySize.x * fb_sx;
+    vp.Height = draw_data->DisplaySize.y * fb_sy;
     vp.MinDepth = 0.0f;
     vp.MaxDepth = 1.0f;
     vp.TopLeftX = vp.TopLeftY = 0;
@@ -169,10 +171,12 @@ void ImGui_ImplDX11_RenderDrawData(ImDrawData* draw_data)
         if (ctx->Map(g_pVertexConstantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_resource) != S_OK)
             return;
         VERTEX_CONSTANT_BUFFER* constant_buffer = (VERTEX_CONSTANT_BUFFER*)mapped_resource.pData;
+        const float fb_sx = (draw_data->FramebufferScale.x > 0.0f) ? draw_data->FramebufferScale.x : 1.0f;
+        const float fb_sy = (draw_data->FramebufferScale.y > 0.0f) ? draw_data->FramebufferScale.y : 1.0f;
         float L = draw_data->DisplayPos.x;
-        float R = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
+        float R = draw_data->DisplayPos.x + draw_data->DisplaySize.x * fb_sx;
         float T = draw_data->DisplayPos.y;
-        float B = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
+        float B = draw_data->DisplayPos.y + draw_data->DisplaySize.y * fb_sy;
         float mvp[4][4] =
         {
             { 2.0f / (R - L),   0.0f,           0.0f,       0.0f },

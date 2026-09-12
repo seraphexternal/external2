@@ -27,7 +27,7 @@ using namespace DirectX;
 
 // Minimal stand-in for the donor project's color constants (used as the model
 // render-target clear color). Transparent so only the model shows over the player.
-namespace colors { inline ImVec4 child_fill{ 0.f, 0.f, 0.f, 0.f }; }
+namespace colors { inline ImVec4 child_fill{ 0.05f, 0.05f, 0.08f, 1.0f }; }
 
 namespace Preview3D
 {

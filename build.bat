@@ -1,0 +1,3 @@
+@echo off
+set PATH=C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64;C:\WINDOWS\Microsoft.NET\Framework64\v4.0.30319;%PATH%
+"C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" C:\Users\ncomp\source\repos\BackupExternal\Seraph\Seraph.vcxproj /t:Rebuild /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:VCToolsVersion=14.30.30705 /p:VCInstallDir="C:\Program Files\Microsoft Visual Studio\2022\Community\VC" /p:WindowsTargetPlatformVersion=10.0.26100.0 /m /v:minimal /nologo

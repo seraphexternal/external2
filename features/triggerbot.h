@@ -251,6 +251,12 @@ inline void RunTriggerbot()
     if (!Options::Triggerbot::Enabled)
         return;
 
+    // Anti-katana: completely stop firing while any enemy holds a katana
+    // (Rivals katana deflects bullets back onto the shooter). Also releases
+    // a fire button that is already held so an in-progress shot halts too.
+    if (AntiKatanaFiringBlocked())
+        return;
+
     // per-second diagnostic counters
     static long long tbCalls = 0, tbCacheEmpty = 0, tbNoHRP = 0, tbPlayers = 0,
                      tbRangeSkip = 0, tbW2sFail = 0, tbNotFound = 0, tbFound = 0,

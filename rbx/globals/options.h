@@ -34,8 +34,10 @@ namespace Options
 		inline char TargetPlayer[32] = "";
 		inline bool ExplorerEnabled = false;
 		inline bool PlayerListEnabled = false;
-		inline float MenuScale = 1.0f;
+		inline float MenuScale = 0.9f;
 		inline bool ThirdPerson = false;
+		// Theme-tinted Exterium sword emblem drawn in the menu backdrop.
+		inline bool ExteriumSword = true;
 
 		// ── Stealth ──
 		inline bool HideFromTabs = true;     // WS_EX_TOOLWINDOW + remove from taskbar
@@ -727,6 +729,7 @@ inline bool Enabled = true;
 		inline bool IgnoreSmoke = false;
 		inline bool IgnoreFlash = false;
 		inline bool AntiKatana = false;
+		inline bool KatanaAlert = false;
 	}
 
 	namespace RivalsSkinChanger
@@ -950,4 +953,30 @@ inline bool Enabled = true;
 		inline int MaxProfiles = 10;
 		inline std::string CurrentWeapon;    // manually selected current weapon (Rivals doesn't expose it as a Tool)
 	}
+}
+
+// ── Anti-katana firing suppressor ────────────────────────────────────
+// Rivals katana deflects bullets back at the shooter. Besides simply skipping
+// katana-wielding targets during target selection, this helper also stops a
+// burst that is ALREADY in progress: the moment an enemy pulls a katana it
+// releases a held fire button (MOUSEEVENTF_LEFTUP) so hold-to-fire / silent
+// hold / kill-orbit auto-fire really halt instead of just no *new* clicks
+// being injected. Returns true while firing should be suppressed.
+inline bool AntiKatanaFiringBlocked()
+{
+    static bool wasKatana = false;
+    const bool katana = Options::Rivals::AntiKatana && AnyRivalsKatanaUser();
+
+    if (katana && !wasKatana)
+    {
+        if (GetAsyncKeyState(VK_LBUTTON) & 0x8000)
+        {
+            INPUT up = {};
+            up.type = INPUT_MOUSE;
+            up.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+            SendInput(1, &up, sizeof(INPUT));
+        }
+    }
+    wasKatana = katana;
+    return katana;
 }

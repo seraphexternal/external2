@@ -38,6 +38,11 @@ inline void AutoClickerLoop()
         if (!active)
             continue;
 
+        // Anti-katana: halt while any enemy holds a katana (Rivals deflects
+        // bullets back at the shooter) and release the button if already held.
+        if (AntiKatanaFiringBlocked())
+            continue;
+
         if (Options::Autoclicker::OnlyOnHold &&
             (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0)
             continue;

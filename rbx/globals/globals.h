@@ -82,19 +82,22 @@ namespace Globals
         inline int LocalPlayerTeamColor = 0;
         inline int LocalPlayerTeamBrickColor = 0;
         inline std::string LocalPlayerTeamName = "";
-        inline int lastPlaceID;
+        inline __int64 lastPlaceID;
         inline std::string gameName = "Unknown";
         inline bool isPhantomForces = false;
-        inline constexpr int PHANTOM_FORCES_ID = 292439477;
+        inline constexpr __int64 PHANTOM_FORCES_ID = 292439477;
 		inline bool isRivals = false;
-		inline constexpr int RIVALS_ID = (int)17625359962;
+		inline constexpr __int64 RIVALS_ID = 117398147513099; // RIVALS (Nosniy Games) match place
+		inline constexpr __int64 RIVALS_LOBBY_ID = 17625359962; // RIVALS lobby / root place
+		inline constexpr __int64 RIVALS_HUB_ID = 3806411531; // RIVALS hub / tutorial place
+		inline bool IsRivalsPlace(__int64 id) { return id == RIVALS_ID || id == RIVALS_LOBBY_ID || id == RIVALS_HUB_ID; }
 		inline bool isOverkill = false;
-		inline constexpr int OVERKILL_ID = (int)124842176624983;
+		inline constexpr __int64 OVERKILL_ID = 124842176624983;
 
 		inline bool isMM2 = false;
-		inline constexpr int MM2_ID = 142823291; // Murder Mystery 2
+		inline constexpr __int64 MM2_ID = 142823291; // Murder Mystery 2
 		inline bool isBladeBall = false;
-		inline constexpr int BLADEBALL_ID = (int)13772394625; // Blade Ball
+		inline constexpr __int64 BLADEBALL_ID = 13772394625; // Blade Ball
     }
 
     namespace BladeBall
@@ -542,9 +545,32 @@ inline RobloxInstance ResolveCharacterFallback(uintptr_t playerAddress)
 
 // Looks for a Tool/HopperBin instance among the given instance's children (one
 // level deep, plus a shallow recursion into folders) and returns its name.
+inline bool IsWeaponLikeName(const std::string& name)
+{
+    if (name.empty())
+        return false;
+    std::string lower = name;
+    for (auto& ch : lower)
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    static const char* kws[] = {
+        "katana", "sword", "blade", "knife", "dagger",
+        "rifle", "sniper", "bow", "uzi", "handgun", "pistol",
+        "shotgun", "revolver", "minigun", "rpg", "crossbow",
+        "pepper", "smg", "scar", "carbine", "ak-", "deagle",
+        "vector", "mp5", "mp7", "p90", "fal", "g3", "m4a1",
+        "m4", "ak47", "akm", "lmg", "desert", "grappling",
+        "hammer", "axe", "bat", "tonfa", "stun", "gun",
+        "trident", "lance", "staff", "reaper", "cutter"
+    };
+    for (auto kw : kws)
+        if (lower.find(kw) != std::string::npos)
+            return true;
+    return false;
+}
+
 inline std::string FindToolName(const RobloxInstance& inst, int depth)
 {
-    if (inst.address == 0 || depth > 3)
+    if (inst.address == 0 || depth > 7)
         return "";
 
     for (auto& child : inst.GetChildren())
@@ -553,16 +579,20 @@ inline std::string FindToolName(const RobloxInstance& inst, int depth)
             return child.Name();
     }
 
-    // Recurse into folders / tool wrappers
+    // Recurse to find weapon-like containers (weapons in Rivals are Models,
+    // often nested deeper inside Backpack folders/slots). Descend every child
+    // class (not just folders/models) since the search is rooted at the
+    // Character/Backpack subtrees, which stay small; the depth cap bounds it.
     for (auto& child : inst.GetChildren())
     {
         auto c = child.Class();
-        if (c == "Folder" || c == "Model" || c == "Part")
-        {
-            auto inner = FindToolName(child, depth + 1);
-            if (!inner.empty())
-                return inner;
-        }
+        if (c == "Tool" || c == "HopperBin")
+            continue;
+        if (c == "Model" && IsWeaponLikeName(child.Name()))
+            return child.Name();
+        auto inner = FindToolName(child, depth + 1);
+        if (!inner.empty())
+            return inner;
     }
 
     return "";
@@ -617,4 +647,20 @@ inline bool CaseInsensitiveFind(const std::string& hay, const char* needle)
     for (auto& ch : lower)
         ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     return lower.find(needle) != std::string::npos;
+}
+
+// True when any non-local cached player is currently holding a katana.
+// Used to fully suppress firing (anti-katana): in Rivals the katana deflects
+// bullets back at the shooter, so firing while an enemy katana is out is a
+// self-kill. Iterates the same cached objects the ESP/aim systems use.
+inline bool AnyRivalsKatanaUser()
+{
+    for (const auto& player : Globals::Caches::CachedPlayerObjects)
+    {
+        if (!player.address || player.address == Globals::Roblox::LocalPlayer.address)
+            continue;
+        if (IsHoldingKatana(player))
+            return true;
+    }
+    return false;
 }

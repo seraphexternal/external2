@@ -1,0 +1,16 @@
+﻿
+// â”€â”€ Sidebar footer status line (small, muted) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+{
+    char fpsBuf[64];    sprintf_s(fpsBuf, "%d FPS", (int)ImGui::GetIO().Framerate);
+    bool connected = (Globals::Roblox::LocalPlayer.address != 0);
+    std::string uname = connected ? Globals::Roblox::LocalPlayer.Name() : "";
+    const char* nameStr = uname.empty() ? "Not connected" : uname.c_str();
+    const ImU32 muted = ImGui::ColorConvertFloat4ToU32(ImVec4(1, 1, 1, 0.30f));
+    ImFont* sf = UI::small_font ? UI::small_font : ImGui::GetFont();
+    const float fs = UI::small_font ? sf->FontSize : 17.0f * sc;
+    float yy = sideMax.y - 46.0f * sc;
+    ImVec2 ns = sf->CalcTextSizeA(fs, FLT_MAX, 0.f, nameStr);
+    draw->AddText(sf, fs, ImVec2(sideMin.x + 18.0f * sc, yy), muted, nameStr);
+    yy += fs + 3.0f * sc;
+    draw->AddText(sf, fs, ImVec2(sideMin.x + 18.0f * sc, yy), muted, fpsBuf);
+}

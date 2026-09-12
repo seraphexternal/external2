@@ -24,6 +24,8 @@
     <ProjectGuid>{4b91d23e-b49c-4ee5-85e5-c82424777e72}</ProjectGuid>
     <RootNamespace>sourcestackz</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <VCToolsInstallDir>C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.30.30705\</VCToolsInstallDir>
+    <VCToolsVersion>14.30.30705</VCToolsVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -100,8 +102,9 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+<LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/permissive- /Zc:__cplusplus /Zc:inline /Zc:throwingNew %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>third_party\luau\Ast\include;third_party\luau\Common\include;third_party\luau\Compiler\include;third_party\luau\VM\include;overlay;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -117,13 +120,13 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/permissive- /Zc:__cplusplus /Zc:inline /Zc:throwingNew %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Tools\MSVC\14.51.36231\include;third_party\luau\Ast\include;third_party\luau\Common\include;third_party\luau\Compiler\include;third_party\luau\VM\include;overlay;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>third_party\luau\Ast\include;third_party\luau\Common\include;third_party\luau\Compiler\include;third_party\luau\VM\include;overlay;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Tools\MSVC\14.51.36231\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -136,10 +139,10 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/permissive- /Zc:__cplusplus /Zc:inline /Zc:throwingNew %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Tools\MSVC\14.51.36231\include;third_party\luau\Ast\include;third_party\luau\Common\include;third_party\luau\Compiler\include;third_party\luau\VM\include;overlay;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>third_party\luau\Ast\include;third_party\luau\Common\include;third_party\luau\Compiler\include;third_party\luau\VM\include;overlay;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Tools\MSVC\14.51.36231\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -162,6 +165,7 @@
     <ClCompile Include="Memory\MemoryManager.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="features\stb_image_impl.cpp" />
+    <ClCompile Include="features\PlayerAvatars.cpp" />
     <ClCompile Include="features\preview3d\preview3d_impl.cpp" />
     <ClCompile Include="features\explorer\ValueBase.cpp" />
     <ClCompile Include="features\scriptbytecode\scriptbytecode.cpp" />
