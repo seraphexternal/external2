@@ -783,11 +783,11 @@ namespace UI
         {
             ImGui::PushStyleColor(ImGuiCol_PopupBg, U(background_color));
             ImGui::PushStyleColor(ImGuiCol_Border, U(stroke_color));
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 5.0f * sc);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 8.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.0f * sc);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 5.0f) * sc);
             ImGui::BeginTooltip();
-            ImGui::PushTextWrapPos(280.0f * sc);
-            ImGui::TextColored(ImVec4(1, 1, 1, 0.8f), "%s", text);
+            ImGui::PushTextWrapPos(200.0f * sc);
+            ImGui::TextColored(ImVec4(1, 1, 1, 0.85f), "%s", text);
             ImGui::PopTextWrapPos();
             ImGui::EndTooltip();
             ImGui::PopStyleVar(2);
@@ -1135,32 +1135,58 @@ namespace UI
     }
 
     // ── animated ambient background (EXTERIUM-style, subtle) ───────
-    // Slowly-rising accent-tinted squares behind the content. Kept
-    // very low opacity / low density so the menu itself stays the
-    // dominant layer.
+    // Slowly-rising accent-tinted particles behind the content. Configurable
+    // through Options::Misc (count / shape / size / speed / opacity / glow)
+    // and shared with the loader's ambient background.
     struct BGState { ImVec2 pos; float velY; float sz; float rot; float tw; };
     inline std::vector<BGState> bg_particles;
+
+    inline void SpawnBGParticle(std::mt19937& rng, BGState& s, float w, float h)
+    {
+        s.pos = ImVec2((float)(rng() % 10000) / 10000.0f * w, (float)(rng() % 10000) / 10000.0f * h);
+        const float minS = ImClamp(Options::Misc::ExteriumBGParticleMinSize, 2.0f, 60.0f);
+        const float maxS = ImMax(minS, ImClamp(Options::Misc::ExteriumBGParticleMaxSize, 2.0f, 60.0f));
+        const float minV = ImClamp(Options::Misc::ExteriumBGParticleMinSpeed, 10.0f, 600.0f);
+        const float maxV = ImMax(minV, ImClamp(Options::Misc::ExteriumBGParticleMaxSpeed, 10.0f, 600.0f));
+        s.sz = minS + (float)(rng() % 10000) / 10000.0f * (maxS - minS);
+        s.velY = -(minV + (float)(rng() % 10000) / 10000.0f * (maxV - minV));
+        s.rot = (float)(rng() % 628) / 100.0f;
+        s.tw = (float)(rng() % 1000) / 1000.0f;
+    }
 
     inline void ExteriumBG_Update(float w, float h)
     {
         static std::mt19937 rng{ std::random_device{}() };
-        if (bg_particles.empty())
+        const int want = Options::Misc::ExteriumBGEnabled
+            ? (int)ImClamp(Options::Misc::ExteriumBGParticleCount, 4, 80) : 0;
+
+        while ((int)bg_particles.size() < want)
         {
-            for (int i = 0; i < 26; i++)
-            {
-                BGState s;
-                s.pos = ImVec2((float)(rng() % 10000) / 10000.0f * w, (float)(rng() % 10000) / 10000.0f * h);
-                s.velY = -(35.0f + (float)(rng() % 5500) / 100.0f);
-                s.sz = 6.0f + (float)(rng() % 1700) / 100.0f;
-                s.rot = (float)(rng() % 628) / 100.0f;
-                s.tw = (float)(rng() % 1000) / 1000.0f;
-                bg_particles.push_back(s);
-            }
+            BGState s;
+            SpawnBGParticle(rng, s, w, h);
+            bg_particles.push_back(s);
         }
+        if ((int)bg_particles.size() > want)
+            bg_particles.resize(want);
+        if (bg_particles.empty())
+            return;
+
+        // Live-adjust existing particles when the size/speed options change so
+        // the preview updates instantly instead of on the next respawn.
+        static float lastMinS = 6.0f, lastMaxS = 23.0f, lastMinV = 35.0f, lastMaxV = 90.0f;
+        const float minS = ImClamp(Options::Misc::ExteriumBGParticleMinSize, 2.0f, 60.0f);
+        const float maxS = ImMax(minS, ImClamp(Options::Misc::ExteriumBGParticleMaxSize, 2.0f, 60.0f));
+        const float minV = ImClamp(Options::Misc::ExteriumBGParticleMinSpeed, 10.0f, 600.0f);
+        const float maxV = ImMax(minV, ImClamp(Options::Misc::ExteriumBGParticleMaxSpeed, 10.0f, 600.0f));
+        const bool reroll = (minS != lastMinS || maxS != lastMaxS || minV != lastMinV || maxV != lastMaxV);
+        lastMinS = minS; lastMaxS = maxS; lastMinV = minV; lastMaxV = maxV;
+
         const float dt = ImGui::GetIO().DeltaTime;
         const float t = (float)ImGui::GetTime();
         for (auto& s : bg_particles)
         {
+            if (reroll)
+                SpawnBGParticle(rng, s, w, h);
             s.pos.x += sinf(t * 0.5f + s.tw) * 4.0f * dt;
             s.pos.y += s.velY * dt;
             s.rot += 0.35f * dt;
@@ -1174,25 +1200,67 @@ namespace UI
 
     inline void ExteriumBG_Render(ImDrawList* dl, const ImVec2& origin, const ImVec2& size, float menuAlpha)
     {
-        if (bg_particles.empty()) return;
-        const ImVec4 mc = ImVec4(main_color.Value.x, main_color.Value.y, main_color.Value.z, 1.0f);
+        if (!Options::Misc::ExteriumBGEnabled || bg_particles.empty())
+            return;
+
+        const ImVec4 mc = Options::Misc::ExteriumBGUseAccent
+            ? ImVec4(main_color.Value.x, main_color.Value.y, main_color.Value.z, 1.0f)
+            : ImVec4(Options::Misc::ExteriumBGColor[0], Options::Misc::ExteriumBGColor[1], Options::Misc::ExteriumBGColor[2], 1.0f);
         const ImU32 accent = U(mc);
+        const float opacity = ImClamp(Options::Misc::ExteriumBGParticleOpacity, 0.0f, 0.5f);
+        const int shape = Options::Misc::ExteriumBGParticleShape;
+        const bool glow = Options::Misc::ExteriumBGParticleGlow;
         const float t = (float)ImGui::GetTime();
+
         dl->PushClipRect(origin, origin + size, true);
         for (const auto& s : bg_particles)
         {
             float pulse = 0.75f + 0.25f * sinf(t * 0.9f + s.tw);
-            int a = (int)(0.09f * menuAlpha * 255.0f * pulse);
+            int a = (int)(opacity * menuAlpha * 255.0f * pulse);
             if (a <= 1) continue;
             ImVec2 c = origin + s.pos;
+            float sz = s.sz;
             float cr = cosf(s.rot), sr = sinf(s.rot);
-            ImVec2 cpts[4];
-            cpts[0] = ImVec2(c.x - s.sz * cr + s.sz * sr, c.y - s.sz * sr - s.sz * cr);
-            cpts[1] = ImVec2(c.x + s.sz * cr + s.sz * sr, c.y - s.sz * sr + s.sz * cr);
-            cpts[2] = ImVec2(c.x + s.sz * cr - s.sz * sr, c.y + s.sz * sr + s.sz * cr);
-            cpts[3] = ImVec2(c.x - s.sz * cr - s.sz * sr, c.y + s.sz * sr - s.sz * cr);
-            SoftCircleBloom(dl, c, s.sz * 1.6f, ImVec4(mc.x, mc.y, mc.z, 0.04f * pulse), 6.0f);
-            dl->AddConvexPolyFilled(cpts, 4, (accent & 0x00FFFFFFu) | ((ImU32)a << 24));
+
+            if (glow)
+                SoftCircleBloom(dl, c, sz * 1.6f, ImVec4(mc.x, mc.y, mc.z, 0.04f * pulse), 6.0f);
+
+            switch (shape)
+            {
+            case 1: // Circle
+                dl->AddCircleFilled(c, sz * 0.8f, (accent & 0x00FFFFFFu) | ((ImU32)a << 24), 32);
+                break;
+            case 2: // Triangle
+            {
+                ImVec2 tp[3];
+                for (int i = 0; i < 3; i++)
+                {
+                    float ang = s.rot + (i * 2.0f * 3.14159265f / 3.0f);
+                    tp[i] = ImVec2(c.x + cosf(ang) * sz, c.y + sinf(ang) * sz);
+                }
+                dl->AddTriangleFilled(tp[0], tp[1], tp[2], (accent & 0x00FFFFFFu) | ((ImU32)a << 24));
+                break;
+            }
+            case 3: // Diamond (axis-aligned)
+            {
+                ImVec2 dp[4] = {
+                    ImVec2(c.x, c.y - sz), ImVec2(c.x + sz, c.y),
+                    ImVec2(c.x, c.y + sz), ImVec2(c.x - sz, c.y)
+                };
+                dl->AddConvexPolyFilled(dp, 4, (accent & 0x00FFFFFFu) | ((ImU32)a << 24));
+                break;
+            }
+            default: // 0: Square (rotating rect)
+            {
+                ImVec2 cpts[4];
+                cpts[0] = ImVec2(c.x - sz * cr + sz * sr, c.y - sz * sr - sz * cr);
+                cpts[1] = ImVec2(c.x + sz * cr + sz * sr, c.y - sz * sr + sz * cr);
+                cpts[2] = ImVec2(c.x + sz * cr - sz * sr, c.y + sz * sr + sz * cr);
+                cpts[3] = ImVec2(c.x - sz * cr - sz * sr, c.y + sz * sr - sz * cr);
+                dl->AddConvexPolyFilled(cpts, 4, (accent & 0x00FFFFFFu) | ((ImU32)a << 24));
+                break;
+            }
+            }
         }
         dl->PopClipRect();
     }

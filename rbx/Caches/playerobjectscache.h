@@ -51,22 +51,38 @@ inline void CachePlayerObjects()
 				p.Health = Memory->read<float>(p.Humanoid.address + Offsets::Humanoid::Health);
 				p.MaxHealth = Memory->read<float>(p.Humanoid.address + Offsets::Humanoid::MaxHealth);
 			}
-			else
-			{
-				// For real players
-				p.Name = player.Name();
-				p.Team = player.Team();
-				p.TeamColor = Memory->read<int>(player.address + Offsets::Player::TeamColor);
-				if (p.Team.address != 0)
+else
 				{
-					p.TeamName = p.Team.Name();
-					p.TeamBrickColor = Memory->read<int>(p.Team.address + Offsets::Team::BrickColor);
-				}
-				else
-				{
-					p.TeamName = "";
-					p.TeamBrickColor = 0;
-				}
+					// For real players
+					p.Name = player.Name();
+					p.Team = player.Team();
+					p.TeamColor = Memory->read<int>(player.address + Offsets::Player::TeamColor);
+					if (p.Team.address != 0)
+					{
+						p.TeamName = p.Team.Name();
+						if (Globals::Roblox::isRivals && p.TeamName.empty())
+						{
+							// Rivals strips the Team object for non-local players (Team()
+							// comes back empty/0), so TeamBrickColor was never populated
+							// and every Rivals player was reading as "no team" == enemy.
+							// Rivals keeps the real affiliation on the player's own
+							// TeamColor offset, so fall back to that here.
+							p.TeamBrickColor = p.TeamColor & 0xFFFF;
+						}
+						else
+						{
+							p.TeamBrickColor = Memory->read<int>(p.Team.address + Offsets::Team::BrickColor);
+						}
+					}
+					else
+					{
+						p.TeamName = "";
+						// Rivals: Team object stripped, use TeamColor from player offset
+						if (Globals::Roblox::isRivals)
+							p.TeamBrickColor = p.TeamColor & 0xFFFF;
+						else
+							p.TeamBrickColor = 0;
+					}
 				p.Character = player.Character();
 				if (!p.Character.address)
 					continue;
@@ -187,7 +203,15 @@ inline void CachePlayerObjects()
 			else
 			{
 				Globals::Roblox::LocalPlayerTeamName = "";
-				Globals::Roblox::LocalPlayerTeamBrickColor = 0;
+				// Rivals: Team object is stripped for local player too, fall back to TeamColor offset
+				if (Globals::Roblox::isRivals)
+				{
+					Globals::Roblox::LocalPlayerTeamBrickColor = Globals::Roblox::LocalPlayerTeamColor & 0xFFFF;
+				}
+				else
+				{
+					Globals::Roblox::LocalPlayerTeamBrickColor = 0;
+				}
 			}
 		}
 

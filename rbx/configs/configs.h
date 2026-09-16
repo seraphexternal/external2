@@ -649,7 +649,18 @@ inline json BuildConfigJson()
         { "Hide Process", Options::Misc::HideProcess },
         { "Process Name", std::string(Options::Misc::ProcessName) },
         { "Exclusion Path", std::string(Options::Misc::ExclusionPath) },
-        { "Show Certified", Options::Misc::ShowCertified }
+        { "Show Certified", Options::Misc::ShowCertified },
+        { "BG Enabled", Options::Misc::ExteriumBGEnabled },
+        { "BG Particle Count", Options::Misc::ExteriumBGParticleCount },
+        { "BG Particle Shape", Options::Misc::ExteriumBGParticleShape },
+        { "BG Min Size", Options::Misc::ExteriumBGParticleMinSize },
+        { "BG Max Size", Options::Misc::ExteriumBGParticleMaxSize },
+        { "BG Min Speed", Options::Misc::ExteriumBGParticleMinSpeed },
+        { "BG Max Speed", Options::Misc::ExteriumBGParticleMaxSpeed },
+        { "BG Opacity", Options::Misc::ExteriumBGParticleOpacity },
+        { "BG Glow", Options::Misc::ExteriumBGParticleGlow },
+        { "BG Use Accent", Options::Misc::ExteriumBGUseAccent },
+        { "BG Color", ToJsonColor(Options::Misc::ExteriumBGColor, 3) }
     };
 
     j[SX("HitboxExpander")] = {
@@ -1374,6 +1385,17 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(ms, "Hide Process", Options::Misc::HideProcess);
         LoadVal(ms, "Debug Log", Options::Misc::DebugLog);
         LoadVal(ms, "Show Certified", Options::Misc::ShowCertified);
+        LoadVal(ms, "BG Enabled", Options::Misc::ExteriumBGEnabled);
+        LoadVal(ms, "BG Particle Count", Options::Misc::ExteriumBGParticleCount);
+        LoadVal(ms, "BG Particle Shape", Options::Misc::ExteriumBGParticleShape);
+        LoadVal(ms, "BG Min Size", Options::Misc::ExteriumBGParticleMinSize);
+        LoadVal(ms, "BG Max Size", Options::Misc::ExteriumBGParticleMaxSize);
+        LoadVal(ms, "BG Min Speed", Options::Misc::ExteriumBGParticleMinSpeed);
+        LoadVal(ms, "BG Max Speed", Options::Misc::ExteriumBGParticleMaxSpeed);
+        LoadVal(ms, "BG Opacity", Options::Misc::ExteriumBGParticleOpacity);
+        LoadVal(ms, "BG Glow", Options::Misc::ExteriumBGParticleGlow);
+        LoadVal(ms, "BG Use Accent", Options::Misc::ExteriumBGUseAccent);
+        LoadFloatArray(ms, "BG Color", Options::Misc::ExteriumBGColor);
         if (ms.contains("Process Name"))
         {
             std::string pn = ms["Process Name"].get<std::string>();

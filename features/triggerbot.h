@@ -297,35 +297,31 @@ inline void RunTriggerbot()
         TBDebug(buf);
     }
 
-    // Check keybind
+    // Check keybind based on ToggleType
     static bool wasKeyPressed = false;
     bool isKeyPressed = KeyBind::IsPressed(Options::Triggerbot::TriggerbotKey);
     
-    if (Options::Triggerbot::ToggleType == 2)
+    switch (Options::Triggerbot::ToggleType)
     {
-        // Always On
-        Options::Triggerbot::Toggled = true;
-    }
-    else if (Options::Triggerbot::ToggleType == 1)
-    {
-        // Toggle mode
-        if (isKeyPressed && !wasKeyPressed)
-        {
-            Options::Triggerbot::Toggled = !Options::Triggerbot::Toggled;
-        }
-        wasKeyPressed = isKeyPressed;
-        
-        if (!Options::Triggerbot::Toggled)
-            return;
-    }
-    else
-    {
-        // Hold mode
-        if (!isKeyPressed)
-        {
-            Options::Triggerbot::Toggled = false;
-            return;
-        }
+        case 2: // Always On
+            Options::Triggerbot::Toggled = true;
+            break;
+            
+        case 1: // Toggle mode
+            if (isKeyPressed && !wasKeyPressed)
+                Options::Triggerbot::Toggled = !Options::Triggerbot::Toggled;
+            wasKeyPressed = isKeyPressed;
+            if (!Options::Triggerbot::Toggled)
+                return;
+            break;
+            
+        case 0: // Hold mode (default)
+        default:
+            Options::Triggerbot::Toggled = isKeyPressed;
+            if (!isKeyPressed)
+                return;
+            wasKeyPressed = isKeyPressed;
+            break;
     }
 
     auto localTeam = Globals::Roblox::LocalPlayer.Team();

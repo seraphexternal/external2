@@ -15,8 +15,18 @@ namespace LodLineVisual
         if (!drawList)
             return;
 
+        if (!drawList)
+            return;
+
         if (Globals::Caches::CachedPlayerObjects.empty())
             return;
+
+        // Aimview: when an aimview target is selected, restrict the LOD line to
+        // only that one player (spectate-a single target). When no target is
+        // set, the LOD line is drawn for everyone (standalone visual feature).
+        std::string aimTarget;
+        if (Options::ESP::AimView && !Options::ESP::AimViewTarget.empty())
+            aimTarget = Options::ESP::AimViewTarget;
 
         ImU32 lineColor = IM_COL32(
             static_cast<int>(Options::ESP::LodLineColor[0] * 255),

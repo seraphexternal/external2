@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <vector>
 #include <windows.h>
 #include "../overlay/utils/W2S.h"
 #include "../overlay/imgui/imgui.h"
@@ -12,7 +13,6 @@
 #include "visibility.h"
 #include "playerfilter.h"
 
-// Shared state for the Rage tab's "real you orbiting the target" visual.
 namespace RageVisual
 {
     inline bool hasGhost = false;
@@ -27,12 +27,8 @@ inline Vectors::Vector3 GetRagebotTargetPosition(const RobloxPlayer& player)
     {
     case 0: part = &player.Head; break;
     case 1: part = &player.HumanoidRootPart; break;
-    case 2: part = &player.Left_Arm; break;
-    case 3: part = &player.Right_Arm; break;
-    case 4: part = &player.Left_Leg; break;
-    case 5: part = &player.Right_Leg; break;
-    case 6: part = &player.Lower_Torso; break;
-    case 7: part = &player.Upper_Torso; break;
+    case 2: part = &player.Lower_Torso; break;
+    case 3: part = &player.Upper_Torso; break;
     default: part = &player.Head; break;
     }
 
@@ -52,8 +48,70 @@ inline Vectors::Vector3 GetRagebotTargetPosition(const RobloxPlayer& player)
     return pos;
 }
 
-inline RobloxPlayer GetRagebotTarget()
+struct RagebotTarget
 {
+    RobloxPlayer player;
+    Vectors::Vector3 targetPos;
+    Vectors::Vector2 targetPos2D;
+    float screenDist;
+    float distance3D;
+    int hitboxIndex;
+    float hitChance;
+    bool visible;
+};
+
+inline float CalculateHitChance(const RobloxPlayer& player, const Vectors::Vector3& targetPos, int hitbox)
+{
+    float baseChance = 100.0f;
+
+    if (!Options::Ragebot::HitChanceEnabled)
+        return baseChance;
+
+    float distance = 0.0f;
+    if (Globals::Roblox::LocalPlayer.Character().FindFirstChild("HumanoidRootPart").address)
+    {
+        distance = Globals::Roblox::LocalPlayer.Character().FindFirstChild("HumanoidRootPart").Position().Distance(targetPos);
+    }
+
+    float distancePenalty = (std::min)(distance / 100.0f * 20.0f, 30.0f);
+    baseChance -= distancePenalty;
+
+    if (Options::Ragebot::WallCheck && Visibility::IsPlayerOccluded(player))
+    {
+        baseChance -= 50.0f;
+    }
+
+    if (hitbox == 0)
+    {
+        baseChance += 10.0f;
+    }
+    else if (hitbox == 1)
+    {
+        baseChance += 5.0f;
+    }
+
+    float velocity = 0.0f;
+    if (player.HumanoidRootPart.address)
+    {
+        Vectors::Vector3 vel = Memory->read<Vectors::Vector3>(
+            Memory->read<uintptr_t>(player.HumanoidRootPart.address + Offsets::BasePart::Primitive) +
+            Offsets::Primitive::AssemblyLinearVelocity
+        );
+        velocity = vel.Magnitude();
+    }
+
+    if (velocity > 50.0f)
+    {
+        baseChance -= (std::min)((velocity - 50.0f) / 10.0f, 30.0f);
+    }
+
+    return std::clamp(baseChance, 0.0f, 100.0f);
+}
+
+inline std::vector<RagebotTarget> GetRagebotTargets()
+{
+    std::vector<RagebotTarget> targets;
+
     if (Globals::Roblox::Players.address != 0)
     {
         Globals::Roblox::LocalPlayer = RobloxInstance(
@@ -61,13 +119,14 @@ inline RobloxPlayer GetRagebotTarget()
         );
     }
 
-    RobloxPlayer target;
-    float bestScore = FLT_MAX;
     auto localCharacter = Globals::Roblox::LocalPlayer.Character();
     auto localHRP = localCharacter.FindFirstChild("HumanoidRootPart");
 
     POINT p;
     GetCursorPos(&p);
+
+    const int hitboxes[] = { 0, 1, 2, 3 };
+    const int hitboxCount = 4;
 
     for (auto& player : Globals::Caches::CachedPlayerObjects)
     {
@@ -93,36 +152,97 @@ inline RobloxPlayer GetRagebotTarget()
         if (Options::Rivals::AntiKatana && IsHoldingKatana(player))
             continue;
 
-        if (Options::Ragebot::WallCheck && Visibility::IsPlayerOccluded(player))
-            continue;
+        Vectors::Vector3 basePos = GetRagebotTargetPosition(player);
+        Vectors::Vector3 headPos = player.Head.Position();
+        Vectors::Vector3 torsoPos = player.HumanoidRootPart.Position();
 
-        Vectors::Vector3 targetPos = GetRagebotTargetPosition(player);
-        Vectors::Vector2 targetPos2D = WorldToScreen(targetPos);
-
-        if (targetPos2D.x == -1 && targetPos2D.y == -1)
-            continue;
-
-        if (localHRP.address)
+        for (int hb = 0; hb < hitboxCount; hb++)
         {
-            Vectors::Vector3 diff = localHRP.Position() - targetPos;
-            float distance3D = diff.Magnitude();
-            if (distance3D > Options::Ragebot::Range)
+            Vectors::Vector3 targetPos;
+            switch (hb)
+            {
+            case 0: targetPos = headPos; break;
+            case 1: targetPos = torsoPos; break;
+            case 2: targetPos = player.Lower_Torso.Position(); break;
+            case 3: targetPos = player.Upper_Torso.Position(); break;
+            default: targetPos = basePos; break;
+            }
+
+            if (Options::Ragebot::Prediction)
+            {
+                Vectors::Vector3 vel = Memory->read<Vectors::Vector3>(
+                    Memory->read<uintptr_t>(HRP.address + Offsets::BasePart::Primitive) +
+                    Offsets::Primitive::AssemblyLinearVelocity
+                );
+                targetPos.x += vel.x * Options::Ragebot::PredictionX;
+                targetPos.y += vel.y * Options::Ragebot::PredictionY;
+                targetPos.z += vel.z * Options::Ragebot::PredictionX;
+            }
+
+            Vectors::Vector2 targetPos2D = WorldToScreen(targetPos);
+            if (targetPos2D.x == -1 && targetPos2D.y == -1)
                 continue;
-        }
 
-        float screenDist = targetPos2D.Distance({ static_cast<float>(p.x), static_cast<float>(p.y) });
-        if (screenDist < bestScore && screenDist <= Options::Ragebot::FOV)
-        {
-            bestScore = screenDist;
-            target = player;
+            bool visible = true;
+            if (Options::Ragebot::WallCheck)
+            {
+                visible = !Visibility::IsPlayerOccluded(player);
+            }
+
+            if (!visible && Options::Ragebot::WallCheck)
+                continue;
+
+            float distance3D = FLT_MAX;
+            if (localHRP.address)
+            {
+                Vectors::Vector3 diff = localHRP.Position() - targetPos;
+                distance3D = diff.Magnitude();
+                if (distance3D > Options::Ragebot::Range)
+                    continue;
+            }
+
+            float screenDist = targetPos2D.Distance({ static_cast<float>(p.x), static_cast<float>(p.y) });
+            if (screenDist <= Options::Ragebot::FOV)
+            {
+                float hc = 100.0f;
+                if (Options::Ragebot::HitChanceEnabled)
+                {
+                    hc = CalculateHitChance(player, targetPos, hb);
+                }
+
+                targets.push_back({ player, targetPos, targetPos2D, screenDist, distance3D, hb, hc, visible });
+            }
         }
     }
-    return target;
+
+    std::sort(targets.begin(), targets.end(), [](const RagebotTarget& a, const RagebotTarget& b) {
+        if (Options::Ragebot::TargetPriority == 0)
+            return a.screenDist < b.screenDist;
+        else if (Options::Ragebot::TargetPriority == 1)
+            return a.distance3D < b.distance3D;
+        else
+            return a.hitChance > b.hitChance;
+    });
+
+    return targets;
 }
 
-inline void RagebotAim(const RobloxPlayer& target)
+inline bool ShouldFire(const RagebotTarget& target)
 {
-    Vectors::Vector3 targetPos = GetRagebotTargetPosition(target);
+    if (!Options::Ragebot::AutoFire)
+        return false;
+
+    if (Options::Ragebot::HitChanceEnabled && target.hitChance < Options::Ragebot::MinHitChance)
+        return false;
+
+    if (target.distance3D > Options::Ragebot::Range)
+        return false;
+
+    return true;
+}
+
+inline void RagebotAim(const Vectors::Vector3& targetPos)
+{
     Vectors::Vector3 camPos = Memory->read<Vectors::Vector3>(
         Globals::Roblox::Camera.address + Offsets::Camera::Position
     );
@@ -168,19 +288,19 @@ inline void RagebotFire()
     SendInput(1, &input, sizeof(INPUT));
 }
 
+static std::chrono::steady_clock::time_point lastFireTime;
+static std::chrono::steady_clock::time_point lastDoubleTapTime;
+static bool doubleTapReady = false;
+static int shotsFired = 0;
+
 inline void RunRagebot()
 {
-    static std::chrono::steady_clock::time_point lastFireTime;
-    static std::chrono::steady_clock::time_point lastToggleTime;
-
     if (!Options::Ragebot::Enabled)
     {
         Options::Ragebot::Toggled = false;
         return;
     }
 
-    // Anti-katana: stop firing while any enemy holds a katana, including
-    // releasing a fire button that is already held so an in-progress shot halts.
     if (AntiKatanaFiringBlocked())
         return;
 
@@ -208,10 +328,10 @@ inline void RunRagebot()
         if (keyActive)
         {
             auto now = std::chrono::steady_clock::now();
-            if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastToggleTime).count() > 200)
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFireTime).count() > 200)
             {
                 Options::Ragebot::Toggled = !Options::Ragebot::Toggled;
-                lastToggleTime = now;
+                lastFireTime = now;
             }
         }
         if (!Options::Ragebot::Toggled) return;
@@ -220,29 +340,60 @@ inline void RunRagebot()
         break;
     }
 
-    RobloxPlayer target = GetRagebotTarget();
-    if (!target.address || target.Health <= 0)
+    auto targets = GetRagebotTargets();
+    if (targets.empty())
         return;
 
-    RagebotAim(target);
+    RagebotTarget bestTarget = targets[0];
+
+    if (Options::Ragebot::HitChanceEnabled && bestTarget.hitChance < Options::Ragebot::MinHitChance)
+        return;
+
+    RagebotAim(bestTarget.targetPos);
 
     if (Options::Ragebot::AutoFire)
     {
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFireTime).count();
-        if (elapsed >= Options::Ragebot::FireRate)
+
+        bool canFire = elapsed >= Options::Ragebot::FireRate;
+
+        if (Options::Ragebot::DoubleTap && shotsFired < 2 && doubleTapReady)
+        {
+            canFire = true;
+        }
+
+        if (canFire)
         {
             RagebotFire();
             lastFireTime = now;
+            shotsFired++;
+
+            if (Options::Ragebot::DoubleTap && shotsFired == 1)
+            {
+                doubleTapReady = true;
+                lastDoubleTapTime = now;
+            }
+            else if (shotsFired >= 2)
+            {
+                shotsFired = 0;
+                doubleTapReady = false;
+            }
+        }
+
+        if (Options::Ragebot::DoubleTap && doubleTapReady)
+        {
+            auto dtElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastDoubleTapTime).count();
+            if (dtElapsed > Options::Ragebot::DoubleTapDelay)
+            {
+                doubleTapReady = false;
+                shotsFired = 0;
+            }
         }
     }
 }
 
-// Rage tab kill/orbit loop. The "real you" visually orbits the locked target
-// (drawn as a ghost by RenderRageGhost) while the actual character is left free
-// to walk around. While orbiting we keep the target damaged by briefly snapping
-// the real character next to the target (teleport-to-hit) and auto-firing, then
-// restoring it so the player can still move normally.
+// Rage tab kill/orbit loop with ghost visual
 inline RobloxPlayer GetRageKillTarget()
 {
     if (Options::Rage::TargetMode == 1)
@@ -288,7 +439,6 @@ inline RobloxPlayer GetRageKillTarget()
         Vectors::Vector2 t2d = WorldToScreen(tp);
         if (t2d.x == -1 && t2d.y == -1) continue;
 
-        // Prefer the aimed-at / closest-to-crosshair enemy
         float d = t2d.Distance({ static_cast<float>(p.x), static_cast<float>(p.y) });
         if (d < bestDist) { bestDist = d; best = player; }
     }
@@ -305,7 +455,6 @@ inline void RageKillLoop()
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(8));
 
-        // Keybind handling
         if (Options::Rage::RageKey != 0)
         {
             static bool wasKey = false;
@@ -366,12 +515,11 @@ inline void RageKillLoop()
             Vectors::Vector3 realPos = localHrp.Position();
             Vectors::Vector3 tgtPos = target.HumanoidRootPart.Position();
 
-            // Orbit position around the target
             angle += 0.008 * Options::Rage::OrbitSpeed;
             float r = Options::Rage::OrbitRadius;
             Vectors::Vector3 ghost{
                 tgtPos.x + static_cast<float>(std::sin(angle) * r),
-                tgtPos.y,
+                tgtPos.y + Options::Rage::OrbitHeight,
                 tgtPos.z + static_cast<float>(std::cos(angle) * r)
             };
 
@@ -381,11 +529,18 @@ inline void RageKillLoop()
 
             if (Options::Rage::KillOnOrbit && !AntiKatanaFiringBlocked())
             {
-                // Briefly teleport the real character next to the target so the
-                // hit registers, auto-fire, then restore so the player can walk.
                 Vectors::Vector3 savedPos = realPos;
                 Vectors::Vector3 savedVel = Memory->read<Vectors::Vector3>(
                     localPrim + Offsets::Primitive::AssemblyLinearVelocity);
+
+                Matrixes::Matrix3x3 savedCamRot;
+                bool hasSavedCamRot = false;
+                if (Options::Rage::AutoKillAim && Globals::Roblox::Camera.address)
+                {
+                    savedCamRot = Memory->read<Matrixes::Matrix3x3>(
+                        Globals::Roblox::Camera.address + Offsets::Camera::Rotation);
+                    hasSavedCamRot = true;
+                }
 
                 Vectors::Vector3 killPos{
                     tgtPos.x,
@@ -415,10 +570,15 @@ inline void RageKillLoop()
                     lastFire = now;
                 }
 
-                // Restore after a short window so the player keeps moving freely
                 std::this_thread::sleep_for(std::chrono::milliseconds(12));
                 Memory->write<Vectors::Vector3>(localPrim + Offsets::Primitive::Position, savedPos);
                 Memory->write<Vectors::Vector3>(localPrim + Offsets::Primitive::AssemblyLinearVelocity, savedVel);
+
+                if (hasSavedCamRot && Globals::Roblox::Camera.address)
+                {
+                    Memory->write<Matrixes::Matrix3x3>(
+                        Globals::Roblox::Camera.address + Offsets::Camera::Rotation, savedCamRot);
+                }
             }
         }
         catch (...) { RageVisual::hasGhost = false; }

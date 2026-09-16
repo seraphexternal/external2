@@ -108,7 +108,11 @@ namespace SilentAim
         if (Options::WeaponProfiles::ActiveProfile >= 0)
             return Options::Aimbot::SilentAim;
 
-        // Check standalone silent aim
+        // Check standalone silent aim (raycast silent aim)
+        // Also activate when AimingType is RSilent (3)
+        if (Options::Aimbot::AimingType == 3)
+            return Options::Aimbot::SilentAimToggled;
+        
         return Options::Aimbot::SilentAimEnabled && Options::Aimbot::SilentAimToggled;
     }
 

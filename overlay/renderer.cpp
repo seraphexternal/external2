@@ -10,10 +10,14 @@
 #include "fonts_ex.h"
 #include "../features/chams.h"
 #include "../rbx/configs/configs.h"
+#include "../rbx/globals/RobloxVersion.h"
 #include "../features/desync.h"
 #include "../features/ragebot.h"
 #include "../features/aimbot.h"
+#include "../features/aimline.h"
 #include "../features/playerfilter.h"
+#include "../features/aimline.h"
+#include "../features/aimline.h"
 #include "../features/orbit.h"
 #include "../features/PlayerAvatars.h"
 #include "animation.h"
@@ -25,9 +29,1788 @@
 #pragma comment(lib, "ole32.lib")
 #include "../seraph_log.h"
 
+// Windows Media Control (WinRT) for Spotify integration
+#include <winrt/Windows.Media.Control.h>
+#include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/base.h>
+#pragma comment(lib, "windowsapp.lib")
+
+// Image decoding for Spotify album art (declarations only; implementation lives in stb_image_impl)
+#include "../features/stb_image.h"
+
+// WASAPI Loopback Capture for real audio visualization
+#include <audioclient.h>
+#include <mmdeviceapi.h>
+#include <endpointvolume.h>
+#include <functiondiscoverykeys_devpkey.h>
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "avrt.lib")
+
 #include <random>
 #include <algorithm>
 #include <cctype>
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include <mutex>
+#include <future>
+#include <cstdint>
+#include <vector>
+#include <cmath>
+#include <complex>
+
+// KissFFT - simple embedded radix-2 FFT (no external deps, power-of-two sizes)
+#define kiss_fft_scalar float
+
+struct kiss_fft_state {
+    int nfft;
+    int inverse;
+    std::vector<kiss_fft_scalar> cosTbl;  // cos(2*pi*i/n), i in [0, n)
+    std::vector<kiss_fft_scalar> sinTbl;  // sin(2*pi*i/n)
+    std::vector<kiss_fft_scalar> work;    // reusable FFT workspace (2*nfft)
+};
+
+typedef struct kiss_fft_state* kiss_fft_cfg;
+
+static kiss_fft_cfg kiss_fft_alloc(int nfft, int inverse_fft, void* mem, size_t* lenmem)
+{
+    (void)mem; // we always self-allocate
+    if (nfft <= 0 || (nfft & (nfft - 1)) != 0) // power of two only
+    {
+        if (lenmem) *lenmem = 0;
+        return nullptr;
+    }
+
+    kiss_fft_state* st = new (std::nothrow) kiss_fft_state();
+    if (!st) return nullptr;
+    st->nfft = nfft;
+    st->inverse = inverse_fft;
+    try
+    {
+        st->cosTbl.resize((size_t)nfft);
+        st->sinTbl.resize((size_t)nfft);
+        st->work.resize((size_t)nfft * 2);
+    }
+    catch (...)
+    {
+        delete st;
+        return nullptr;
+    }
+    if (lenmem) *lenmem = sizeof(kiss_fft_state);
+
+    for (int i = 0; i < nfft; ++i)
+    {
+        float ang = 2.0f * 3.14159265358979323846f * i / nfft;
+        st->cosTbl[i] = cosf(ang);
+        st->sinTbl[i] = sinf(ang);
+    }
+    return st;
+}
+
+static void kiss_fft(kiss_fft_cfg cfg, const kiss_fft_scalar* fin, kiss_fft_scalar* fout)
+{
+    const int n = cfg->nfft;
+    // Bit-reverse copy into workspace (interleaved real/imag)
+    int levels = 0;
+    for (int t = n; t > 1; t >>= 1) levels++;
+
+    kiss_fft_scalar* w = cfg->work.data();
+    for (int i = 0; i < n; ++i)
+    {
+        int j = 0, x = i;
+        for (int b = 0; b < levels; ++b) { j = (j << 1) | (x & 1); x >>= 1; }
+        w[2 * j]     = fin[2 * i];
+        w[2 * j + 1] = fin[2 * i + 1];
+    }
+
+    const kiss_fft_scalar* ct = cfg->cosTbl.data();
+    const kiss_fft_scalar* st = cfg->sinTbl.data();
+    const float sign = cfg->inverse ? 1.0f : -1.0f;
+
+    // Iterative radix-2 decimation-in-time butterflies
+    for (int len = 2; len <= n; len <<= 1)
+    {
+        const int half = len >> 1;
+        const int step = n / len;
+        for (int i = 0; i < n; i += len)
+        {
+            for (int k = 0; k < half; ++k)
+            {
+                const int idx = k * step;
+                const float wr = ct[idx];
+                const float wi = sign * st[idx];
+
+                const int ai = 2 * (i + k);
+                const int bi = 2 * (i + half + k);
+
+                const float tr = w[bi] * wr - w[bi + 1] * wi;
+                const float ti = w[bi] * wi + w[bi + 1] * wr;
+
+                const float ar = w[ai];
+                const float ai_ = w[ai + 1];
+
+                w[ai]     = ar + tr;
+                w[ai + 1] = ai_ + ti;
+                w[bi]     = ar - tr;
+                w[bi + 1] = ai_ - ti;
+            }
+        }
+    }
+
+    if (cfg->inverse)
+    {
+        const float inv = 1.0f / n;
+        for (int i = 0; i < 2 * n; ++i) fout[i] = w[i] * inv;
+    }
+    else
+    {
+        for (int i = 0; i < 2 * n; ++i) fout[i] = w[i];
+    }
+}
+
+static void kiss_fft_free(kiss_fft_cfg cfg)
+{
+    delete cfg;
+}
+
+// ============================================================
+// WASAPI Loopback Capture for Real Audio Visualization
+// ============================================================
+namespace AudioCapture
+{
+    static constexpr int SAMPLE_RATE = 48000;
+    static constexpr int FRAME_SIZE = 1024;        // FFT size (power of 2)
+    static constexpr int HOP_SIZE = 512;           // Overlap for smoother FFT
+    static constexpr int NUM_CHANNELS = 2;         // Stereo loopback
+    
+    static IMMDeviceEnumerator* pEnumerator = nullptr;
+    static IMMDevice* pDevice = nullptr;
+    static IAudioClient* pAudioClient = nullptr;
+    static IAudioCaptureClient* pCaptureClient = nullptr;
+    static WAVEFORMATEX* pWaveFormat = nullptr;
+    static UINT32 bufferFrameCount = 0;
+    
+    static std::thread captureThread;
+    static std::atomic<bool> captureRunning{false};
+    static std::mutex fftMutex;
+    static std::vector<float> audioBuffer;
+    static std::vector<float> windowedBuffer(FRAME_SIZE);   // Hann window, kept pristine
+    static std::vector<float> fftSamples(FRAME_SIZE);       // windowed frame sent to the FFT
+    static std::vector<float> fftInput(FRAME_SIZE * 2);  // Real + Imag
+    static std::vector<float> fftOutput(FRAME_SIZE * 2);
+    static kiss_fft_cfg fftCfg = nullptr;
+    static std::vector<float> latestFFT(64, 0.0f);  // 64 bins for visualizer
+    static std::atomic<bool> captureInitialized{ false };
+    static float lastFFTTime = 0.0f;
+    static float peakHold = 1e-6f;                 // smoothed peak for dynamics
+    static bool isFloatFormat = true;              // default mix format is IEEE float
+    static int captureChannels = 2;
+    static std::string lastError = "idle";
+
+    static const std::string& GetLastError() { return lastError; }
+
+    static std::string HexStr(HRESULT hr)
+    {
+        char buf[16];
+        sprintf_s(buf, "0x%08X", (unsigned int)hr);
+        return std::string(buf);
+    }
+    
+    // Hann window for FFT
+    static void GenerateHannWindow(std::vector<float>& window, int size) {
+        window.resize(size);
+        for (int i = 0; i < size; ++i) {
+            window[i] = 0.5f * (1.0f - cosf(2.0f * 3.14159265358979323846f * i / (size - 1)));
+        }
+    }
+    
+    static void ReleaseWASAPI();  // fwd
+
+    static bool InitializeWASAPI()
+    {
+        HRESULT hr;
+        
+        // Clean any leftover state from a previous failed attempt so retries
+        // start fresh (COM objects may be half-created).
+        ReleaseWASAPI();
+        
+        // Create device enumerator
+        hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_INPROC_SERVER,
+                              __uuidof(IMMDeviceEnumerator), (void**)&pEnumerator);
+        if (FAILED(hr)) { lastError = "CoCreateInstance MMDeviceEnumerator failed " + HexStr(hr); return false; }
+        
+        // Get default audio endpoint (render device for loopback). Fall back to the
+        // multimedia role if the console role isn't present.
+        static const ERole kRoles[] = { eConsole, eMultimedia, eCommunications };
+        for (ERole role : kRoles)
+        {
+            hr = pEnumerator->GetDefaultAudioEndpoint(eRender, role, &pDevice);
+            if (SUCCEEDED(hr))
+            {
+                LPWSTR devId = nullptr;
+                std::wstring devName;
+                if (SUCCEEDED(pDevice->GetId(&devId)))
+                {
+                    devName = devId ? devId : L""; 
+                    CoTaskMemFree(devId);
+                }
+                lastError = "endpoint acquired (role " + std::to_string((int)role) + ")";
+                break;
+            }
+        }
+        if (FAILED(hr)) { lastError = "GetDefaultAudioEndpoint failed " + HexStr(hr); ReleaseWASAPI(); return false; }
+        
+        // Activate audio client
+        hr = pDevice->Activate(__uuidof(IAudioClient), CLSCTX_INPROC_SERVER, nullptr, (void**)&pAudioClient);
+        if (FAILED(hr)) { lastError = "Activate IAudioClient failed " + HexStr(hr); ReleaseWASAPI(); return false; }
+        
+        // Get mix format
+        hr = pAudioClient->GetMixFormat(&pWaveFormat);
+        if (FAILED(hr)) { lastError = "GetMixFormat failed " + HexStr(hr); return false; }
+        
+        // Mix format can be float32 (typical) or 16-bit PCM; detect it so the
+        // capture loop decodes the loopback buffer with the right sample type.
+        captureChannels = (pWaveFormat->nChannels > 0) ? pWaveFormat->nChannels : 2;
+        if (pWaveFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE)
+        {
+            WAVEFORMATEXTENSIBLE* ext = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(pWaveFormat);
+            isFloatFormat = (ext->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
+        }
+        else
+        {
+            isFloatFormat = (pWaveFormat->wFormatTag == WAVE_FORMAT_IEEE_FLOAT);
+        }
+        
+        // Initialize audio client for loopback capture
+        REFERENCE_TIME hnsRequestedDuration = 10000000; // 1 second buffer
+        hr = pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,
+                                      AUDCLNT_STREAMFLAGS_LOOPBACK,
+                                      hnsRequestedDuration,
+                                      0,
+                                      pWaveFormat,
+                                      nullptr);
+        if (FAILED(hr)) return false;
+        
+        // Get buffer size
+        hr = pAudioClient->GetBufferSize(&bufferFrameCount);
+        if (FAILED(hr)) { lastError = "GetBufferSize failed " + HexStr(hr); ReleaseWASAPI(); return false; }
+        
+        // Get capture client
+        hr = pAudioClient->GetService(__uuidof(IAudioCaptureClient), (void**)&pCaptureClient);
+        if (FAILED(hr)) { lastError = "GetService IAudioCaptureClient failed " + HexStr(hr); ReleaseWASAPI(); return false; }
+        
+        // Prepare buffers
+        audioBuffer.resize(bufferFrameCount * NUM_CHANNELS);
+        GenerateHannWindow(windowedBuffer, FRAME_SIZE);
+        
+        // Initialize FFT
+        size_t fftWorkSize = 0;
+        fftCfg = kiss_fft_alloc(FRAME_SIZE, 0, nullptr, &fftWorkSize);
+        if (!fftCfg) { lastError = "kiss_fft_alloc failed"; ReleaseWASAPI(); return false; }
+        
+        captureInitialized.store(true);
+        lastError = "ready";
+        return true;
+    }
+    
+    static void ReleaseWASAPI()
+    {
+        // COM/model teardown ONLY - never joins the capture thread, so it is
+        // safe to call from inside CaptureLoop (a self-join would deadlock).
+        if (pCaptureClient) { pCaptureClient->Release(); pCaptureClient = nullptr; }
+        if (pAudioClient) { pAudioClient->Release(); pAudioClient = nullptr; }
+        if (pDevice) { pDevice->Release(); pDevice = nullptr; }
+        if (pEnumerator) { pEnumerator->Release(); pEnumerator = nullptr; }
+        if (pWaveFormat) { CoTaskMemFree(pWaveFormat); pWaveFormat = nullptr; }
+        if (fftCfg) { kiss_fft_free(fftCfg); fftCfg = nullptr; }
+        captureInitialized.store(false);
+    }
+
+    static void CleanupWASAPI()
+    {
+        captureRunning = false;
+        if (captureThread.joinable())
+            captureThread.join();
+        ReleaseWASAPI();
+    }
+    
+    static void CaptureLoop()
+    {
+        // Needs a COM apartment on THIS thread before touching the WASAPI
+        // objects created during InitializeWASAPI (CO_E_NOTINITIALIZED
+        // otherwise).
+        HRESULT coInit = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        if (FAILED(coInit))
+        {
+            lastError = "CoInitializeEx failed " + HexStr(coInit);
+            captureRunning = false;
+            return;
+        }
+
+        HRESULT hr;
+        UINT32 packetLength = 0;
+        BYTE* pData = nullptr;
+        DWORD flags = 0;
+        UINT32 numFramesAvailable = 0;
+        UINT64 devicePosition = 0, qpcPosition = 0;
+        
+        hr = pAudioClient->Start();
+        if (FAILED(hr))
+        {
+            lastError = "IAudioClient Start failed " + HexStr(hr);
+            captureRunning = false;
+            ReleaseWASAPI();
+            CoUninitialize();
+            return;
+        }
+        lastError = "ready";
+        
+        std::vector<float> monoBuffer(FRAME_SIZE);
+        int monoWritePos = 0;
+        
+        while (captureRunning)
+        {
+            hr = pCaptureClient->GetNextPacketSize(&packetLength);
+            if (FAILED(hr)) { Sleep(1); continue; }
+            
+            while (packetLength > 0 && captureRunning)
+            {
+                hr = pCaptureClient->GetBuffer(&pData, &numFramesAvailable, &flags, &devicePosition, &qpcPosition);
+                if (FAILED(hr)) break;
+                
+                if (flags & AUDCLNT_BUFFERFLAGS_SILENT)
+                {
+                    // Silence - fill with zeros and advance so the FFT pipeline
+                    // keeps running and the visualizer decays instead of freezing.
+                    UINT32 nZeros = std::min(numFramesAvailable, (UINT32)(FRAME_SIZE - monoWritePos));
+                    for (UINT32 i = 0; i < nZeros; ++i)
+                        monoBuffer[monoWritePos++] = 0.0f;
+                }
+                else
+                {
+                    // Convert to mono. Mix format is usually IEEE float32, but
+                    // protect against 16-bit PCM endpoints too.
+                    UINT32 nFrames = std::min(numFramesAvailable, (UINT32)(FRAME_SIZE - monoWritePos));
+                    if (isFloatFormat)
+                    {
+                        const float* samples = reinterpret_cast<const float*>(pData);
+                        for (UINT32 i = 0; i < nFrames; ++i)
+                        {
+                            float sum = 0.0f;
+                            for (int c = 0; c < captureChannels; ++c)
+                                sum += samples[i * captureChannels + c];
+                            monoBuffer[monoWritePos++] = sum / captureChannels;
+                        }
+                    }
+                    else
+                    {
+                        const short* samples = reinterpret_cast<const short*>(pData);
+                        for (UINT32 i = 0; i < nFrames; ++i)
+                        {
+                            float sum = 0.0f;
+                            for (int c = 0; c < captureChannels; ++c)
+                                sum += samples[i * captureChannels + c];
+                            monoBuffer[monoWritePos++] = sum / captureChannels / 32768.0f;
+                        }
+                    }
+                }
+                
+                hr = pCaptureClient->ReleaseBuffer(numFramesAvailable);
+                if (FAILED(hr)) break;
+                
+                hr = pCaptureClient->GetNextPacketSize(&packetLength);
+                if (FAILED(hr)) break;
+                
+                // Process FFT when we have enough samples
+                if (monoWritePos >= FRAME_SIZE)
+                {
+                    // Apply Hann window into the dedicated FFT frame buffer so
+                    // the stored window itself is never overwritten.
+                    for (int i = 0; i < FRAME_SIZE; ++i)
+                        fftSamples[i] = monoBuffer[i] * windowedBuffer[i];
+                    
+                    // Prepare FFT input (real part only, imag = 0)
+                    for (int i = 0; i < FRAME_SIZE; ++i)
+                    {
+                        fftInput[2*i] = fftSamples[i];
+                        fftInput[2*i + 1] = 0.0f;
+                    }
+                    
+                    // Run FFT
+                    kiss_fft(fftCfg, fftInput.data(), fftOutput.data());
+                    
+                    // Compute magnitude spectrum (first FRAME_SIZE/2 bins)
+                    int numBins = FRAME_SIZE / 2;
+                    std::vector<float> magnitudes(numBins);
+                    float maxMag = 0.0f;
+                    
+                    for (int i = 0; i < numBins; ++i)
+                    {
+                        float real = fftOutput[2*i];
+                        float imag = fftOutput[2*i + 1];
+                        float mag = sqrtf(real * real + imag * imag);
+                        magnitudes[i] = mag;
+                        if (mag > maxMag) maxMag = mag;
+                    }
+                    
+                    // Slowly-decaying peak makes the bars react to loudness
+                    // instead of being pinned to full scale by every frame's max.
+                    peakHold = std::max(maxMag, peakHold * 0.985f);
+                    float masterScale = (peakHold > 1e-6f) ? 0.68f / peakHold : 0.0f;
+                    
+                    // Normalize and downsample to 64 bins with log-frequency spacing
+                    {
+                        std::lock_guard<std::mutex> lock(fftMutex);
+                        for (int i = 0; i < 64; ++i)
+                        {
+                            // Log-frequency mapping for better visual distribution
+                            float logIdx = powf(2.0f, (float)i / 64.0f * log2f(numBins));
+                            int binIdx = (int)logIdx;
+                            binIdx = std::min(binIdx, numBins - 1);
+                            
+                            float val = ImClamp(magnitudes[binIdx] * masterScale, 0.0f, 1.0f);
+                            
+                            // Smooth with previous frame
+                            latestFFT[i] = latestFFT[i] * 0.3f + val * 0.7f;
+                        }
+                        lastFFTTime = 0.0f; // Will be updated by render loop
+                    }
+                    
+                    // Shift buffer for overlap (hop size)
+                    int remaining = monoWritePos - HOP_SIZE;
+                    if (remaining > 0)
+                        std::copy(monoBuffer.begin() + HOP_SIZE, monoBuffer.begin() + monoWritePos, monoBuffer.begin());
+                    monoWritePos = remaining;
+                }
+            }
+            
+            Sleep(1); // Small sleep to prevent busy waiting
+        }
+        
+        pAudioClient->Stop();
+        
+        CoUninitialize();
+    }
+    
+    static bool StartCapture()
+    {
+        if (captureRunning) return true;
+        if (!captureInitialized)
+        {
+            if (!InitializeWASAPI()) return false;
+        }
+        
+        captureRunning = true;
+        try
+        {
+            captureThread = std::thread(CaptureLoop);
+        }
+        catch (...)
+        {
+            captureRunning = false;
+            lastError = "capture thread spawn failed";
+            CleanupWASAPI();
+            return false;
+        }
+        return true;
+    }
+    
+    static void StopCapture()
+    {
+        captureRunning = false;
+        if (captureThread.joinable())
+            captureThread.join();
+    }
+    
+    static bool IsCaptureActive() { return captureRunning && captureInitialized; }
+
+    // ── System volume control via IAudioEndpointVolume (render thread) ──────
+    static IMMDeviceEnumerator* g_volEnum = nullptr;
+    static IAudioEndpointVolume*  g_vol     = nullptr;
+    static bool g_volComInit = false;
+
+    static bool EnsureVolumeInterface()
+    {
+        if (g_vol) return true;
+        if (!g_volComInit)
+        {
+            CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+            g_volComInit = true;
+        }
+        if (!g_volEnum)
+            CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
+                             CLSCTX_INPROC_SERVER,
+                             __uuidof(IMMDeviceEnumerator),
+                             (void**)&g_volEnum);
+        if (!g_volEnum) return false;
+
+        IMMDevice* dev = nullptr;
+        if (FAILED(g_volEnum->GetDefaultAudioEndpoint(eRender, eConsole, &dev)))
+            return false;
+        HRESULT hr = dev->Activate(__uuidof(IAudioEndpointVolume),
+                                   CLSCTX_INPROC_SERVER, nullptr,
+                                   (void**)&g_vol);
+        dev->Release();
+        return SUCCEEDED(hr) && g_vol != nullptr;
+    }
+
+    static float GetSystemVolume()
+    {
+        if (!EnsureVolumeInterface()) return -1.0f;
+        float v = 0.0f;
+        if (SUCCEEDED(g_vol->GetMasterVolumeLevelScalar(&v)))
+            return ImClamp(v, 0.0f, 1.0f);
+        return -1.0f;
+    }
+
+    static void SetSystemVolume(float frac)
+    {
+        if (!EnsureVolumeInterface()) return;
+        g_vol->SetMasterVolumeLevelScalar(ImClamp(frac, 0.0f, 1.0f), nullptr);
+    }
+    
+    static void GetFFTData(std::vector<float>& out, int size = 64)
+    {
+        std::lock_guard<std::mutex> lock(fftMutex);
+        out.resize(size);
+        int copySize = std::min(size, (int)latestFFT.size());
+        for (int i = 0; i < copySize; ++i)
+            out[i] = latestFFT[i];
+    }
+    
+    static void Update(float dt)
+    {
+        lastFFTTime += dt;
+    }
+}
+
+// Spotify Visualizer - Windows Media Control Integration
+namespace SpotifyVisualizer
+{
+    using namespace winrt::Windows::Media::Control;
+    using namespace winrt::Windows::Foundation;
+    using namespace winrt::Windows::Storage::Streams;
+    using namespace winrt::Windows::Graphics::Imaging;
+    using namespace winrt::Windows::Storage;
+
+    struct TrackInfo
+    {
+        std::string title = "Unknown Track";
+        std::string artist = "Unknown Artist";
+        std::string album = "Unknown Album";
+        bool isPlaying = false;
+        float progress = 0.0f;
+        float duration = 0.0f;
+    };
+
+    // Render-thread only: mirrored from the worker snapshot every frame.
+    static TrackInfo currentTrack;
+    static std::vector<float> fftData(64, 0.0f);
+    static float visualizationTime = 0.0f;
+
+    enum class VisualizerMode
+    {
+        RadialBars,
+        Spectrum,
+        Waveform,
+        Particles
+    };
+
+    static VisualizerMode currentMode = VisualizerMode::RadialBars;
+
+    // Album art (D3D SRV) is device-owned; created + released only on the
+    // render thread that owns g_pd3dDevice.
+    static ImTextureID albumArtTexture = nullptr;
+    static bool albumArtLoaded = false;
+
+    // ---------------------------------------------------------------------
+    // Worker side: every SMTC/WASAPI call lives on a dedicated MTA worker
+    // thread so nothing can ever block the present loop. The render thread
+    // reads a locked snapshot + published album-art pixels only.
+    // ---------------------------------------------------------------------
+    struct SharedSnapshot
+    {
+        std::string title = "Unknown Track";
+        std::string artist = "Unknown Artist";
+        std::string album = "Unknown Album";
+        bool isPlaying = false;
+        float progress = 0.0f;
+        float duration = 0.0f;
+    };
+
+    enum class SmtcStatus
+    {
+        Starting = 0,
+        Connecting = 1,
+        Connected = 2,
+        NoSession = 3,
+        Failed = 4
+    };
+
+    static GlobalSystemMediaTransportControlsSessionManager sessionManager = nullptr; // worker only
+    static GlobalSystemMediaTransportControlsSession currentSession = nullptr;       // worker only
+    static std::string lastArtKey;                                                    // worker only
+
+    static std::mutex snapshotMutex;
+    static SharedSnapshot snapshot;
+    static std::vector<unsigned char> artPixels;
+    static int artW = 0, artH = 0;
+    static std::atomic<uint64_t> artVersion{ 0 };
+    static std::atomic<int> statusInt{ static_cast<int>(SmtcStatus::Starting) };
+
+    enum class ControlCommand { None, PlayPause, Next, Prev, Seek };
+    static std::atomic<ControlCommand> pendingControl{ ControlCommand::None };
+    static std::atomic<float> pendingSeek{ 0.0f };
+
+    static std::thread smtcThread;
+    static std::mutex threadStartMutex;
+    static std::atomic<bool> smtcStop{ false };
+    static std::atomic<bool> smtcRunning{ false };
+
+    // Wait on a WinRT async op with a hard timeout, so a wedged SMTC/COM
+    // service can stall a worker tick but never the UI.
+    template <typename AsyncOp>
+    static bool WaitOp(AsyncOp op, std::chrono::milliseconds timeout)
+    {
+        auto status = op.Status();
+        if (status == AsyncStatus::Completed || status == AsyncStatus::Error || status == AsyncStatus::Canceled)
+            return true;
+
+        auto sp = std::make_shared<std::promise<void>>();
+        auto fut = sp->get_future();
+        op.Completed([sp](auto&&, AsyncStatus) {
+            try { sp->set_value(); } catch (...) {}
+        });
+        return fut.wait_for(timeout) == std::future_status::ready;
+    }
+
+    static void TryInitManager()
+    {
+        try
+        {
+            auto op = GlobalSystemMediaTransportControlsSessionManager::RequestAsync();
+            if (!WaitOp(op, std::chrono::seconds(3)))
+            {
+                statusInt.store(static_cast<int>(SmtcStatus::Failed));
+                return;
+            }
+            sessionManager = op.GetResults();
+            statusInt.store(static_cast<int>(SmtcStatus::Connecting));
+        }
+        catch (...)
+        {
+            statusInt.store(static_cast<int>(SmtcStatus::Failed));
+        }
+    }
+
+    static bool FindSpotifySession()
+    {
+        if (!sessionManager) return false;
+        try
+        {
+            auto sessions = sessionManager.GetSessions();
+            uint32_t size = sessions.Size();
+
+            for (uint32_t i = 0; i < size; ++i)
+            {
+                auto session = sessions.GetAt(i);
+                if (!session) continue;
+
+                auto sourceAppUserModelId = session.SourceAppUserModelId();
+                std::wstring appId(sourceAppUserModelId.c_str());
+
+                if (appId.find(L"Spotify") != std::wstring::npos ||
+                    appId.find(L"spotify") != std::wstring::npos)
+                {
+                    currentSession = session;
+                    return true;
+                }
+
+                try
+                {
+                    auto propsOp = session.TryGetMediaPropertiesAsync();
+                    if (!WaitOp(propsOp, std::chrono::seconds(1))) continue;
+                    auto props = propsOp.GetResults();
+                    if (props)
+                    {
+                        auto title = winrt::to_string(props.Title());
+                        auto artist = winrt::to_string(props.Artist());
+                        if (title.find("Spotify") != std::string::npos ||
+                            artist.find("Spotify") != std::string::npos)
+                        {
+                            currentSession = session;
+                            return true;
+                        }
+                    }
+                }
+                catch (...)
+                {
+                }
+            }
+        }
+        catch (...)
+        {
+            return false;
+        }
+        return false;
+    }
+    
+    // Decode the SMTC thumbnail and publish RGBA pixels to the render thread
+    // (which does the D3D upload). Runs on the worker only.
+    bool LoadTrackThumbnail(const GlobalSystemMediaTransportControlsSessionMediaProperties& props)
+    {
+        try
+        {
+            auto thumbnail = props.Thumbnail();
+            if (!thumbnail) return false;
+
+            auto openOp = thumbnail.OpenReadAsync();
+            if (!WaitOp(openOp, std::chrono::seconds(2))) return false;
+            auto stream = openOp.GetResults();
+            if (!stream) return false;
+
+            const uint64_t sz = stream.Size();
+            if (sz == 0 || sz > 32ULL * 1024ULL * 1024ULL)
+                return false;
+
+            auto input = stream.GetInputStreamAt(0);
+            Buffer buffer(static_cast<uint32_t>(sz));
+            auto readOp = input.ReadAsync(buffer, static_cast<uint32_t>(sz),
+                                          InputStreamOptions::ReadAhead);
+            if (!WaitOp(readOp, std::chrono::seconds(2))) return false;
+
+            const uint32_t bytesRead = buffer.Length();
+            if (bytesRead == 0)
+                return false;
+
+            int w = 0, h = 0, ch = 0;
+            unsigned char* px = stbi_load_from_memory(buffer.data(), static_cast<int>(bytesRead), &w, &h, &ch, 4);
+            if (!px)
+                return false;
+
+            // Downscale oversized covers so the SRV stays cheap (<=512px).
+            std::vector<unsigned char> scaled;
+            if (w > 512 || h > 512)
+            {
+                const float scale = std::min(512.0f / w, 512.0f / h);
+                const int nw = std::max(1, static_cast<int>(w * scale));
+                const int nh = std::max(1, static_cast<int>(h * scale));
+                scaled.resize(static_cast<size_t>(nw) * nh * 4);
+                for (int y = 0; y < nh; ++y)
+                {
+                    const int sy = std::min(h - 1, static_cast<int>(y / scale));
+                    for (int x = 0; x < nw; ++x)
+                    {
+                        const int sx = std::min(w - 1, static_cast<int>(x / scale));
+                        const unsigned char* s = px + (static_cast<size_t>(sy) * w + sx) * 4;
+                        unsigned char* d = scaled.data() + (static_cast<size_t>(y) * nw + x) * 4;
+                        d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = s[3];
+                    }
+                }
+                w = nw; h = nh;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(snapshotMutex);
+                if (scaled.empty())
+                    artPixels.assign(px, px + static_cast<size_t>(w) * h * 4);
+                else
+                    artPixels.swap(scaled);
+                artW = w; artH = h;
+            }
+            artVersion.fetch_add(1, std::memory_order_release);
+
+            stbi_image_free(px);
+            return true;
+        }
+        catch (...)
+        {
+        }
+        return false;
+    }
+
+    // Refresh the shared snapshot from the live media session. Runs on the
+    // worker only; the render thread reads `snapshot`/`artPixels` under the
+    // mutex.
+    void UpdateTrackInfoWorker()
+    {
+        if (!currentSession) return;
+
+        try
+        {
+            SharedSnapshot next;
+
+            auto playbackInfo = currentSession.GetPlaybackInfo();
+            auto playbackStatus = playbackInfo.PlaybackStatus();
+            next.isPlaying = (playbackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing);
+
+            auto timelineProps = currentSession.GetTimelineProperties();
+            if (timelineProps)
+            {
+                auto duration = timelineProps.EndTime() - timelineProps.StartTime();
+                long long durTicks = duration.count();
+                if (durTicks > 0)
+                {
+                    float dur = static_cast<float>(durTicks) / 10000000.0f;
+                    float pos = static_cast<float>(timelineProps.Position().count()) / 10000000.0f;
+                    pos = std::max(0.0f, std::min(pos, dur));
+                    next.duration = dur;
+                    next.progress = dur > 0.0f ? pos / dur : 0.0f;
+                }
+            }
+
+            auto mediaOp = currentSession.TryGetMediaPropertiesAsync();
+            if (!WaitOp(mediaOp, std::chrono::milliseconds(800)))
+            {
+                {
+                    std::lock_guard<std::mutex> lock(snapshotMutex);
+                    snapshot = next;
+                }
+                return;
+            }
+            auto mediaProps = mediaOp.GetResults();
+            if (!mediaProps)
+            {
+                {
+                    std::lock_guard<std::mutex> lock(snapshotMutex);
+                    snapshot = next;
+                }
+                return;
+            }
+
+            std::string title = winrt::to_string(mediaProps.Title());
+            std::string artist = winrt::to_string(mediaProps.Artist());
+            std::string album = winrt::to_string(mediaProps.AlbumTitle());
+            if (album.empty())
+                album = winrt::to_string(mediaProps.AlbumArtist());
+            if (album.empty())
+                album = "Unknown Album";
+            if (title.empty()) title = "Unknown Track";
+            if (artist.empty()) artist = "Unknown Artist";
+            next.title = title;
+            next.artist = artist;
+            next.album = album;
+
+            {
+                std::lock_guard<std::mutex> lock(snapshotMutex);
+                snapshot = next;
+            }
+
+            const std::string artKey = title + "|" + artist + "|" + album;
+            if (artKey != lastArtKey)
+            {
+                lastArtKey = artKey;
+                LoadTrackThumbnail(mediaProps);
+            }
+        }
+        catch (...)
+        {
+            // Session vanished mid-poll; drop it and let the loop re-search.
+            currentSession = nullptr;
+            statusInt.store(static_cast<int>(SmtcStatus::NoSession));
+        }
+    }
+
+    void ProcessControlCommand()
+    {
+        ControlCommand cmd = pendingControl.exchange(ControlCommand::None);
+        if (cmd == ControlCommand::None || !currentSession) return;
+
+        try
+        {
+            switch (cmd)
+            {
+                case ControlCommand::PlayPause:
+                {
+                    auto playbackInfo = currentSession.GetPlaybackInfo();
+                    bool playing = (playbackInfo.PlaybackStatus() == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing);
+                    if (playing) currentSession.TryPauseAsync();
+                    else currentSession.TryPlayAsync();
+                    break;
+                }
+                case ControlCommand::Next:
+                    currentSession.TrySkipNextAsync();
+                    break;
+                case ControlCommand::Prev:
+                    currentSession.TrySkipPreviousAsync();
+                    break;
+                case ControlCommand::Seek:
+                {
+                    SharedSnapshot s;
+                    {
+                        std::lock_guard<std::mutex> lock(snapshotMutex);
+                        s = snapshot;
+                    }
+                    if (s.duration > 0.0f)
+                    {
+                        float frac = std::clamp(pendingSeek.load(std::memory_order_relaxed), 0.0f, 1.0f);
+                        long long target = static_cast<long long>(s.duration * frac * 10000000.0f);
+                        currentSession.TryChangePlaybackPositionAsync(target);
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+        catch (...)
+        {
+        }
+    }
+
+    // Starts WASAPI loopback capture, retrying every few seconds until it
+    // succeeds so a transient failure (device busy, COM not warmed up, no render
+    // endpoint yet) recovers automatically instead of sticking the visualizer on
+    // the simulated path forever.
+    void AttemptAudioCapture()
+    {
+        if (AudioCapture::IsCaptureActive())
+            return;
+
+        auto now = std::chrono::steady_clock::now();
+        static auto lastAttempt = now - std::chrono::seconds(10);
+        if (now - lastAttempt < std::chrono::seconds(3))
+            return;
+        lastAttempt = now;
+
+        bool ok = AudioCapture::StartCapture();
+        static std::string lastReportedError;
+        const std::string curErr = AudioCapture::GetLastError();
+        if (ok)
+        {
+            if (lastReportedError != "active")
+            {
+                Executor::ConsolePush("[visualizer] WASAPI loopback capture started");
+                lastReportedError = "active";
+            }
+        }
+        else if (curErr != lastReportedError)
+        {
+            Executor::ConsolePush("[visualizer] capture failed: " + curErr);
+            lastReportedError = curErr;
+        }
+    }
+
+    void SmtcWorker()
+    {
+        try { winrt::init_apartment(winrt::apartment_type::multi_threaded); }
+        catch (...) {}
+
+        auto lastManagerTry = std::chrono::steady_clock::now() - std::chrono::seconds(5);
+        auto lastFindTry = lastManagerTry;
+
+        while (!smtcStop.load())
+        {
+            const auto now = std::chrono::steady_clock::now();
+
+            if (!sessionManager)
+            {
+                if (now - lastManagerTry >= std::chrono::seconds(3))
+                {
+                    lastManagerTry = now;
+                    TryInitManager();
+                }
+            }
+            else if (!currentSession)
+            {
+                if (now - lastFindTry >= std::chrono::milliseconds(500))
+                {
+                    lastFindTry = now;
+                    if (FindSpotifySession())
+                        statusInt.store(static_cast<int>(SmtcStatus::Connected));
+                    else
+                        statusInt.store(static_cast<int>(SmtcStatus::NoSession));
+                }
+            }
+            else
+            {
+                statusInt.store(static_cast<int>(SmtcStatus::Connected));
+                ProcessControlCommand();
+                UpdateTrackInfoWorker();
+
+                SharedSnapshot s;
+                {
+                    std::lock_guard<std::mutex> lock(snapshotMutex);
+                    s = snapshot;
+                }
+                if (s.isPlaying)
+                    AttemptAudioCapture();
+            }
+
+            Sleep(250);
+        }
+    }
+
+    void EnsureWorker()
+    {
+        std::lock_guard<std::mutex> lock(threadStartMutex);
+        if (smtcRunning.load() || smtcStop.load())
+            return;
+        smtcStop.store(false);
+        smtcThread = std::thread(SmtcWorker);
+        smtcRunning.store(true);
+    }
+
+    // Stop + join the worker and release every device-owned resource. Called
+    // once from the overlay teardown path before D3D is destroyed.
+    void Shutdown()
+    {
+        {
+            std::lock_guard<std::mutex> lock(threadStartMutex);
+            if (!smtcRunning.load())
+                return;
+            smtcStop.store(true);
+            if (smtcThread.joinable())
+                smtcThread.join();
+            smtcThread = std::thread();
+            smtcRunning.store(false);
+        }
+
+        AudioCapture::StopCapture();
+
+        if (albumArtTexture)
+        {
+            ID3D11ShaderResourceView* srv = reinterpret_cast<ID3D11ShaderResourceView*>(reinterpret_cast<intptr_t>(albumArtTexture));
+            srv->Release();
+            albumArtTexture = nullptr;
+        }
+        albumArtLoaded = false;
+
+        artVersion.store(0);
+        currentSession = nullptr;
+        sessionManager = nullptr;
+    }
+    
+    // Upload raw RGBA pixels to a GPU texture, returning an ImTextureID (D3D11 SRV).
+    ImTextureID UploadTexture(const unsigned char* px, int w, int h)
+    {
+        ID3D11Device* device = g_pd3dDevice;
+        if (!device || !px || w <= 0 || h <= 0)
+            return 0;
+
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = static_cast<UINT>(w);
+        td.Height = static_cast<UINT>(h);
+        td.MipLevels = 1;
+        td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_DEFAULT;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        D3D11_SUBRESOURCE_DATA sd{};
+        sd.pSysMem = px;
+        sd.SysMemPitch = static_cast<UINT>(w * 4);
+
+        ID3D11Texture2D* tex = nullptr;
+        HRESULT hr = device->CreateTexture2D(&td, &sd, &tex);
+        if (FAILED(hr) || !tex)
+            return 0;
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC svd{};
+        svd.Format = td.Format;
+        svd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        svd.Texture2D.MipLevels = 1;
+
+        ID3D11ShaderResourceView* srv = nullptr;
+        hr = device->CreateShaderResourceView(tex, &svd, &srv);
+        tex->Release();
+        if (FAILED(hr))
+            return 0;
+
+        return reinterpret_cast<ImTextureID>(reinterpret_cast<intptr_t>(srv));
+    }
+
+    // Free the currently cached album art SRV.
+    void ReleaseAlbumArt()
+    {
+        if (albumArtTexture)
+        {
+            ID3D11ShaderResourceView* srv = reinterpret_cast<ID3D11ShaderResourceView*>(reinterpret_cast<intptr_t>(albumArtTexture));
+            srv->Release();
+            albumArtTexture = nullptr;
+        }
+        albumArtLoaded = false;
+    }
+
+    // Update FFT data - uses real audio capture when available, falls back to simulation
+    void SimulateFFT(float dt)
+    {
+        visualizationTime += dt;
+        
+        // Try to get real audio data from WASAPI loopback capture
+        if (AudioCapture::IsCaptureActive())
+        {
+            AudioCapture::GetFFTData(fftData, (int)fftData.size());
+            AudioCapture::Update(dt);
+            return;
+        }
+        
+        // Fallback: More realistic simulation with beat detection
+        static float beatPhase = 0.0f;
+        static float lastBeatTime = 0.0f;
+        static float beatInterval = 0.5f; // ~120 BPM
+        
+        beatPhase += dt;
+        if (beatPhase - lastBeatTime > beatInterval)
+        {
+            lastBeatTime = beatPhase;
+            beatInterval = 0.4f + (sinf(visualizationTime * 0.7f) * 0.15f + 0.5f) * 0.2f;
+        }
+        
+        float beatIntensity = 1.0f - ImClamp((beatPhase - lastBeatTime) / beatInterval * 2.0f, 0.0f, 1.0f);
+        beatIntensity = beatIntensity * beatIntensity;
+        
+        for (size_t i = 0; i < fftData.size(); ++i)
+        {
+            float baseFreq = static_cast<float>(i) / static_cast<float>(fftData.size());
+            
+            float oscillator1 = sinf(visualizationTime * 1.3f + baseFreq * 8.0f) * 0.25f;
+            float oscillator2 = sinf(visualizationTime * 0.7f + baseFreq * 15.0f) * 0.15f;
+            float oscillator3 = sinf(visualizationTime * 2.1f + baseFreq * 5.0f) * 0.1f;
+            
+            float noise = (oscillator1 + oscillator2 + oscillator3) * 0.5f + 0.5f;
+            
+            float freqWeight = 0.3f + baseFreq * 0.7f;
+            float bassBoost = (1.0f - baseFreq) * 0.5f + 0.5f;
+            
+            float beatResponse = 1.0f + beatIntensity * bassBoost * 0.8f;
+            
+            float constantFloor = 0.15f + baseFreq * 0.25f;
+            
+            fftData[i] = ImClamp((noise * beatResponse * freqWeight + constantFloor) * (0.5f + beatIntensity * 0.5f), 0.0f, 1.0f);
+        }
+    }
+    
+    // Queue a playback command for the worker thread. The worker owns the
+    // SMTC session, so all controls pass through it and apply on its next poll.
+    void QueueControl(ControlCommand cmd)
+    {
+        pendingControl.store(cmd, std::memory_order_release);
+    }
+
+    // Render visualizer
+    void Render(ImDrawList* draw, ImVec2 pos, ImVec2 size, float dt)
+    {
+        EnsureWorker();
+
+        // Mirror the worker's latest snapshot onto the render-side track
+        // state (currentTrack is render-thread-only).
+        {
+            SharedSnapshot s;
+            {
+                std::lock_guard<std::mutex> lock(snapshotMutex);
+                s = snapshot;
+            }
+            currentTrack.title = s.title;
+            currentTrack.artist = s.artist;
+            currentTrack.album = s.album;
+            currentTrack.isPlaying = s.isPlaying;
+            currentTrack.progress = s.progress;
+            currentTrack.duration = s.duration;
+        }
+
+        // Publish worker-decoded album art to the GPU exactly once per
+        // revision. D3D resource creation must stay on the render thread.
+        static uint64_t lastUploadedArtVersion = 0;
+        const uint64_t version = artVersion.load(std::memory_order_acquire);
+        if (version != lastUploadedArtVersion)
+        {
+            std::vector<unsigned char> px;
+            int w = 0, h = 0;
+            {
+                std::lock_guard<std::mutex> lock(snapshotMutex);
+                px = artPixels;
+                w = artW; h = artH;
+            }
+            if (!px.empty())
+            {
+                ImTextureID tex = UploadTexture(px.data(), w, h);
+                if (tex)
+                {
+                    ReleaseAlbumArt();
+                    albumArtTexture = tex;
+                    albumArtLoaded = true;
+                }
+            }
+            else
+            {
+                ReleaseAlbumArt();
+            }
+            lastUploadedArtVersion = version;
+        }
+
+        SimulateFFT(dt);
+        
+        ImVec2 center = ImVec2(pos.x + size.x * 0.5f, pos.y + size.y * 0.5f);
+        float radius = ImMin(size.x, size.y) * 0.4f;
+        
+        ImU32 accentColor = IM_COL32(30, 215, 96, 255); // Spotify Green
+        ImU32 accentDim = IM_COL32(30, 215, 96, 100);
+        ImU32 bgColor = IM_COL32(20, 20, 30, 200);
+        ImU32 textColor = IM_COL32(255, 255, 255, 255);
+        ImU32 mutedColor = IM_COL32(180, 180, 180, 255);
+        ImU32 warningColor = IM_COL32(255, 180, 60, 255);
+
+        ImU32 textSecondary = IM_COL32(176, 182, 190, 255);
+        ImU32 textTertiary  = IM_COL32(118, 124, 134, 255);
+        ImU32 trackFill     = IM_COL32(44, 45, 56, 255);
+        ImU32 surfaceHov    = IM_COL32(52, 54, 66, 255);
+
+        ImFont* fTitle = UI::medium_font ? UI::medium_font : ImGui::GetFont();
+        ImFont* fBody  = UI::small_font  ? UI::small_font  : ImGui::GetFont();
+        
+        // Background panel
+        draw->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), bgColor, 8.0f);
+        draw->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), IM_COL32(60, 60, 80, 255), 8.0f);
+        
+        // Album art (left side) - draw Spotify-style placeholder with album art area
+        float artSize = ImMin(size.x * 0.28f, size.y * 0.5f);
+        ImVec2 artPos = ImVec2(pos.x + 16.0f, pos.y + 14.0f);
+        draw->AddRectFilled(artPos, ImVec2(artPos.x + artSize, artPos.y + artSize), IM_COL32(18, 18, 28, 255), 6.0f);
+        draw->AddRect(artPos, ImVec2(artPos.x + artSize, artPos.y + artSize), IM_COL32(60, 60, 80, 255), 6.0f);
+        
+        // Draw actual album art if loaded, otherwise Spotify logo placeholder
+        if (albumArtTexture)
+        {
+            draw->AddImageRounded(albumArtTexture, artPos, ImVec2(artPos.x + artSize, artPos.y + artSize),
+                                  ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE, 6.0f);
+        }
+        else
+        {
+        // Draw Spotify logo / album art placeholder
+        float cx = artPos.x + artSize * 0.5f;
+        float cy = artPos.y + artSize * 0.5f;
+        float r = artSize * 0.35f;
+        
+        // Draw Spotify-like circular waves (iconic Spotify logo)
+        for (int wave = 0; wave < 3; ++wave)
+        {
+            float waveR = r * (0.4f + wave * 0.2f);
+            float waveThickness = r * 0.08f;
+            float startAngle = -IM_PI * 0.6f;
+            float endAngle = IM_PI * 0.6f;
+            int segments = 24;
+            
+            for (int i = 0; i < segments; ++i)
+            {
+                float a1 = startAngle + (endAngle - startAngle) * i / segments;
+                float a2 = startAngle + (endAngle - startAngle) * (i + 1) / segments;
+                ImVec2 p1(cx + cosf(a1) * waveR, cy + sinf(a1) * waveR);
+                ImVec2 p2(cx + cosf(a2) * waveR, cy + sinf(a2) * waveR);
+                ImU32 waveColor = IM_COL32(30, 215, 96, 180 - wave * 40);
+                draw->AddLine(p1, p2, waveColor, waveThickness);
+            }
+        }
+        }
+        
+        // Track info (right of album art)
+        float infoX = artPos.x + artSize + 20.0f;
+        float infoY = artPos.y + 10.0f;
+        float infoW = size.x - (infoX - pos.x) - 20.0f;
+
+        // Ellipsize helper so long titles/artists never overflow.
+        auto ellipsize = [&](const std::string& text, float maxW, ImFont* font, float size) -> std::string
+        {
+            if (font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str()).x <= maxW)
+                return text;
+            std::string t = text;
+            while (!t.empty() && font->CalcTextSizeA(size, FLT_MAX, 0.0f, (t + "...").c_str()).x > maxW)
+                t.pop_back();
+            return t + "...";
+        };
+
+        // Playback status: green animated dot + small caps label
+        bool playing = currentTrack.isPlaying;
+        ImU32 statusDotCol = playing ? accentColor : textTertiary;
+        float dotR = 3.5f;
+        ImVec2 dotC(infoX + 4.0f, infoY + 6.0f);
+        if (playing)
+        {
+            // Soft glow so the status reads as "live"
+            draw->AddCircleFilled(dotC, dotR + 3.0f, accentDim, 24);
+            draw->AddCircleFilled(dotC, dotR, statusDotCol, 24);
+        }
+        else
+        {
+            draw->AddCircleFilled(dotC, dotR, statusDotCol, 24);
+        }
+        draw->AddText(fTitle, 11.0f, ImVec2(infoX + 12.0f, infoY), playing ? accentColor : textSecondary, playing ? "NOW PLAYING" : "PAUSED");
+        infoY += 15.0f;
+        
+        // Title (primary)
+        std::string titleTxt = ellipsize(currentTrack.title, infoW, fTitle, 21.0f);
+        draw->AddText(fTitle, 21.0f, ImVec2(infoX, infoY), textColor, titleTxt.c_str());
+        infoY += 25.0f;
+        
+        // Artist + album (secondary lines)
+        std::string artistTxt = ellipsize(currentTrack.artist, infoW, fBody, 14.0f);
+        draw->AddText(fBody, 14.0f, ImVec2(infoX, infoY), textSecondary, artistTxt.c_str());
+        infoY += 17.0f;
+        if (!currentTrack.album.empty())
+        {
+            std::string albumTxt = ellipsize(currentTrack.album, infoW, fBody, 12.0f);
+            draw->AddText(fBody, 12.0f, ImVec2(infoX, infoY), textTertiary, albumTxt.c_str());
+            infoY += 15.0f;
+        }
+        infoY += 4.0f;
+        
+        // Progress bar (seekable)
+        float progressBarW = infoW;
+        float progressBarH = 5.0f;
+        float pbCX = infoX, pbCY = infoY;
+        ImVec2 pbMin(pbCX, pbCY);
+        ImVec2 pbMax(pbCX + progressBarW, pbCY + progressBarH);
+        float prog = ImClamp(currentTrack.progress, 0.0f, 1.0f);
+
+        // Wider invisible hit area for easier clicking
+        ImVec2 pbHitMin(infoX, infoY - 9.0f);
+        ImVec2 pbHitMax(infoX + progressBarW, infoY + progressBarH + 9.0f);
+        bool pbHovered = ImGui::IsMouseHoveringRect(pbHitMin, pbHitMax);
+
+        static bool pbDragging = false;
+        static float pbDragFrac = 0.0f;
+
+        if (pbHovered && ImGui::IsMouseClicked(0))
+        {
+            pbDragging = true;
+            pbDragFrac = ImClamp((ImGui::GetIO().MousePos.x - infoX) / progressBarW, 0.0f, 1.0f);
+        }
+        if (pbDragging)
+        {
+            if (ImGui::IsMouseDown(0))
+            {
+                pbDragFrac = ImClamp((ImGui::GetIO().MousePos.x - infoX) / progressBarW, 0.0f, 1.0f);
+                pendingSeek.store(pbDragFrac, std::memory_order_relaxed);
+                QueueControl(ControlCommand::Seek);
+            }
+            else
+            {
+                pendingSeek.store(pbDragFrac, std::memory_order_relaxed);
+                QueueControl(ControlCommand::Seek);
+                pbDragging = false;
+            }
+        }
+
+        float dispProg = pbDragging ? pbDragFrac : prog;
+        draw->AddRectFilled(pbMin, pbMax, trackFill, 3.0f);
+        if (dispProg > 0.001f)
+        {
+            // Fill: subtle horizontal gradient accent -> lighter green
+            ImVec2 fillMin(pbMin.x, pbMin.y);
+            ImVec2 fillMax(pbMin.x + progressBarW * dispProg, pbMax.y);
+            ImU32 fillA = IM_COL32(30, 215, 96, 255);
+            ImU32 fillB = IM_COL32(82, 240, 138, 255);
+            draw->AddRectFilledMultiColor(fillMin, fillMax, fillA, fillB, fillA, fillB);
+            // Rounded right edge for fill when not full
+            if (dispProg > 0.02f && dispProg < 0.99f)
+                draw->AddCircleFilled(ImVec2(fillMax.x, pbCY + progressBarH * 0.5f), progressBarH * 0.5f, fillB, 16);
+        }
+
+        // Knob
+        float knobR = (pbHovered || pbDragging) ? 6.5f : 5.0f;
+        float knobX = pbMin.x + progressBarW * dispProg;
+        ImVec2 knobC(knobX, pbCY + progressBarH * 0.5f);
+        if (pbHovered || pbDragging)
+        {
+            draw->AddCircleFilled(knobC, knobR + 4.0f, IM_COL32(30, 215, 96, 60), 24);
+            draw->AddCircleFilled(knobC, knobR, IM_COL32(255, 255, 255, 255), 24);
+        }
+        else
+        {
+            draw->AddCircleFilled(knobC, knobR, IM_COL32(235, 240, 245, 255), 24);
+        }
+
+        if (pbHovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+
+        infoY += 15.0f;
+
+        // Time display (current left, total right - Spotify style)
+        auto formatTime = [](float seconds) -> std::string {
+            if (seconds < 0) seconds = 0;
+            if (!isfinite(seconds)) seconds = 0;
+            int mins = static_cast<int>(seconds) / 60;
+            int secs = static_cast<int>(seconds) % 60;
+            char buf[16];
+            sprintf_s(buf, "%d:%02d", mins, secs);
+            return std::string(buf);
+        };
+
+        float displaySecs = dispProg * currentTrack.duration;
+        float totalSecs = currentTrack.duration;
+        std::string curTime = formatTime(displaySecs);
+        std::string totTime = formatTime(totalSecs);
+        draw->AddText(fBody, 11.0f, ImVec2(infoX, infoY), textTertiary, curTime.c_str());
+        float totW = fBody->CalcTextSizeA(11.0f, FLT_MAX, 0.0f, totTime.c_str()).x;
+        draw->AddText(fBody, 11.0f, ImVec2(pbMax.x - totW, infoY), textTertiary, totTime.c_str());
+        infoY += 17.0f;
+
+        // Volume slider (speaker icon + slim bar + percent)
+        float volLabelW = 18.0f;
+        float volBarX = infoX + volLabelW;
+        float volBarW = infoW - volLabelW - 42.0f;
+        float volH = 4.0f;
+        float volCY = infoY + 2.0f;
+
+        // Speaker icon (wedge + sound arcs)
+        ImU32 volIconCol = textSecondary;
+        float sx = infoX + 2.0f;
+        float sy = infoY + 2.0f;
+        // speaker body: small rounded rect
+        draw->AddRectFilled(ImVec2(sx, sy + 2.0f), ImVec2(sx + 4.0f, sy + 6.0f), volIconCol, 1.0f);
+        // cone
+        draw->AddTriangleFilled(ImVec2(sx + 4.0f, sy + 2.0f), ImVec2(sx + 4.0f, sy + 6.0f), ImVec2(sx + 8.0f, sy + 4.0f), volIconCol);
+        // arcs (two sound waves)
+        float arcR1 = 3.0f, arcR2 = 5.0f;
+        for (int i = 0; i < 2; ++i)
+        {
+            float rr = i ? arcR2 : arcR1;
+            float aa = ImAcos(6.0f / rr); // clamp into [0, pi/2]
+            int segs = 8;
+            for (int s = 0; s < segs; ++s)
+            {
+                float a1 = -aa + aa * 2 * s / segs;
+                float a2 = -aa + aa * 2 * (s + 1) / segs;
+                draw->AddLine(
+                    ImVec2(sx + 8.0f + cosf(a1) * rr, sy + 4.0f + sinf(a1) * rr),
+                    ImVec2(sx + 8.0f + cosf(a2) * rr, sy + 4.0f + sinf(a2) * rr),
+                    volIconCol, 1.2f);
+            }
+        }
+
+        ImVec2 volMin(volBarX, volCY);
+        ImVec2 volMax(volBarX + volBarW, volCY + volH);
+        ImVec2 volHitMin(volBarX, infoY - 8.0f);
+        ImVec2 volHitMax(volBarX + volBarW, infoY + volH + 8.0f);
+        bool volHovered = ImGui::IsMouseHoveringRect(volHitMin, volHitMax);
+
+        static bool volDragging = false;
+        static float volDragVal = 0.5f;
+
+        float curVol = AudioCapture::GetSystemVolume();
+        if (curVol < 0.0f) curVol = 0.5f;
+        float dispVol = volDragging ? volDragVal : curVol;
+
+        if (volHovered && ImGui::IsMouseClicked(0))
+        {
+            volDragging = true;
+            volDragVal = ImClamp((ImGui::GetIO().MousePos.x - volBarX) / volBarW, 0.0f, 1.0f);
+            AudioCapture::SetSystemVolume(volDragVal);
+        }
+        if (volDragging)
+        {
+            if (ImGui::IsMouseDown(0))
+            {
+                volDragVal = ImClamp((ImGui::GetIO().MousePos.x - volBarX) / volBarW, 0.0f, 1.0f);
+                AudioCapture::SetSystemVolume(volDragVal);
+            }
+            else
+                volDragging = false;
+        }
+
+        draw->AddRectFilled(volMin, volMax, trackFill, 2.0f);
+        if (dispVol > 0.001f)
+        {
+            ImVec2 vfillMax(volMin.x + volBarW * dispVol, volMax.y);
+            draw->AddRectFilledMultiColor(volMin, vfillMax, accentColor, accentColor, accentColor, accentColor);
+        }
+
+        float volKnobX = volMin.x + volBarW * dispVol;
+        ImU32 volKnobCol = (volHovered || volDragging) ? IM_COL32(255, 255, 255, 255) : IM_COL32(235, 240, 245, 255);
+        draw->AddCircleFilled(ImVec2(volKnobX, volCY + volH * 0.5f), (volHovered || volDragging) ? 5.5f : 4.5f, volKnobCol, 16);
+
+        // Volume percentage
+        char volPct[8];
+        sprintf_s(volPct, "%d%%", (int)(dispVol * 100.0f + 0.5f));
+        draw->AddText(fBody, 11.0f, ImVec2(volBarX + volBarW + 8.0f, infoY + 1.0f), textTertiary, volPct);
+
+        if (volHovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+
+        infoY += 15.0f;
+        
+        // Playback controls (Spotify style: ghost skip buttons + large play)
+        float ghostBtn = 32.0f;
+        float playBtn = 38.0f;
+        float spacing = 12.0f;
+        float totalBtnW = ghostBtn * 2 + playBtn + spacing * 2;
+        float btnStartX = infoX + (infoW - totalBtnW) * 0.5f;
+        float btnY = infoY;
+
+        auto drawSkipBtn = [&](float x, int dir) -> bool {
+            ImVec2 bmin(x, btnY);
+            ImVec2 bmax(x + ghostBtn, btnY + ghostBtn);
+            bool hovered = ImGui::IsMouseHoveringRect(bmin, bmax);
+            bool clicked = hovered && ImGui::IsMouseClicked(0);
+            if (hovered)
+                draw->AddCircleFilled(ImVec2(x + ghostBtn * 0.5f, btnY + ghostBtn * 0.5f), ghostBtn * 0.5f, IM_COL32(50, 51, 62, 230), 40);
+            ImU32 col = hovered ? textColor : textSecondary;
+            float cx = x + ghostBtn * 0.5f;
+            float cy = btnY + ghostBtn * 0.5f;
+            float s = ghostBtn * 0.30f;
+            if (dir == 0) // previous
+            {
+                draw->AddRectFilled(ImVec2(cx - s * 0.7f, cy - s), ImVec2(cx - s * 0.3f, cy + s), col);
+                draw->AddTriangleFilled(ImVec2(cx - s * 0.1f, cy), ImVec2(cx + s * 0.4f, cy - s), ImVec2(cx + s * 0.4f, cy + s), col);
+            }
+            else // next
+            {
+                draw->AddRectFilled(ImVec2(cx + s * 0.3f, cy - s), ImVec2(cx + s * 0.7f, cy + s), col);
+                draw->AddTriangleFilled(ImVec2(cx + s * 0.1f, cy), ImVec2(cx - s * 0.4f, cy - s), ImVec2(cx - s * 0.4f, cy + s), col);
+            }
+            return clicked;
+        };
+
+        // prev
+        if (drawSkipBtn(btnStartX, 0)) QueueControl(ControlCommand::Prev);
+        // play/pause - large green circle with dark icon
+        float playX = btnStartX + ghostBtn + spacing;
+        ImVec2 playC(playX + playBtn * 0.5f, btnY + playBtn * 0.5f);
+        bool playHovered = ImGui::IsMouseHoveringRect(ImVec2(playX, btnY), ImVec2(playX + playBtn, btnY + playBtn));
+        if (playHovered)
+        {
+            draw->AddCircleFilled(playC, playBtn * 0.5f + 4.0f, IM_COL32(30, 215, 96, 55), 48);
+        }
+        ImU32 playBg = playHovered ? IM_COL32(52, 235, 118, 255) : accentColor;
+        draw->AddCircleFilled(playC, playBtn * 0.5f, playBg, 48);
+        ImU32 playIconCol = IM_COL32(16, 20, 24, 255);
+        {
+            float cxp = playC.x, cyp = playC.y;
+            if (playing) // pause bars
+            {
+                draw->AddRectFilled(ImVec2(cxp - 6.0f, cyp - 7.0f), ImVec2(cxp - 1.5f, cyp + 7.0f), playIconCol, 1.5f);
+                draw->AddRectFilled(ImVec2(cxp + 5.0f, cyp - 7.0f), ImVec2(cxp + 1.5f, cyp + 7.0f), playIconCol, 1.5f);
+            }
+            else // play triangle
+            {
+                draw->AddTriangleFilled(ImVec2(cxp - 4.0f, cyp - 8.0f), ImVec2(cxp - 4.0f, cyp + 8.0f), ImVec2(cxp + 10.0f, cyp), playIconCol);
+            }
+        }
+        if (playHovered && ImGui::IsMouseClicked(0)) QueueControl(ControlCommand::PlayPause);
+        // next
+        float nextX = btnStartX + ghostBtn + spacing + playBtn + spacing;
+        if (drawSkipBtn(nextX, 1)) QueueControl(ControlCommand::Next);
+
+        infoY += playBtn + 8.0f;
+        
+        // Visualizer mode selector label (small caps)
+        draw->AddText(fTitle, 10.0f, ImVec2(infoX, infoY), textTertiary, "VISUALIZER MODE");
+        infoY += 17.0f;
+        
+        // Mode pills (rounded seg control)
+        const char* modes[] = { "Radial", "Spectrum", "Waveform", "Particles" };
+        float pillGap = 6.0f;
+        float modeBtnW = (infoW - pillGap * 3) / 4.0f;
+        float pillH = 26.0f;
+        for (int i = 0; i < 4; ++i)
+        {
+            float mx = infoX + i * (modeBtnW + pillGap);
+            ImVec2 btnMin(mx, infoY);
+            ImVec2 btnMax(mx + modeBtnW, infoY + pillH);
+            bool isActive = (currentMode == static_cast<VisualizerMode>(i));
+            bool hovered = ImGui::IsMouseHoveringRect(btnMin, btnMax);
+            bool clicked = hovered && ImGui::IsMouseClicked(0);
+            
+            if (clicked) currentMode = static_cast<VisualizerMode>(i);
+            
+            ImU32 bg = isActive ? accentColor : (hovered ? surfaceHov : IM_COL32(24, 25, 32, 255));
+            ImU32 bdr = isActive ? accentColor : IM_COL32(44, 45, 56, 255);
+            ImU32 txt = isActive ? IM_COL32(12, 16, 14, 255) : (hovered ? textColor : textSecondary);
+            
+            draw->AddRectFilled(btnMin, btnMax, bg, pillH * 0.5f);
+            if (!isActive) draw->AddRect(btnMin, btnMax, bdr, pillH * 0.5f);
+            
+            std::string label = modes[i];
+            ImVec2 ts = fBody->CalcTextSizeA(12.0f, FLT_MAX, 0.0f, label.c_str());
+            float tx = mx + (modeBtnW - ts.x) * 0.5f;
+            float ty = infoY + (pillH - ts.y) * 0.5f;
+            draw->AddText(fBody, 12.0f, ImVec2(tx, ty), txt, label.c_str());
+        }
+        
+        infoY += pillH + 6.0f;
+        
+        // Status dot + text rows
+        auto drawStatusRow = [&](ImU32 col, const char* label, const char* detail)
+        {
+            draw->AddCircleFilled(ImVec2(infoX + 3.5f, infoY + 6.0f), 3.5f, col, 20);
+            std::string full = std::string(label) + "  " + detail;
+            draw->AddText(fBody, 11.0f, ImVec2(infoX + 12.0f, infoY), textSecondary, full.c_str());
+            infoY += 16.0f;
+        };
+
+        const char* smtcText = "";
+        ImU32 smtcCol = textSecondary;
+        switch (statusInt.load())
+        {
+            case 0: smtcText = "starting..."; smtcCol = textTertiary; break;
+            case 1: smtcText = "connecting"; smtcCol = warningColor; break;
+            case 2: smtcText = "live session"; smtcCol = accentColor; break;
+            case 3: smtcText = "no active session"; smtcCol = warningColor; break;
+            default: smtcText = "unavailable"; smtcCol = warningColor; break;
+        }
+        drawStatusRow(smtcCol, "SPOTIFY", smtcText);
+
+        std::string audioDetail;
+        ImU32 audioCol;
+        if (AudioCapture::IsCaptureActive())
+        {
+            audioDetail = "capturing audio loopback";
+            audioCol = accentColor;
+        }
+        else
+        {
+            audioDetail = "simulated  (" + AudioCapture::GetLastError() + ")";
+            audioCol = warningColor;
+        }
+        drawStatusRow(audioCol, "AUDIO", audioDetail.c_str());
+        infoY += 2.0f;
+        
+        // Visualizer rendering area (below controls, spanning full width)
+        // Reserve a guaranteed minimum height so the selected mode is always visible
+        // even when the info column is tall.
+        float visY = pos.y + size.y - ImMax(120.0f, size.y * 0.22f) - 12.0f;
+        float visH = size.y - (visY - pos.y) - 12.0f;
+        float visW = size.x - 40.0f;
+        ImVec2 visPos(pos.x + 20.0f, visY);
+        
+        if (visH > 50.0f && visW > 50.0f)
+        {
+            switch (currentMode)
+            {
+                case VisualizerMode::RadialBars:
+                {
+                    int barCount = 32;
+                    float maxRadius = ImMin(visW, visH) * 0.45f;
+                    float minRadius = maxRadius * 0.3f;
+                    ImVec2 visCenter(visPos.x + visW * 0.5f, visY + visH * 0.5f);
+                    
+                    for (int i = 0; i < barCount; ++i)
+                    {
+                        float angle = (static_cast<float>(i) / barCount) * 2.0f * IM_PI - IM_PI * 0.5f;
+                        float height = fftData[i % fftData.size()] * (maxRadius - minRadius);
+                        float r = minRadius + height;
+                        
+                        ImVec2 p1(visCenter.x + cosf(angle) * minRadius, visCenter.y + sinf(angle) * minRadius);
+                        ImVec2 p2(visCenter.x + cosf(angle) * r, visCenter.y + sinf(angle) * r);
+                        
+                        float hue = static_cast<float>(i) / barCount;
+                        ImU32 col = IM_COL32(
+                            static_cast<int>(128 + 127 * sinf(hue * 6.28f)),
+                            static_cast<int>(215 * (0.5f + 0.5f * sinf(hue * 6.28f + 2.0f))),
+                            static_cast<int>(96 + 80 * sinf(hue * 6.28f + 4.0f)),
+                            255
+                        );
+                        
+                        draw->AddLine(p1, p2, col, 3.0f);
+                    }
+                    break;
+                }
+                case VisualizerMode::Spectrum:
+                {
+                    int barCount = 48;
+                    float barW = visW / barCount * 0.8f;
+                    float spacing = visW / barCount * 0.2f;
+                    float maxH = visH * 0.9f;
+                    
+                    for (int i = 0; i < barCount; ++i)
+                    {
+                        float x = visPos.x + i * (barW + spacing) + spacing * 0.5f;
+                        float h = fftData[i % fftData.size()] * maxH;
+                        ImVec2 p1(x, visY + visH);
+                        ImVec2 p2(x + barW, visY + visH - h);
+                        
+                        float hue = static_cast<float>(i) / barCount;
+                        ImU32 col = IM_COL32(
+                            static_cast<int>(30 + 100 * hue),
+                            static_cast<int>(215 * (0.3f + 0.7f * (1.0f - hue))),
+                            static_cast<int>(96 + 100 * (1.0f - hue)),
+                            255
+                        );
+                        
+                        draw->AddRectFilled(p1, p2, col, 2.0f);
+                    }
+                    break;
+                }
+                case VisualizerMode::Waveform:
+                {
+                    int points = 128;
+                    std::vector<ImVec2> wavePoints;
+                    wavePoints.reserve(points);
+                    
+                    for (int i = 0; i < points; ++i)
+                    {
+                        float x = visPos.x + (static_cast<float>(i) / (points - 1)) * visW;
+                        float sampleIdx = static_cast<float>(i) / points * fftData.size();
+                        int idx0 = static_cast<int>(sampleIdx);
+                        int idx1 = ImMin(idx0 + 1, static_cast<int>(fftData.size()) - 1);
+                        float t = sampleIdx - idx0;
+                        float val = fftData[idx0] * (1.0f - t) + fftData[idx1] * t;
+                        float y = visY + visH * 0.5f + (val - 0.5f) * visH * 0.8f;
+                        wavePoints.push_back(ImVec2(x, y));
+                    }
+                    
+                    for (int i = 0; i < points - 1; ++i)
+                    {
+                        float hue = static_cast<float>(i) / points;
+                        ImU32 col = IM_COL32(
+                            30,
+                            static_cast<int>(215 * (0.5f + 0.5f * sinf(hue * 6.28f + visualizationTime))),
+                            96,
+                            255
+                        );
+                        draw->AddLine(wavePoints[i], wavePoints[i + 1], col, 2.5f);
+                    }
+                    break;
+                }
+                case VisualizerMode::Particles:
+                {
+                    int particleCount = 60;
+                    ImVec2 visCenter(visPos.x + visW * 0.5f, visY + visH * 0.5f);
+                    
+                    static std::vector<float> particleAngles;
+                    static std::vector<float> particleRadii;
+                    static std::vector<float> particleSpeeds;
+                    static std::vector<ImU32> particleColors;
+                    
+                    if (particleAngles.empty())
+                    {
+                        particleAngles.resize(particleCount);
+                        particleRadii.resize(particleCount);
+                        particleSpeeds.resize(particleCount);
+                        particleColors.resize(particleCount);
+                        for (int i = 0; i < particleCount; ++i)
+                        {
+                            particleAngles[i] = static_cast<float>(rand()) / RAND_MAX * 2.0f * IM_PI;
+                            particleRadii[i] = static_cast<float>(rand()) / RAND_MAX * ImMin(visW, visH) * 0.4f;
+                            particleSpeeds[i] = 0.5f + static_cast<float>(rand()) / RAND_MAX * 1.5f;
+                            float hue = static_cast<float>(i) / particleCount;
+                            particleColors[i] = IM_COL32(
+                                static_cast<int>(30 + 100 * hue),
+                                static_cast<int>(215 * (0.5f + 0.5f * sinf(hue * 6.28f))),
+                                static_cast<int>(96 + 100 * (1.0f - hue)),
+                                255
+                            );
+                        }
+                    }
+                    
+                    float avgFFT = 0.0f;
+                    for (float v : fftData) avgFFT += v;
+                    avgFFT /= fftData.size();
+                    
+                    for (int i = 0; i < particleCount; ++i)
+                    {
+                        particleAngles[i] += particleSpeeds[i] * dt * (0.5f + avgFFT);
+                        float r = particleRadii[i] + sinf(visualizationTime * 2.0f + i * 0.1f) * 10.0f * avgFFT;
+                        ImVec2 p(visCenter.x + cosf(particleAngles[i]) * r, visCenter.y + sinf(particleAngles[i]) * r);
+                        draw->AddCircleFilled(p, 3.0f + avgFFT * 4.0f, particleColors[i], 8);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
 
 #ifdef _MSC_VER
 #pragma warning (disable: 26812)    // [Static Analyzer] The enum type 'xxx' is unscoped. Prefer 'enum class' over 'enum' (Enum.3). ImGui uses unscoped enum flag bitmasks heavily.
@@ -1743,12 +3526,12 @@ ImFont* menuFont = (MenuFonts::Count > 0
 : io.FontDefault;
         ImGui::PushFont(menuFont);
 
-// â”€â”€ Animated Exterium ambient background (behind content only) â”€â”€â”€â”€
+// â”€â”€ Animated Exterium ambient background (full menu, including top bar) â”€â”€â”€â”€
 {
     const float bgW = s.x - sbW;
-    const ImVec2 bgOrigin = ImVec2(p.x + sbW, p.y + headerH);
-    UI::ExteriumBG_Update(bgW, s.y - headerH);
-    UI::ExteriumBG_Render(draw, bgOrigin, ImVec2(bgW, s.y - headerH), menuAlpha);
+    const ImVec2 bgOrigin = ImVec2(p.x + sbW, p.y);  // Start from top of menu (p.y), not headerH
+    UI::ExteriumBG_Update(bgW, s.y);  // Full menu height
+    UI::ExteriumBG_Render(draw, bgOrigin, ImVec2(bgW, s.y), menuAlpha);
 }
 
 // ═══ Sidebar footer status line (small, muted) ══════════════════════
@@ -1760,7 +3543,7 @@ ImFont* menuFont = (MenuFonts::Count > 0
     const ImU32 muted = ImGui::ColorConvertFloat4ToU32(ImVec4(1, 1, 1, 0.30f));
     ImFont* sf = UI::small_font ? UI::small_font : ImGui::GetFont();
     const float fs = UI::small_font ? sf->FontSize : 17.0f * sc;
-    float yy = sideMax.y - 130.0f * sc;
+    float yy = sideMax.y - 100.0f * sc; // Moved down to bottom (was -170)
 
 // Avatar (circular profile icon)
         {
@@ -1817,9 +3600,9 @@ ImFont* menuFont = (MenuFonts::Count > 0
             const Row g0[] = { {0,"9","Aim"}, {2,"0","Rage"} };
             const Row g1[] = { {1,"8","Visuals"} };
             const Row g2[] = { {3,"1","Misc"}, {4,"5","Movement"} };
-            const Row g3[] = { {5,"6","Configs"}, {6,"3","Game"}, {7,"2","Executor"} };
+            const Row g3[] = { {5,"6","Configs"}, {6,"3","Game"}, {7,"2","Executor"}, {8,"\xE2\x99\xAA","Music"} };
             const Row* groups[4] = { g0, g1, g2, g3 };
-            const int groupN[4] = { 2, 1, 2, 3 };
+            const int groupN[4] = { 2, 1, 2, 4 };
 
             float yy = sideMin.y + 15.0f * sc;
             for (int g = 0; g < 4; g++)
@@ -1828,8 +3611,8 @@ ImFont* menuFont = (MenuFonts::Count > 0
                 yy += 8.0f * sc - 0.0f;
                 for (int k = 0; k < groupN[g]; k++)
                 {
-                    const Row& r = groups[g][k];
-                    if (UI::Tab(r.name, r.glyph, tab == r.id, tabX, yy)) tab = r.id;
+                    const Row& row = groups[g][k];
+                    if (UI::Tab(row.name, row.glyph, tab == row.id, tabX, yy)) tab = row.id;
                     yy += 40.0f * sc + 5.0f * sc;
                 }
                 yy += 10.0f * sc;
@@ -2504,32 +4287,32 @@ UI::labelsection("SMOOTHING & FEEL");
 }
 else if (tab == 2)
 {
-// ===== Rage tab =====
-        // Content header + horizontal subtab bar
-        UI::ContentHeader("RAGE");
-        {
-            static float sa[6] = {};
-            ImGui::SetCursorPosX(ctX);
-            if (UI::ContentSubtab("Ragebot", tab2 == 0, sa[0])) tab2 = 0;
-            ImGui::SameLine(0, 6.0f * sc);
-            if (UI::ContentSubtab("Orbit", tab2 == 1, sa[1])) tab2 = 1;
-            ImGui::SameLine(0, 6.0f * sc);
-            if (UI::ContentSubtab("Anti-Aim", tab2 == 2, sa[2])) tab2 = 2;
-            ImGui::SameLine(0, 6.0f * sc);
-            if (UI::ContentSubtab("Desync", tab2 == 3, sa[3])) tab2 = 3;
-            ImGui::SameLine(0, 6.0f * sc);
-            if (UI::ContentSubtab("VoidHide", tab2 == 4, sa[4])) tab2 = 4;
-            ImGui::SameLine(0, 6.0f * sc);
-            if (UI::ContentSubtab("Bhop", tab2 == 5, sa[5])) tab2 = 5;
-            ImGui::Dummy(ImVec2(0, 8 * sc));
-        }
+    // ===== Rage tab =====
+    // Content header + horizontal subtab bar
+    UI::ContentHeader("RAGE");
+    {
+        static float sa[6] = {};
+        ImGui::SetCursorPosX(ctX);
+        if (UI::ContentSubtab("Ragebot", tab2 == 0, sa[0])) tab2 = 0;
+        ImGui::SameLine(0, 6.0f * sc);
+        if (UI::ContentSubtab("Rage", tab2 == 1, sa[1])) tab2 = 1;
+        ImGui::SameLine(0, 6.0f * sc);
+        if (UI::ContentSubtab("Anti-Aim", tab2 == 2, sa[2])) tab2 = 2;
+        ImGui::SameLine(0, 6.0f * sc);
+        if (UI::ContentSubtab("Desync", tab2 == 3, sa[3])) tab2 = 3;
+        ImGui::SameLine(0, 6.0f * sc);
+        if (UI::ContentSubtab("VoidHide", tab2 == 4, sa[4])) tab2 = 4;
+        ImGui::SameLine(0, 6.0f * sc);
+        if (UI::ContentSubtab("Bhop", tab2 == 5, sa[5])) tab2 = 5;
+        ImGui::Dummy(ImVec2(0, 8 * sc));
+    }
 
-if (tab2 == 0) { RenderRagebotSubtab(main_color); }
-else if (tab2 == 1) { RenderOrbitSubtab(main_color); }
-else if (tab2 == 2) { RenderAntiAimSubtab(main_color); }
-else if (tab2 == 3) { RenderDesyncSubtab(main_color); }
-else if (tab2 == 4) { RenderVoidHideSubtab(main_color); }
-else if (tab2 == 5) { RenderBhopSubtab(main_color); }
+    if (tab2 == 0) { RenderRagebotSubtab(main_color); }
+    else if (tab2 == 1) { RenderRageSubtab(main_color); }
+    else if (tab2 == 2) { RenderAntiAimSubtab(main_color); }
+    else if (tab2 == 3) { RenderDesyncSubtab(main_color); }
+    else if (tab2 == 4) { RenderVoidHideSubtab(main_color); }
+    else if (tab2 == 5) { RenderBhopSubtab(main_color); }
 }
 else if (tab == 1)
 {
@@ -3008,6 +4791,40 @@ if (ImGui::IsItemHovered()) ImGui::SetTooltip("Blend the two accent colors acros
 UI::ColorEdit3("Menu Accent 2", Options::Misc::MenuAccentColor2, ImGuiColorEditFlags_NoInputs);
 main_color2 = ImVec4(Options::Misc::MenuAccentColor2[0], Options::Misc::MenuAccentColor2[1], Options::Misc::MenuAccentColor2[2], 1.0f);
 
+UI::labelsection("AMBIENT BACKGROUND");
+UI::Checkbox("Animated Background", &Options::Misc::ExteriumBGEnabled);
+static const char* bgShapes[] = { "Square", "Circle", "Triangle", "Diamond" };
+UI::Combo("Shape", &Options::Misc::ExteriumBGParticleShape, bgShapes, IM_ARRAYSIZE(bgShapes));
+UI::Checkbox("Use Theme Accent", &Options::Misc::ExteriumBGUseAccent);
+if (!Options::Misc::ExteriumBGUseAccent)
+    ImGui::ColorEdit3("BG Color", Options::Misc::ExteriumBGColor, ImGuiColorEditFlags_NoInputs);
+if (UI::SliderInt("Particles", &Options::Misc::ExteriumBGParticleCount, 8, 48, "%d"))
+    Options::Misc::ExteriumBGParticleCount = ImClamp(Options::Misc::ExteriumBGParticleCount, 8, 48);
+{
+    static float bgSizeVal = 14.0f;
+    bgSizeVal = (Options::Misc::ExteriumBGParticleMinSize + Options::Misc::ExteriumBGParticleMaxSize) * 0.5f;
+    if (UI::SliderFloat("Size", &bgSizeVal, 4.0f, 40.0f, "%.0f px"))
+    {
+        Options::Misc::ExteriumBGParticleMinSize = bgSizeVal * 0.6f;
+        Options::Misc::ExteriumBGParticleMaxSize = bgSizeVal * 1.4f;
+    }
+}
+{
+    static float bgSpeedVal = 70.0f;
+    bgSpeedVal = Options::Misc::ExteriumBGParticleMaxSpeed;
+    if (UI::SliderFloat("Speed", &bgSpeedVal, 20.0f, 160.0f, "%.0f"))
+    {
+        Options::Misc::ExteriumBGParticleMinSpeed = bgSpeedVal * 0.4f;
+        Options::Misc::ExteriumBGParticleMaxSpeed = bgSpeedVal;
+    }
+}
+{
+    int bgPct = (int)(Options::Misc::ExteriumBGParticleOpacity * 500.0f);
+    if (UI::SliderInt("Opacity", &bgPct, 0, 100, "%d%%"))
+        Options::Misc::ExteriumBGParticleOpacity = bgPct * 0.002f;
+}
+UI::Checkbox("Glow", &Options::Misc::ExteriumBGParticleGlow);
+
 UI::labelsection("FOV FILL");
 UI::ColorEdit4("FOV Fill Color", Options::Aimbot::FOVFillColor, ImGuiColorEditFlags_NoInputs);
 }
@@ -3476,6 +5293,40 @@ ImGui::TextDisabled("Place ID:");
 ImGui::SameLine();
 ImGui::Text("%s", pid);
 
+UI::labelsection("CLIENT VERSION");
+{
+    const std::string& cliVer = RobloxVersion::GetClientVersion();
+    const int cliStatus = RobloxVersion::GetStatus();
+    ImGui::TextDisabled("Installed:");
+    ImGui::SameLine();
+    if (!cliVer.empty())
+    {
+        ImVec4 col = (cliStatus == RobloxVersion::Matched)
+            ? ImVec4(0.3f, 1.0f, 0.4f, 1.0f)
+            : (cliStatus == RobloxVersion::Mismatch
+                ? ImVec4(1.0f, 0.65f, 0.2f, 1.0f)
+                : ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+        ImGui::TextColored(col, "%s", cliVer.c_str());
+        if (ImGui::IsItemHovered())
+        {
+            if (cliStatus == RobloxVersion::Matched)
+                ImGui::SetTooltip("Running version matches bundled offsets.");
+            else if (cliStatus == RobloxVersion::Mismatch)
+                ImGui::SetTooltip("Running version differs from bundled offsets (%s). Updates may be required.",
+                    Offsets::ClientVersion.c_str());
+        }
+    }
+    else
+    {
+        ImGui::TextDisabled("unknown");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Could not determine the installed Roblox client version.");
+    }
+    ImGui::TextDisabled("Offsets for:");
+    ImGui::SameLine();
+    ImGui::Text("%s", Offsets::ClientVersion.c_str());
+}
+
 UI::labelsection("SUPPORTED OPTIMIZATIONS");
 
 auto gameFlag = [&](const char* label, bool on)
@@ -3622,6 +5473,27 @@ else if (tab == 7)
     }
     ImGui::EndChild();
 }
+    else if (tab == 8)
+    {
+        // ---- SPOTIFY VISUALIZER TAB ----
+        ImGui::SetCursorPosX(ctX);
+        ImGui::BeginChild("##spotify_tab", ImVec2(fullW, s.y - 58.0f * sc - 8.0f * sc), false);
+        {
+            UI::ContentHeader("SPOTIFY VISUALIZER");
+            
+            // Main visualizer area
+            float visHeight = std::max(0.0f, (s.y - 58.0f * sc - 8.0f * sc) - 60.0f * sc);
+            ImVec2 visPos = ImGui::GetCursorScreenPos();
+            ImVec2 visSize(fullW, visHeight);
+            
+            // Render the Spotify visualizer
+            SpotifyVisualizer::Render(ImGui::GetWindowDrawList(), visPos, visSize, ImGui::GetIO().DeltaTime);
+            
+            // Reserve space for the visualizer
+            ImGui::Dummy(visSize);
+        }
+        ImGui::EndChild();
+    }
     ImGui::EndChild(); // ##content_area
     ImGui::PopStyleColor(3);
     ImGui::PopStyleVar();
@@ -3803,6 +5675,9 @@ if (IsGameOnTop("Roblox"))
 	CombatFeedback::Render(ImGui::GetBackgroundDrawList());
 	RenderESP(ImGui::GetBackgroundDrawList());
 
+	if (Options::ESP::LodLine || (Options::ESP::AimView && !Options::ESP::AimViewTarget.empty()))
+		LodLineVisual::Render(ImGui::GetBackgroundDrawList());
+
 	if (Options::ESP::Arrows) RenderArrows(ImGui::GetBackgroundDrawList());
 	if (Options::ESP::Radar) RenderRadar(ImGui::GetBackgroundDrawList());
 	
@@ -3841,6 +5716,8 @@ ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 HRESULT hr = g_pSwapChain->Present(1, 0);
 g_SwapChainOccluded = (hr == DXGI_STATUS_OCCLUDED);
 }
+
+SpotifyVisualizer::Shutdown();
 
 ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();

@@ -45,6 +45,7 @@
 #include "features/movement_extra.h"
 #include "features/rewind.h"
 #include "features/thirdperson.h"
+#include "features/aimview.h"
 #include "tray.h"
 #include "overlay/loader.h"
 #include "features/rivals_skinchanger.h"
@@ -493,6 +494,7 @@ int main()
 		std::thread(HipHeightLoop).detach();
 		std::thread(FreeCamLoop).detach();
 		std::thread(ThirdPersonLoop).detach();
+		std::thread(AimViewLoop).detach();
 		std::thread(Rewind::Tick).detach();
 		std::thread(StretchResLoop).detach();
 		std::thread(RageKillLoop).detach();

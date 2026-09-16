@@ -1512,6 +1512,39 @@ inline void RunAimCore(ImDrawList* drawList)
         DrawFOVShape(drawList, fovCenter, r, FOVColor, Options::Aimbot::FOVShape, thickness,
             Options::Aimbot::ShowFOVFill, FOVFillColor, fovColorAt, spinRot);
 
+        // FOV Fill Gradient (for circle shape only)
+        if (Options::Aimbot::ShowFOVFill && Options::Aimbot::FOVFillGradient && Options::Aimbot::FOVShape == 0)
+        {
+            const int gradientLayers = 12;
+            ImU32 topCol = IM_COL32(
+                static_cast<int>(Options::Aimbot::FOVFillTopColor[0] * 255),
+                static_cast<int>(Options::Aimbot::FOVFillTopColor[1] * 255),
+                static_cast<int>(Options::Aimbot::FOVFillTopColor[2] * 255),
+                static_cast<int>(Options::Aimbot::FOVFillTopColor[3] * 255));
+            ImU32 bottomCol = IM_COL32(
+                static_cast<int>(Options::Aimbot::FOVFillBottomColor[0] * 255),
+                static_cast<int>(Options::Aimbot::FOVFillBottomColor[1] * 255),
+                static_cast<int>(Options::Aimbot::FOVFillBottomColor[2] * 255),
+                static_cast<int>(Options::Aimbot::FOVFillBottomColor[3] * 255));
+            
+            float time = static_cast<float>(ImGui::GetTime());
+            float rotate = Options::Aimbot::FOVFillGradientRotate ? time * 0.5f : 0.0f;
+            
+            for (int i = 0; i < gradientLayers; ++i)
+            {
+                float t = static_cast<float>(i) / static_cast<float>(gradientLayers - 1);
+                // Interpolate color
+                ImU32 layerCol = IM_COL32(
+                    static_cast<int>(((topCol >> 16) & 0xFF) + ((((bottomCol >> 16) & 0xFF) - ((topCol >> 16) & 0xFF)) * t)),
+                    static_cast<int>(((topCol >> 8) & 0xFF) + ((((bottomCol >> 8) & 0xFF) - ((topCol >> 8) & 0xFF)) * t)),
+                    static_cast<int>((topCol & 0xFF) + (((bottomCol & 0xFF) - (topCol & 0xFF)) * t)),
+                    static_cast<int>(((topCol >> 24) & 0xFF) + ((((bottomCol >> 24) & 0xFF) - ((topCol >> 24) & 0xFF)) * t))
+                );
+                float layerR = r * (1.0f - t * 0.95f); // Leave small center unfilled
+                drawList->AddCircle(fovCenter, layerR, layerCol, 96, 1.0f);
+            }
+        }
+
         if (Options::Aimbot::ShowFOVText)
         {
             char buf[32];

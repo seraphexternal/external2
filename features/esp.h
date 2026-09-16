@@ -1545,8 +1545,59 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
     const ImVec2 rectMax(origin.x + size.x, origin.y + size.y);
 
     drawList->PushClipRect(rectMin, rectMax, true);
-    // Dark purple-gray background matching menu theme
-    drawList->AddRectFilled(rectMin, rectMax, IM_COL32(15, 12, 22, 255), 4.0f);
+    
+    // Dynamic gradient background with animated accent colors
+    {
+        const float time = static_cast<float>(ImGui::GetTime());
+        float accentR = Options::Misc::MenuAccentColor[0];
+        float accentG = Options::Misc::MenuAccentColor[1];
+        float accentB = Options::Misc::MenuAccentColor[2];
+        
+        // Multi-layer gradient background
+        for (int layer = 0; layer < 3; ++layer)
+        {
+            float layerTime = time * (0.3f + layer * 0.15f);
+            float wave1 = sinf(layerTime * 0.7f) * 0.5f + 0.5f;
+            float wave2 = cosf(layerTime * 0.5f + 1.2f) * 0.5f + 0.5f;
+            
+            ImU32 topCol = IM_COL32(
+                static_cast<int>((10 + layer * 5 + wave1 * 20) * (1.0f - accentR * 0.3f)),
+                static_cast<int>((8 + layer * 4 + wave2 * 15) * (1.0f - accentG * 0.3f)),
+                static_cast<int>((18 + layer * 6 + wave1 * 25) * (1.0f - accentB * 0.3f)),
+                255);
+            ImU32 bottomCol = IM_COL32(
+                static_cast<int>((20 + layer * 8 + wave2 * 30) * (1.0f + accentR * 0.2f)),
+                static_cast<int>((15 + layer * 6 + wave1 * 25) * (1.0f + accentG * 0.2f)),
+                static_cast<int>((35 + layer * 10 + wave2 * 35) * (1.0f + accentB * 0.2f)),
+                255);
+            
+            float layerTop = rectMin.y + (rectMax.y - rectMin.y) * (layer * 0.33f);
+            float layerBottom = rectMin.y + (rectMax.y - rectMin.y) * ((layer + 1) * 0.33f + 0.05f);
+            drawList->AddRectFilledMultiColor(
+                ImVec2(rectMin.x, layerTop), ImVec2(rectMax.x, layerBottom),
+                topCol, topCol, bottomCol, bottomCol);
+        }
+        
+        // Subtle animated accent lines
+        for (int i = 0; i < 3; ++i)
+        {
+            float lineY = rectMin.y + (rectMax.y - rectMin.y) * (0.25f + i * 0.25f + sinf(time * 0.8f + i * 2.1f) * 0.03f);
+            ImU32 lineCol = IM_COL32(
+                static_cast<int>(accentR * 255 * (0.3f + 0.2f * sinf(time * 1.2f + i))),
+                static_cast<int>(accentG * 255 * (0.3f + 0.2f * sinf(time * 1.5f + i))),
+                static_cast<int>(accentB * 255 * (0.3f + 0.2f * sinf(time * 0.9f + i))),
+                static_cast<int>(40 + 20 * sinf(time * 1.1f + i)));
+            drawList->AddLine(ImVec2(rectMin.x, lineY), ImVec2(rectMax.x, lineY), lineCol, 1.0f);
+        }
+    }
+    
+    // Subtle vignette overlay
+    drawList->AddRectFilledMultiColor(
+        rectMin, rectMax,
+        IM_COL32(0, 0, 0, 60), IM_COL32(0, 0, 0, 60),
+        IM_COL32(0, 0, 0, 120), IM_COL32(0, 0, 0, 120));
+    
+    // Border
     drawList->AddRect(rectMin, rectMax, IM_COL32(40, 30, 55, 255), 4.0f);
 
     // Perspective grid floor (3D-like depth)

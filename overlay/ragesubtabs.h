@@ -11,127 +11,150 @@
 
 inline void RenderRagebotSubtab(ImVec4 main_color)
 {
-	const float panelY = ImGui::GetCursorPosY();
-	ImGui::SetCursorPosX(16.0f * UI::sc); // ctX equivalent
-	if (UI::CollapsibleSection("RAGEBOT", UI::CardW))
-	{
-		UI::labelsection("MAIN");
-		UI::Checkbox("Enabled", &Options::Rage::Enabled);
-		UI::Tooltip("Orbits the target with a ghost 'you' and auto-kills it while you stay free to move.");
+    const float panelY = ImGui::GetCursorPosY();
+    ImGui::SetCursorPosX(16.0f * UI::sc);
+    if (UI::CollapsibleSection("RAGEBOT", UI::CardW))
+    {
+        UI::labelsection("MAIN");
+        UI::Checkbox("Enabled", &Options::Ragebot::Enabled);
+        UI::Tooltip("Camera-based aimbot with multi-point targeting.");
 
-		bool rageActive = Options::Rage::Enabled &&
-			(Options::Rage::ToggleType == 2 ||
-			 (Options::Rage::RageKey != 0 && Options::Rage::Toggled));
-		UI::Status(rageActive ? "ACTIVE" : "INACTIVE", rageActive);
+        bool rageActive = Options::Ragebot::Enabled &&
+            (Options::Ragebot::ToggleType == 2 ||
+             (Options::Ragebot::RagebotKey != 0 && Options::Ragebot::Toggled));
+        UI::Status(rageActive ? "ACTIVE" : "INACTIVE", rageActive);
 
-		static const char* modes[]{ "Hold", "Toggle", "Always On" };
-		UI::Combo("Mode", &Options::Rage::ToggleType, modes, IM_ARRAYSIZE(modes));
+        static const char* modes[]{ "Hold", "Toggle", "Always On" };
+        UI::Combo("Mode", &Options::Ragebot::ToggleType, modes, IM_ARRAYSIZE(modes));
 
-		if (Options::Rage::ToggleType != 2)
-			UI::Bind("##rage_key", &Options::Rage::RageKey, &Options::Rage::ToggleType);
+        if (Options::Ragebot::ToggleType != 2)
+            UI::Bind("##ragebot_key", &Options::Ragebot::RagebotKey, &Options::Ragebot::ToggleType);
 
-		if (Options::Rage::ToggleType == 1 && Options::Rage::RageKey != 0)
-		{
-			ImGui::PushStyleColor(ImGuiCol_Button, Options::Rage::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.5f) : ImVec4(0.15f, 0.15f, 0.18f, 0.8f));
-			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Options::Rage::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.6f) : ImVec4(0.20f, 0.20f, 0.24f, 0.9f));
-			if (UI::Button(Options::Rage::Toggled ? "ACTIVE" : "INACTIVE", ImVec2(-1, 24)))
-				Options::Rage::Toggled = !Options::Rage::Toggled;
-			ImGui::PopStyleColor(2);
-		}
+        if (Options::Ragebot::ToggleType == 1 && Options::Ragebot::RagebotKey != 0)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Button, Options::Ragebot::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.5f) : ImVec4(0.15f, 0.15f, 0.18f, 0.8f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Options::Ragebot::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.6f) : ImVec4(0.20f, 0.20f, 0.24f, 0.9f));
+            if (UI::Button(Options::Ragebot::Toggled ? "ACTIVE" : "INACTIVE", ImVec2(-1, 24)))
+                Options::Ragebot::Toggled = !Options::Ragebot::Toggled;
+            ImGui::PopStyleColor(2);
+        }
 
-		UI::labelsection("KILL SETTINGS");
-		UI::Checkbox("Kill On Orbit", &Options::Rage::KillOnOrbit);
-		UI::Checkbox("Auto Aim At Target", &Options::Rage::AutoKillAim);
-		UI::Checkbox("Show Ghost (orbiting you)", &Options::Rage::ShowGhost);
-		if (Options::Rage::ShowGhost)
-			UI::Checkbox("Show Ghost Line", &Options::Rage::ShowGhostLine);
+        UI::gap(6);
+        UI::labelsection("TARGETING");
+        static const char* bones[]{ "Head", "Torso", "LowerTorso", "UpperTorso" };
+        UI::Combo("Hitbox", &Options::Ragebot::TargetBone, bones, IM_ARRAYSIZE(bones));
 
-		UI::labelsection("ORBIT CONFIG");
-		UI::SliderFloat("Orbit Radius", &Options::Rage::OrbitRadius, 1.f, 20.f, "%.1f");
-		UI::SliderFloat("Orbit Speed", &Options::Rage::OrbitSpeed, 0.1f, 10.f, "%.1f");
-	}
-	UI::CollapsibleEnd();
+        static const char* priorities[]{ "Crosshair", "Distance", "Hit Chance" };
+        UI::Combo("Priority", &Options::Ragebot::TargetPriority, priorities, IM_ARRAYSIZE(priorities));
 
-	ImGui::SetCursorPosY(panelY);
-	ImGui::SetCursorPosX(16.0f * UI::sc + UI::CardW + 10.0f * UI::sc);
-	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
-	{
-		UI::labelsection("TARGET");
-		static const char* targetModes[]{ "Aimed At", "By Username" };
-		UI::Combo("Target", &Options::Rage::TargetMode, targetModes, IM_ARRAYSIZE(targetModes));
-		if (Options::Rage::TargetMode == 1)
-			ImGui::InputText("Username", Options::Rage::TargetPlayer, sizeof(Options::Rage::TargetPlayer));
+        UI::Checkbox("Team Check", &Options::Ragebot::TeamCheck);
+        UI::Checkbox("Wall Check", &Options::Ragebot::WallCheck);
+        UI::Checkbox("Downed Check", &Options::Ragebot::DownedCheck);
+        UI::SliderFloat("Range", &Options::Ragebot::Range, 10.f, 500.f, "%.0f");
+        UI::SliderFloat("FOV", &Options::Ragebot::FOV, 10.f, 360.f, "%.0f");
+        UI::SliderFloat("Smoothness", &Options::Ragebot::Smoothness, 0.0f, 1.0f, "%.2f");
+    }
+    UI::CollapsibleEnd();
 
-		UI::gap(6);
-		UI::labelsection("PERFORMANCE");
-		ImGui::TextColored(UI::P.textMid, "Fire Rate (ms): %d", Options::Ragebot::FireRate);
-	}
-	UI::CollapsibleEnd();
+    ImGui::SetCursorPosY(panelY);
+    ImGui::SetCursorPosX(16.0f * UI::sc + UI::CardW + 10.0f * UI::sc);
+    if (UI::CollapsibleSection("AUTO FIRE", UI::CardW))
+    {
+        UI::Checkbox("Auto Fire", &Options::Ragebot::AutoFire);
+        UI::SliderInt("Fire Rate", &Options::Ragebot::FireRate, 10, 500, "%d ms");
+
+        UI::Checkbox("Double Tap", &Options::Ragebot::DoubleTap);
+        if (Options::Ragebot::DoubleTap)
+            UI::SliderInt("DT Delay", &Options::Ragebot::DoubleTapDelay, 10, 200, "%d ms");
+
+        UI::gap(6);
+        UI::labelsection("HIT CHANCE");
+        UI::Checkbox("Enabled", &Options::Ragebot::HitChanceEnabled);
+        if (Options::Ragebot::HitChanceEnabled)
+            UI::SliderFloat("Min Chance", &Options::Ragebot::MinHitChance, 0.0f, 100.0f, "%.0f%%");
+
+        UI::gap(6);
+        UI::labelsection("PREDICTION");
+        UI::Checkbox("Predict", &Options::Ragebot::Prediction);
+        if (Options::Ragebot::Prediction)
+        {
+            UI::SliderFloat("X", &Options::Ragebot::PredictionX, 0.0f, 2.0f, "%.2f");
+            UI::SliderFloat("Y", &Options::Ragebot::PredictionY, 0.0f, 2.0f, "%.2f");
+        }
+
+        UI::gap(6);
+        UI::labelsection("DAMAGE");
+        UI::SliderFloat("Min Damage", &Options::Ragebot::MinDamage, 1.0f, 100.0f, "%.0f");
+    }
+    UI::CollapsibleEnd();
 }
 
-inline void RenderOrbitSubtab(ImVec4 main_color)
+inline void RenderRageSubtab(ImVec4 main_color)
 {
-	const float panelY = ImGui::GetCursorPosY();
-	ImGui::SetCursorPosX(16.0f * UI::sc);
-	if (UI::CollapsibleSection("ORBIT", UI::CardW))
-	{
-		UI::labelsection("MAIN");
-		UI::Checkbox("Enabled", &Options::Orbit::Enabled);
-		UI::Tooltip("Circles around a target player automatically.");
+    const float panelY = ImGui::GetCursorPosY();
+    ImGui::SetCursorPosX(16.0f * UI::sc);
+    if (UI::CollapsibleSection("RAGE (ORBIT KILL)", UI::CardW))
+    {
+        UI::labelsection("MAIN");
+        UI::Checkbox("Enabled", &Options::Rage::Enabled);
+        UI::Tooltip("Orbits the target with a ghost 'you' and auto-kills it while you stay free to move.");
 
-		bool orbitActive = Options::Orbit::Enabled &&
-			(Options::Orbit::ToggleType == 2 ||
-			 (Options::Orbit::OrbitKey != 0 && Options::Orbit::Toggled));
-		UI::Status(orbitActive ? "ACTIVE" : "INACTIVE", orbitActive);
+        bool rageActive = Options::Rage::Enabled &&
+            (Options::Rage::ToggleType == 2 ||
+             (Options::Rage::RageKey != 0 && Options::Rage::Toggled));
+        UI::Status(rageActive ? "ACTIVE" : "INACTIVE", rageActive);
 
-		static const char* orbitTargetModes[]{ "Aimed At", "By Username", "Lock Until Death" };
-		UI::Combo("Target##orbit", &Options::Orbit::TargetMode, orbitTargetModes, IM_ARRAYSIZE(orbitTargetModes));
-		UI::Tooltip("Aimed At = follow whoever you aim at. By Username = a specific player. Lock Until Death = grab your aim target on activate and orbit them until they die.");
-		if (Options::Orbit::TargetMode == 1)
-			ImGui::InputText("Username##orbit", Options::Orbit::TargetPlayer, sizeof(Options::Orbit::TargetPlayer));
-	}
-	UI::CollapsibleEnd();
+        static const char* modes[]{ "Hold", "Toggle", "Always On" };
+        UI::Combo("Mode", &Options::Rage::ToggleType, modes, IM_ARRAYSIZE(modes));
 
-ImGui::SetCursorPosY(panelY);
-	ImGui::SetCursorPosX(16.0f * UI::sc + UI::CardW + 10.0f * UI::sc);
-	if (UI::CollapsibleSection("SETTINGS", UI::CardW))
-	{
-		UI::labelsection("ORBIT");
-		UI::SliderFloat("Orbit Speed", &Options::Orbit::Speed, 0.1f, 10.f, "%.1f");
-		UI::Tooltip("How fast you orbit around the target.");
-		UI::SliderFloat("Orbit Radius", &Options::Orbit::Radius, 2.f, 50.f, "%.1f");
-		UI::Tooltip("Distance in studs from the target while orbiting.");
-		UI::SliderFloat("Orbit Height", &Options::Orbit::Height, -10.f, 10.f, "%.1f");
-		UI::Tooltip("Vertical offset of the orbit ring from the target.");
-		UI::SliderFloat("Orbit Follow", &Options::Orbit::Follow, 1.f, 60.f, "%.1f");
-		UI::Tooltip("How aggressively you glide to the ring (higher = snappier, lower = smoother).");
+        if (Options::Rage::ToggleType != 2)
+            UI::Bind("##rage_key", &Options::Rage::RageKey, &Options::Rage::ToggleType);
 
-		UI::labelsection("LOCK");
-		UI::Checkbox("Orbit Until Death", &Options::Orbit::OrbitUntilDeath);
-		UI::Tooltip("Lock Until Death mode only: when the locked target dies, grab a new one and keep orbiting. Off = stop when they die.");
-		UI::Checkbox("Wall Check", &Options::Orbit::WallCheck);
-		UI::Tooltip("Only lock/orbit targets that aren't behind walls.");
-		UI::Checkbox("Knocked Check", &Options::Orbit::KnockedCheck);
-		UI::Tooltip("Skip downed/knocked (low-health) targets when acquiring a target.");
+        if (Options::Rage::ToggleType == 1 && Options::Rage::RageKey != 0)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Button, Options::Rage::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.5f) : ImVec4(0.15f, 0.15f, 0.18f, 0.8f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Options::Rage::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.6f) : ImVec4(0.20f, 0.20f, 0.24f, 0.9f));
+            if (UI::Button(Options::Rage::Toggled ? "ACTIVE" : "INACTIVE", ImVec2(-1, 24)))
+                Options::Rage::Toggled = !Options::Rage::Toggled;
+            ImGui::PopStyleColor(2);
+        }
 
-		UI::labelsection("TOGGLE");
-		static const char* orbitModes[]{ "Hold", "Toggle", "Always On" };
-		UI::Combo("Mode##orbit", &Options::Orbit::ToggleType, orbitModes, IM_ARRAYSIZE(orbitModes));
-		UI::Tooltip("Hold = while key held, Toggle = press once, Always On = always orbit.");
+        UI::gap(6);
+        UI::labelsection("KILL SETTINGS");
+        UI::Checkbox("Kill On Orbit", &Options::Rage::KillOnOrbit);
+        UI::Checkbox("Auto Aim At Target", &Options::Rage::AutoKillAim);
+        UI::Checkbox("Show Ghost (orbiting you)", &Options::Rage::ShowGhost);
+        if (Options::Rage::ShowGhost)
+            UI::Checkbox("Show Ghost Line", &Options::Rage::ShowGhostLine);
 
-		if (Options::Orbit::ToggleType != 2)
-			UI::Bind("##orbit_key", &Options::Orbit::OrbitKey, &Options::Orbit::ToggleType);
+        UI::gap(6);
+        UI::labelsection("ORBIT CONFIG");
+        UI::SliderFloat("Orbit Radius", &Options::Rage::OrbitRadius, 1.f, 20.f, "%.1f");
+        UI::SliderFloat("Orbit Speed", &Options::Rage::OrbitSpeed, 0.1f, 10.f, "%.1f");
+        UI::SliderFloat("Orbit Height", &Options::Rage::OrbitHeight, -10.f, 10.f, "%.1f");
+    }
+    UI::CollapsibleEnd();
 
-		if (Options::Orbit::ToggleType == 1 && Options::Orbit::OrbitKey != 0)
-		{
-			ImGui::PushStyleColor(ImGuiCol_Button, Options::Orbit::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.5f) : ImVec4(0.15f, 0.15f, 0.18f, 0.8f));
-			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Options::Orbit::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.6f) : ImVec4(0.20f, 0.20f, 0.24f, 0.9f));
-			if (UI::Button(Options::Orbit::Toggled ? "ACTIVE" : "INACTIVE", ImVec2(-1, 24)))
-				Options::Orbit::Toggled = !Options::Orbit::Toggled;
-			ImGui::PopStyleColor(2);
-		}
-	}
-	UI::CollapsibleEnd();
+    ImGui::SetCursorPosY(panelY);
+    ImGui::SetCursorPosX(16.0f * UI::sc + UI::CardW + 10.0f * UI::sc);
+    if (UI::CollapsibleSection("SETTINGS", UI::CardW))
+    {
+        UI::labelsection("TARGET");
+        static const char* targetModes[]{ "Aimed At", "By Username" };
+        UI::Combo("Target", &Options::Rage::TargetMode, targetModes, IM_ARRAYSIZE(targetModes));
+        if (Options::Rage::TargetMode == 1)
+            ImGui::InputText("Username", Options::Rage::TargetPlayer, sizeof(Options::Rage::TargetPlayer));
+
+        UI::gap(6);
+        UI::labelsection("GHOST VISUALS");
+        UI::ColorEdit3("Ghost Color", Options::Rage::GhostColor, ImGuiColorEditFlags_NoInputs);
+        UI::SliderFloat("Ghost Alpha", &Options::Rage::GhostAlpha, 0.1f, 1.0f, "%.2f");
+
+        UI::gap(6);
+        UI::labelsection("PERFORMANCE");
+        ImGui::TextColored(UI::P.textMid, "Fire Rate (ms): %d", Options::Ragebot::FireRate);
+    }
+    UI::CollapsibleEnd();
 }
 
 inline void RenderAntiAimSubtab(ImVec4 main_color)

@@ -7,6 +7,7 @@ namespace Options
 	{
 		inline bool HUDEditMode = false;
 		inline int MenuFont = 0; // index into the pre-loaded font array in renderer.cpp
+		inline float MenuFontSize = 14.0f; // base font size
 		inline bool FOVEnabled = false;
 		inline float FOV = 70.f;
 		inline bool CacheNPCs = false;
@@ -43,6 +44,22 @@ namespace Options
 		inline char ProcessName[64] = "fleasion"; // benign-looking spawned process name
 		inline char ExclusionPath[256] = ""; // folder the trace-wiper must never touch
 		inline bool ShowCertified = true;    // "certified yn" watermark in the menu footer
+
+		// ── Animated Background (Exterium) ──
+		inline bool ExteriumBGEnabled = true;
+		inline int ExteriumBGParticleCount = 26;
+		inline int ExteriumBGParticleShape = 0; // 0 = Square, 1 = Circle, 2 = Triangle, 3 = Diamond
+		inline float ExteriumBGParticleMinSize = 6.0f;
+		inline float ExteriumBGParticleMaxSize = 23.0f;
+		inline float ExteriumBGParticleMinSpeed = 35.0f;
+		inline float ExteriumBGParticleMaxSpeed = 90.0f;
+		inline float ExteriumBGParticleOpacity = 0.09f;
+		inline bool ExteriumBGParticleGlow = true;
+		inline bool ExteriumBGUseAccent = true;
+		inline float ExteriumBGColor[3] = { 0.340f, 0.560f, 1.000f };
+
+		// Panic button - deletes all Seraph/Fleasion files and registry entries
+		inline bool PanicButtonPressed = false;
 	}
 	// Animation Changer (Misc tab). Drives the local character's "Animate"
 	// controller by rewriting each slot's Animation instances to a chosen
@@ -179,6 +196,13 @@ namespace Options
 		inline float LodLineLength = 200.0f;
 		inline float LodLineThickness = 2.0f;
 		inline float LodLineColor[3] = { 1.0f, 0.0f, 0.0f };
+
+		// Aimview: shows the LOD line only for a single selected player, and
+		// spectates them (camera follows their HumanoidRootPart). When enabled
+		// with a target, LodLineVisual::Render restricts itself to that player;
+		// when disabled, the LOD line is drawn for everyone (standalone visual).
+		inline bool AimView = false;
+		inline std::string AimViewTarget;
 
 		inline bool Arrows = false;
 		inline float ArrowSize = 12.0f;
@@ -320,7 +344,12 @@ namespace Options
 		inline bool FlickbotTeamCheck = true;
 
 		inline float FOVColor[3] = {1.0f, 1.0f, 1.0f}; // White color
-		inline float FOVFillColor[4] = {1.0f, 1.0f, 1.0f, 0.1f}; // White with transparency
+		inline float FOVFillColor[4] = {1.0f, 1.0f, 1.0f, 0.1f}; // White with transparency (low alpha for transparency)
+		inline bool FOVFillGradient = false;
+		inline int FOVFillType = 0; // 0 = Vertical, 1 = Horizontal, 2 = Four-Corner
+		inline bool FOVFillGradientRotate = false;
+		inline float FOVFillTopColor[4] = {0.3f, 0.6f, 1.0f, 0.15f};
+		inline float FOVFillBottomColor[4] = {0.1f, 0.3f, 0.8f, 0.05f};
 		inline float FOVThickness = 1.0f;
 		
 		inline int TargetBone = 0;
@@ -376,8 +405,8 @@ namespace Options
 	}
 	namespace Triggerbot
 	{
-		inline int TriggerbotKey = 0x2D; // Insert key
-		inline int ToggleType = 2; // 0 = Hold, 1 = Toggle, 2 = Always On
+		inline int TriggerbotKey = 0x02; // Right Mouse Button (RMB)
+		inline int ToggleType = 0; // 0 = Hold, 1 = Toggle, 2 = Always On
 
 		inline bool Enabled = false;
 		inline bool TeamCheck = false;
@@ -432,25 +461,33 @@ namespace Options
 		
 		inline bool Toggled = false;
 	}
-	namespace Ragebot
-	{
-		inline bool Enabled = false;
-		inline int RagebotKey = 0;
-		inline int ToggleType = 0;
-		inline bool TeamCheck = false;
-		inline bool DownedCheck = false;
-		inline bool WallCheck = true;
-		inline float Range = 150.f;
-		inline float FOV = 180.f;
-		inline float Smoothness = 0.5f;
-		inline int TargetBone = 0;
-		inline bool Prediction = false;
-		inline float PredictionX = 1.0f;
-		inline float PredictionY = 1.0f;
-		inline bool AutoFire = true;
-		inline int FireRate = 80;
-		inline bool Toggled = false;
-	}
+namespace Ragebot
+{
+    inline bool Enabled = false;
+    inline int RagebotKey = 0;
+    inline int ToggleType = 0;
+    inline bool TeamCheck = false;
+    inline bool DownedCheck = false;
+    inline bool WallCheck = true;
+    inline float Range = 150.f;
+    inline float FOV = 180.f;
+    inline float Smoothness = 0.5f;
+    inline int TargetBone = 0;
+    inline bool Prediction = false;
+    inline float PredictionX = 1.0f;
+    inline float PredictionY = 1.0f;
+    inline bool AutoFire = true;
+    inline int FireRate = 80;
+    inline int TargetPriority = 0;
+
+    inline bool HitChanceEnabled = true;
+    inline float MinHitChance = 75.0f;
+    inline bool DoubleTap = false;
+    inline int DoubleTapDelay = 50;
+    inline float MinDamage = 25.0f;
+
+    inline bool Toggled = false;
+}
 	namespace Macro
 	{
 		inline int MacroKey = 0;
@@ -652,28 +689,29 @@ inline bool Enabled = true;
 		inline int  BhopKey  = 0;
 	}
 
-	namespace Rage
-	{
-		// Behaviour shared by the Rage tab. The "real you" visually orbits the
-		// locked target while the actual character is free to walk around;
-		// meanwhile an auto-kill keeps damaging the target from the orbit point.
-		inline bool Enabled = false;          // master toggle for the rage kill/orbit loop
-		inline int  RageKey = 0;              // hold key to engage; 0 = always on when Enabled
-		inline int  ToggleType = 2;          // 0 = Hold, 1 = Toggle, 2 = Always On
-		inline bool Toggled = false;
+namespace Rage
+{
+    // Behaviour shared by the Rage tab. The "real you" visually orbits the
+    // locked target while the actual character is free to walk around;
+    // meanwhile an auto-kill keeps damaging the target from the orbit point.
+    inline bool Enabled = false;          // master toggle for the rage kill/orbit loop
+    inline int  RageKey = 0;              // hold key to engage; 0 = always on when Enabled
+    inline int  ToggleType = 2;          // 0 = Hold, 1 = Toggle, 2 = Always On
+    inline bool Toggled = false;
 
-		inline float OrbitRadius = 4.0f;     // how far the orbiting "you" sits from the target
-		inline float OrbitSpeed = 3.0f;      // orbit angular speed
-		inline bool  KillOnOrbit = true;      // auto-kill the target while orbiting
-		inline bool  AutoKillAim = true;      // snap camera/aim at the target while killing
-		inline int   TargetMode = 0;          // 0 = aimed-at/closest, 1 = by name
-		inline char  TargetPlayer[32] = "";
+    inline float OrbitRadius = 4.0f;     // how far the orbiting "you" sits from the target
+    inline float OrbitSpeed = 3.0f;      // orbit angular speed
+    inline float OrbitHeight = 0.0f;     // vertical offset of orbit ring
+    inline bool  KillOnOrbit = true;      // auto-kill the target while orbiting
+    inline bool  AutoKillAim = true;      // snap camera/aim at the target while killing
+    inline int   TargetMode = 0;          // 0 = aimed-at/closest, 1 = by name
+    inline char  TargetPlayer[32] = "";
 
-		inline bool  ShowGhost = true;        // draw the orbiting "you" as a ghost
-		inline float GhostColor[3] = { 1.0f, 0.2f, 0.2f };
-		inline float GhostAlpha = 0.55f;
-		inline bool  ShowGhostLine = true;    // line from real you to ghost
-	}
+    inline bool  ShowGhost = true;        // draw the orbiting "you" as a ghost
+    inline float GhostColor[3] = { 1.0f, 0.2f, 0.2f };
+    inline float GhostAlpha = 0.55f;
+    inline bool  ShowGhostLine = true;    // line from real you to ghost
+}
 
 	namespace VoidHide
 	{

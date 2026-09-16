@@ -294,6 +294,38 @@ inline bool IsTeammate(const RobloxPlayer& player)
     if (player.address == Globals::Roblox::LocalPlayer.address)
         return true;
 
+    // Rivals-specific: Team object is stripped for non-local players,
+    // so fall back to TeamColor (from player's TeamColor offset) and
+    // TeamBrickColor (cached from same offset for Rivals).
+    if (Globals::Roblox::isRivals)
+    {
+        auto localTeam = Globals::Roblox::LocalPlayerTeam;
+        auto playerTeam = player.Team;
+        
+        if (localTeam.address != 0 && playerTeam.address != 0)
+        {
+            if (localTeam.address == playerTeam.address)
+                return true;
+                
+            if (!Globals::Roblox::LocalPlayerTeamName.empty() && Globals::Roblox::LocalPlayerTeamName == player.TeamName)
+                return true;
+        }
+
+        // Fallback: compare TeamColor (player's TeamColor offset)
+        auto localTeamColor = Globals::Roblox::LocalPlayerTeamColor & 0xFFFF;
+        auto playerTeamColor = player.TeamColor & 0xFFFF;
+        if (localTeamColor != 0 && localTeamColor != 194 && localTeamColor != 0xFFFF &&
+            localTeamColor == playerTeamColor)
+            return true;
+
+        // Fallback: compare TeamBrickColor (cached from player's TeamColor offset for Rivals)
+        if (Globals::Roblox::LocalPlayerTeamBrickColor != 0 && Globals::Roblox::LocalPlayerTeamBrickColor != 194 && Globals::Roblox::LocalPlayerTeamBrickColor != -1 &&
+            Globals::Roblox::LocalPlayerTeamBrickColor == player.TeamBrickColor)
+            return true;
+
+        return false;
+    }
+
     // Prioritize Player.TeamColor as it's not encrypted and very reliable in games like Arsenal.
     // Mask with 0xFFFF because BrickColor is a 16-bit integer, preventing garbage in upper bits.
     auto localPlayerColor = Globals::Roblox::LocalPlayerTeamColor & 0xFFFF;
@@ -304,6 +336,12 @@ inline bool IsTeammate(const RobloxPlayer& player)
         return true;
     }
 
+    // Rivals teammates are joined by TeamColor (not Team()), and Rivals also
+    // carries LocalPlayerTeamBrickColor through the lossless custom cache even
+    // when the live Team() member is stripped for the non-local player.
+    // Fall back to BrickColor when game-local Team members came back empty so
+    // teamcheck keeps working in Rivals (the default "no-op" only happens when
+    // ALL of Team, TeamName, and BrickColor are missing).
     // If TeamColor didn't match (or was neutral), try Team object comparison.
     // Note: Team pointers can be encrypted in some games, causing false negative matches.
     auto localTeam = Globals::Roblox::LocalPlayerTeam;

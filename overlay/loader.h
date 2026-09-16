@@ -12,11 +12,13 @@
 #include <vector>
 #include <cstring>
 #include <cmath>
+#include <random>
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_win32.h"
 #include "imgui/imgui_impl_dx11.h"
 #include "../rbx/globals/options.h"
 #include "../rbx/globals/globals.h"
+#include "../rbx/globals/RobloxVersion.h"
 #include "../features/obfuscate.h"
 #include "../rbx/configs/configs.h"
 
@@ -110,6 +112,240 @@ namespace Loader
     static const int ProcessPresetCount = 8;
 
     static std::vector<std::string> ConfigFiles;
+
+    // ── Exterium-style ambient background ─────────────────────────────
+    // Mirror of the main menu's animated background: slowly-rising,
+    // rotating, configurable particles (shape / count / size / speed / opacity)
+    // matching the main menu's Exterium background. Options::Misc lives in
+    // the shared in-memory options, so changes here instantly mirror the menu.
+    struct BG_Particle { ImVec2 pos; float velY; float sz; float rot; float tw; };
+    static std::vector<BG_Particle> l_SplashBG;
+    static std::vector<BG_Particle> l_UIBG;
+
+    static inline void BG_Spawn(std::mt19937& rng, BG_Particle& s, float w, float h)
+    {
+        s.pos = ImVec2((float)(rng() % 10000) / 10000.0f * w, (float)(rng() % 10000) / 10000.0f * h);
+        const float minS = ImClamp(Options::Misc::ExteriumBGParticleMinSize, 2.0f, 60.0f);
+        const float maxS = ImMax(minS, ImClamp(Options::Misc::ExteriumBGParticleMaxSize, 2.0f, 60.0f));
+        const float minV = ImClamp(Options::Misc::ExteriumBGParticleMinSpeed, 10.0f, 600.0f);
+        const float maxV = ImMax(minV, ImClamp(Options::Misc::ExteriumBGParticleMaxSpeed, 10.0f, 600.0f));
+        s.sz = minS + (float)(rng() % 10000) / 10000.0f * (maxS - minS);
+        s.velY = -(minV + (float)(rng() % 10000) / 10000.0f * (maxV - minV));
+        s.rot = (float)(rng() % 628) / 100.0f;
+        s.tw = (float)(rng() % 1000) / 1000.0f;
+    }
+
+    static inline void BG_Update(std::vector<BG_Particle>& parts, float w, float h)
+    {
+        static std::mt19937 rng{ std::random_device{}() };
+        const int want = Options::Misc::ExteriumBGEnabled
+            ? (int)ImClamp(Options::Misc::ExteriumBGParticleCount, 4, 80) : 0;
+
+        while ((int)parts.size() < want)
+        {
+            BG_Particle s;
+            BG_Spawn(rng, s, w, h);
+            parts.push_back(s);
+        }
+        if ((int)parts.size() > want)
+            parts.resize(want);
+        if (parts.empty())
+            return;
+
+        static float lastMinS = 6.0f, lastMaxS = 23.0f, lastMinV = 35.0f, lastMaxV = 90.0f;
+        const float minS = ImClamp(Options::Misc::ExteriumBGParticleMinSize, 2.0f, 60.0f);
+        const float maxS = ImMax(minS, ImClamp(Options::Misc::ExteriumBGParticleMaxSize, 2.0f, 60.0f));
+        const float minV = ImClamp(Options::Misc::ExteriumBGParticleMinSpeed, 10.0f, 600.0f);
+        const float maxV = ImMax(minV, ImClamp(Options::Misc::ExteriumBGParticleMaxSpeed, 10.0f, 600.0f));
+        const bool reroll = (minS != lastMinS || maxS != lastMaxS || minV != lastMinV || maxV != lastMaxV);
+        lastMinS = minS; lastMaxS = maxS; lastMinV = minV; lastMaxV = maxV;
+
+        const float dt = ImGui::GetIO().DeltaTime;
+        const float t = (float)ImGui::GetTime();
+        for (auto& s : parts)
+        {
+            if (reroll)
+                BG_Spawn(rng, s, w, h);
+            s.pos.x += sinf(t * 0.5f + s.tw) * 4.0f * dt;
+            s.pos.y += s.velY * dt;
+            s.rot += 0.35f * dt;
+            if (s.pos.y < -s.sz - 24.0f)
+            {
+                s.pos.y = h + s.sz + 24.0f;
+                s.pos.x = (float)(rng() % 10000) / 10000.0f * w;
+            }
+        }
+    }
+
+    static inline void BG_Render(ImDrawList* dl, const std::vector<BG_Particle>& parts, const ImVec2& origin, const ImVec2& size, float menuAlpha)
+    {
+        if (!Options::Misc::ExteriumBGEnabled || parts.empty())
+            return;
+
+        float cr, cg, cb;
+        if (Options::Misc::ExteriumBGUseAccent)
+            ThemeAccent(cr, cg, cb);
+        else
+        {
+            cr = Options::Misc::ExteriumBGColor[0];
+            cg = Options::Misc::ExteriumBGColor[1];
+            cb = Options::Misc::ExteriumBGColor[2];
+        }
+        const ImU32 accent = Pal(cr, cg, cb);
+        const float opacity = ImClamp(Options::Misc::ExteriumBGParticleOpacity, 0.0f, 0.5f);
+        const int shape = Options::Misc::ExteriumBGParticleShape;
+        const bool glow = Options::Misc::ExteriumBGParticleGlow;
+        const float t = (float)ImGui::GetTime();
+
+        dl->PushClipRect(origin, origin + size, true);
+        for (const auto& s : parts)
+        {
+            float pulse = 0.75f + 0.25f * sinf(t * 0.9f + s.tw);
+            int a = (int)(opacity * menuAlpha * 255.0f * pulse);
+            if (a <= 1) continue;
+            ImVec2 c = origin + s.pos;
+            float sz = s.sz;
+
+            if (glow)
+            {
+                int steps = 12;
+                for (int i = steps; i >= 1; i--)
+                {
+                    float bt = (float)i / (float)steps;
+                    int ba = (int)(menuAlpha * 0.04f * pulse * expf(-bt * bt * 3.4f) * 255.0f + 0.5f);
+                    if (ba <= 1) continue;
+                    dl->AddCircleFilled(c, sz * 1.6f + 6.0f * bt,
+                        IM_COL32((int)(cr * 255), (int)(cg * 255), (int)(cb * 255), ba), 48);
+                }
+            }
+
+            const ImU32 col = (accent & 0x00FFFFFFu) | ((ImU32)a << 24);
+            switch (shape)
+            {
+            case 1: // Circle
+                dl->AddCircleFilled(c, sz * 0.8f, col, 32);
+                break;
+            case 2: // Triangle
+            {
+                ImVec2 tp[3];
+                for (int i = 0; i < 3; i++)
+                {
+                    float ang = s.rot + (i * 2.0f * 3.14159265f / 3.0f);
+                    tp[i] = ImVec2(c.x + cosf(ang) * sz, c.y + sinf(ang) * sz);
+                }
+                dl->AddTriangleFilled(tp[0], tp[1], tp[2], col);
+                break;
+            }
+            case 3: // Diamond
+            {
+                ImVec2 dp[4] = {
+                    ImVec2(c.x, c.y - sz), ImVec2(c.x + sz, c.y),
+                    ImVec2(c.x, c.y + sz), ImVec2(c.x - sz, c.y)
+                };
+                dl->AddConvexPolyFilled(dp, 4, col);
+                break;
+            }
+            default: // 0: Square (rotating)
+            {
+                float cr2 = cosf(s.rot), sr = sinf(s.rot);
+                ImVec2 cpts[4] = {
+                    ImVec2(c.x - sz * cr2 + sz * sr, c.y - sz * sr - sz * cr2),
+                    ImVec2(c.x + sz * cr2 + sz * sr, c.y - sz * sr + sz * cr2),
+                    ImVec2(c.x + sz * cr2 - sz * sr, c.y + sz * sr + sz * cr2),
+                    ImVec2(c.x - sz * cr2 - sz * sr, c.y + sz * sr - sz * cr2)
+                };
+                dl->AddConvexPolyFilled(cpts, 4, col);
+                break;
+            }
+            }
+        }
+        dl->PopClipRect();
+    }
+
+    // ── Loader settings persistence ────────────────────────────────────
+    // Persists the loader-side appearance (theme, colors, ambient bg, font,
+    // scale, stealth) to an encrypted file so choices survive relaunch. The
+    // same Options::Misc values are shared with the main menu, so whatever is
+    // picked here is what the menu opens with after inject.
+    static inline std::filesystem::path LoaderSettingsPath()
+    {
+        InitializeConfigPaths();
+        return std::filesystem::path(Globals::configsPath).parent_path() / SX("loader_settings.json");
+    }
+
+    static inline void SaveLoaderSettings()
+    {
+        std::lock_guard<std::recursive_mutex> lock(Config::Mutex());
+        json j;
+        j["MenuTheme"] = Options::Misc::MenuTheme;
+        j["MenuGradient"] = Options::Misc::MenuGradient;
+        j["MenuAccentColor"] = ToJsonColor(Options::Misc::MenuAccentColor, 3);
+        j["MenuAccentColor2"] = ToJsonColor(Options::Misc::MenuAccentColor2, 3);
+        j["MenuBgColor"] = ToJsonColor(Options::Misc::MenuBgColor, 3);
+        j["MenuPanelColor"] = ToJsonColor(Options::Misc::MenuPanelColor, 3);
+        j["MenuFont"] = Options::Misc::MenuFont;
+        j["MenuScale"] = Options::Misc::MenuScale;
+        j["HideFromTabs"] = Options::Misc::HideFromTabs;
+        j["StreamProof"] = Options::Misc::StreamProof;
+        j["DebugLog"] = Options::Misc::DebugLog;
+        j["AttachOnStart"] = Options::Loader::AttachOnStart;
+        j["AutoloadConfig"] = Options::Loader::AutoloadConfig;
+        j["ExteriumBGEnabled"] = Options::Misc::ExteriumBGEnabled;
+        j["ExteriumBGParticleCount"] = Options::Misc::ExteriumBGParticleCount;
+        j["ExteriumBGParticleShape"] = Options::Misc::ExteriumBGParticleShape;
+        j["ExteriumBGParticleMinSize"] = Options::Misc::ExteriumBGParticleMinSize;
+        j["ExteriumBGParticleMaxSize"] = Options::Misc::ExteriumBGParticleMaxSize;
+        j["ExteriumBGParticleMinSpeed"] = Options::Misc::ExteriumBGParticleMinSpeed;
+        j["ExteriumBGParticleMaxSpeed"] = Options::Misc::ExteriumBGParticleMaxSpeed;
+        j["ExteriumBGParticleOpacity"] = Options::Misc::ExteriumBGParticleOpacity;
+        j["ExteriumBGParticleGlow"] = Options::Misc::ExteriumBGParticleGlow;
+        j["ExteriumBGUseAccent"] = Options::Misc::ExteriumBGUseAccent;
+        j["ExteriumBGColor"] = ToJsonColor(Options::Misc::ExteriumBGColor, 3);
+
+        const std::string plain = j.dump();
+        std::ofstream f(LoaderSettingsPath(), std::ios::binary | std::ios::trunc);
+        if (f.is_open())
+        {
+            const std::string blob = CfgCrypto::Encrypt(plain);
+            f.write(blob.data(), (std::streamsize)blob.size());
+        }
+    }
+
+    static inline void LoadLoaderSettings()
+    {
+        json j;
+        if (!ReadJsonFile(LoaderSettingsPath(), j))
+            return;
+        std::lock_guard<std::recursive_mutex> lock(Config::Mutex());
+        LoadVal(j, "MenuTheme", Options::Misc::MenuTheme);
+        LoadVal(j, "MenuGradient", Options::Misc::MenuGradient);
+        LoadFloatArray(j, "MenuAccentColor", Options::Misc::MenuAccentColor);
+        LoadFloatArray(j, "MenuAccentColor2", Options::Misc::MenuAccentColor2);
+        LoadFloatArray(j, "MenuBgColor", Options::Misc::MenuBgColor);
+        LoadFloatArray(j, "MenuPanelColor", Options::Misc::MenuPanelColor);
+        LoadVal(j, "MenuFont", Options::Misc::MenuFont);
+        LoadVal(j, "MenuScale", Options::Misc::MenuScale);
+        LoadVal(j, "HideFromTabs", Options::Misc::HideFromTabs);
+        LoadVal(j, "StreamProof", Options::Misc::StreamProof);
+        LoadVal(j, "DebugLog", Options::Misc::DebugLog);
+        LoadVal(j, "AttachOnStart", Options::Loader::AttachOnStart);
+        std::string acfg;
+        LoadVal(j, "AutoloadConfig", acfg);
+        if (!acfg.empty())
+            strncpy_s(Options::Loader::AutoloadConfig, acfg.c_str(),
+                sizeof(Options::Loader::AutoloadConfig) - 1);
+        LoadVal(j, "ExteriumBGEnabled", Options::Misc::ExteriumBGEnabled);
+        LoadVal(j, "ExteriumBGParticleCount", Options::Misc::ExteriumBGParticleCount);
+        LoadVal(j, "ExteriumBGParticleShape", Options::Misc::ExteriumBGParticleShape);
+        LoadVal(j, "ExteriumBGParticleMinSize", Options::Misc::ExteriumBGParticleMinSize);
+        LoadVal(j, "ExteriumBGParticleMaxSize", Options::Misc::ExteriumBGParticleMaxSize);
+        LoadVal(j, "ExteriumBGParticleMinSpeed", Options::Misc::ExteriumBGParticleMinSpeed);
+        LoadVal(j, "ExteriumBGParticleMaxSpeed", Options::Misc::ExteriumBGParticleMaxSpeed);
+        LoadVal(j, "ExteriumBGParticleOpacity", Options::Misc::ExteriumBGParticleOpacity);
+        LoadVal(j, "ExteriumBGParticleGlow", Options::Misc::ExteriumBGParticleGlow);
+        LoadVal(j, "ExteriumBGUseAccent", Options::Misc::ExteriumBGUseAccent);
+        LoadFloatArray(j, "ExteriumBGColor", Options::Misc::ExteriumBGColor);
+    }
 
     // ── Animation state ────────────────────────────────────────────────
     static float g_Time = 0.0f;
@@ -458,6 +694,10 @@ namespace Loader
             }
         }
 
+        // Exterium-style animated ambient background (same as main menu)
+        BG_Update(l_SplashBG, ws.x, ws.y);
+        BG_Render(dl, l_SplashBG, wp, ws, l_SplashFade);
+
         // Soft ambient radial glow behind logo (reduced intensity)
         float gradTime = l_SplashTimer * 0.12f;
         ImVec2 glowCenter(center.x + sinf(gradTime) * 30.0f, center.y - 35.0f + cosf(gradTime * 0.6f) * 20.0f);
@@ -800,6 +1040,10 @@ namespace Loader
             }
         }
 
+        // Exterium-style animated ambient background (same as main menu)
+        BG_Update(l_UIBG, ws.x, ws.y);
+        BG_Render(dl, l_UIBG, wp, ws, g_EntranceAlpha);
+
         // ── Header — subtle gradient, slightly brighter top ────────────
         {
             int hSteps = 20;
@@ -1006,7 +1250,10 @@ namespace Loader
                     40.0f, 18.0f, &Options::Misc::HideFromTabs, 1);
                 ImGui::SetCursorScreenPos(ImVec2(c2m.x + 16.0f, ty));
                 if (ImGui::InvisibleButton("##hft", ImVec2(cs.x - 32.0f, 26.0f)))
+                {
                     Options::Misc::HideFromTabs = !Options::Misc::HideFromTabs;
+                    SaveLoaderSettings();
+                }
             }
 
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + c2H + 8.0f);
@@ -1030,7 +1277,10 @@ namespace Loader
                     40.0f, 18.0f, &Options::Misc::StreamProof, 2);
                 ImGui::SetCursorScreenPos(ImVec2(c3m.x + 32.0f, ty));
                 if (ImGui::InvisibleButton("##sp", ImVec2(cs.x - 64.0f, 36.0f)))
+                {
                     Options::Misc::StreamProof = !Options::Misc::StreamProof;
+                    SaveLoaderSettings();
+                }
             }
 
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + c3H + 8.0f);
@@ -1054,7 +1304,10 @@ namespace Loader
                     40.0f, 18.0f, &Options::Misc::DebugLog, 3);
                 ImGui::SetCursorScreenPos(ImVec2(c4m.x + 32.0f, ty));
                 if (ImGui::InvisibleButton("##dl", ImVec2(cs.x - 64.0f, 36.0f)))
+                {
                     Options::Misc::DebugLog = !Options::Misc::DebugLog;
+                    SaveLoaderSettings();
+                }
             }
         }
 
@@ -1114,12 +1367,108 @@ namespace Loader
                 ImGui::SetCursorScreenPos(cardMin);
                 char tid[32]; sprintf_s(tid, "##th_%d", i);
                 if (ImGui::InvisibleButton(tid, ImVec2(cardW, cardH)))
+                {
                     Options::Misc::MenuTheme = i;
+                    SaveLoaderSettings();
+                }
                 if (ImGui::IsItemHovered() && !sel)
                     dl->AddRectFilled(cardMin, cardMax, Pal(0.071f, 0.078f, 0.094f, 0.25f), 7.0f);
 
                 colCount++;
             }
+
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 6.0f);
+
+            auto PushCtl = [] {
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 3));
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.028f, 0.030f, 0.038f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_SliderGrab, AccV());
+                ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, Acc2V());
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.045f, 0.048f, 0.058f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.070f, 0.075f, 0.090f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.090f, 0.095f, 0.115f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_CheckMark, AccV());
+            };
+            auto PopCtl = [] { ImGui::PopStyleColor(7); ImGui::PopStyleVar(2); };
+            auto saveOn = [](bool changed) { if (changed) SaveLoaderSettings(); };
+            PushBodyFont();
+
+            // ── Custom Colors (only meaningful for the Custom theme) ────────
+            if (Options::Misc::MenuTheme == 0)
+            {
+                const char* cusLabels[] = { "Background", "Panel", "Accent 1", "Accent 2" };
+                float* cusArrs[] = { Options::Misc::MenuBgColor, Options::Misc::MenuPanelColor,
+                                     Options::Misc::MenuAccentColor, Options::Misc::MenuAccentColor2 };
+                for (int c = 0; c < 4; c++)
+                {
+                    ImGui::TextColored(ImVec4(0.80f, 0.86f, 0.92f, 1.0f), cusLabels[c]);
+                    ImGui::SetNextItemWidth(cs.x - 32.0f);
+                    ImGui::PushID(c + 100);
+                    PushCtl();
+                    ImGui::ColorEdit3("##cus", cusArrs[c], ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+                    if (ImGui::IsItemActivated() && Options::Misc::MenuTheme != 0)
+                        Options::Misc::MenuTheme = 0;
+                    saveOn(ImGui::IsItemDeactivatedAfterEdit());
+                    PopCtl();
+                    ImGui::PopID();
+                }
+                saveOn(ImGui::Checkbox("Gradient Background", &Options::Misc::MenuGradient));
+            }
+
+            // ── Animated Background ────────────────────────────────────────
+            {
+                ImGui::TextColored(AccV(), "Animated Background");
+                PushCtl();
+                saveOn(ImGui::Checkbox("Enabled", &Options::Misc::ExteriumBGEnabled));
+
+                static const char* shapeNames = "Square\0Circle\0Triangle\0Diamond\0";
+                ImGui::SetNextItemWidth(cs.x - 32.0f);
+                if (ImGui::Combo("Shape", &Options::Misc::ExteriumBGParticleShape, shapeNames))
+                    SaveLoaderSettings();
+
+                saveOn(ImGui::Checkbox("Use Theme Accent", &Options::Misc::ExteriumBGUseAccent));
+                if (!Options::Misc::ExteriumBGUseAccent)
+                {
+                    ImGui::SetNextItemWidth(cs.x - 32.0f);
+                    ImGui::ColorEdit3("Color", Options::Misc::ExteriumBGColor,
+                        ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+                    saveOn(ImGui::IsItemDeactivatedAfterEdit());
+                }
+
+                ImGui::SetNextItemWidth(cs.x - 32.0f);
+                saveOn(ImGui::SliderInt("Particles", &Options::Misc::ExteriumBGParticleCount, 8, 48));
+
+                float szAvg = (Options::Misc::ExteriumBGParticleMinSize + Options::Misc::ExteriumBGParticleMaxSize) * 0.5f;
+                ImGui::SetNextItemWidth(cs.x - 32.0f);
+                if (ImGui::SliderFloat("Size", &szAvg, 2.0f, 40.0f, "%.0f"))
+                {
+                    Options::Misc::ExteriumBGParticleMinSize = szAvg * 0.6f;
+                    Options::Misc::ExteriumBGParticleMaxSize = szAvg * 1.4f;
+                    SaveLoaderSettings();
+                }
+
+                float spd = Options::Misc::ExteriumBGParticleMaxSpeed;
+                ImGui::SetNextItemWidth(cs.x - 32.0f);
+                if (ImGui::SliderFloat("Speed", &spd, 10.0f, 220.0f, "%.0f"))
+                {
+                    Options::Misc::ExteriumBGParticleMaxSpeed = spd;
+                    Options::Misc::ExteriumBGParticleMinSpeed = spd * 0.4f;
+                    SaveLoaderSettings();
+                }
+
+                float pct = Options::Misc::ExteriumBGParticleOpacity / 0.002f;
+                ImGui::SetNextItemWidth(cs.x - 32.0f);
+                if (ImGui::SliderFloat("Opacity", &pct, 0.0f, 100.0f, "%.0f%%"))
+                {
+                    Options::Misc::ExteriumBGParticleOpacity = pct * 0.002f;
+                    SaveLoaderSettings();
+                }
+
+                saveOn(ImGui::Checkbox("Soft Glow", &Options::Misc::ExteriumBGParticleGlow));
+                PopCtl();
+            }
+            PopBodyFont();
         }
 
                 // ── FONT TAB ──────────────────────────────────────────────
@@ -1145,7 +1494,8 @@ namespace Loader
                 ImGui::PushStyleColor(ImGuiCol_SliderGrab, AccV());
                 ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, Acc2V());
                 ImGui::PushItemWidth(cs.x - 32.0f);
-                ImGui::SliderFloat("##scale", &Options::Misc::MenuScale, 0.6f, 2.0f, "%.1fx");
+                if (ImGui::SliderFloat("##scale", &Options::Misc::MenuScale, 0.6f, 2.0f, "%.1fx"))
+                    SaveLoaderSettings();
                 ImGui::PopItemWidth();
                 ImGui::PopStyleColor(3);
                 ImGui::PopStyleVar(2);
@@ -1180,7 +1530,10 @@ namespace Loader
                     ImGui::SetCursorScreenPos(mn);
                     char fid[32]; sprintf_s(fid, "##fn_%d", i);
                     if (ImGui::InvisibleButton(fid, ImVec2(cs.x - 32.0f, 32.0f)))
-                        Options::Misc::MenuFont = i;
+                {
+                    Options::Misc::MenuFont = i;
+                    SaveLoaderSettings();
+                }
                     if (ImGui::IsItemHovered() && !sel)
                         dl->AddRectFilled(mn, mx, Pal(0.071f, 0.078f, 0.094f, 0.25f), 5.0f);
                     fy += 36.0f;
@@ -1197,6 +1550,64 @@ namespace Loader
             DrawCard(dl, cc1m, cc1M, 10.0f);
             DrawSectionHeader(dl, ImVec2(cc1m.x + 16.0f, cc1m.y + 12.0f), "Configuration", -1);
 
+            // Client version chip — shows the actual installed Roblox build and
+            // whether the bundled offsets target the same build.
+            {
+                const std::string& rv = RobloxVersion::GetClientVersion();
+                const char* vHash = !rv.empty() ? strchr(rv.c_str(), '-') : nullptr;
+                vHash = vHash ? vHash + 1 : (!rv.empty() ? rv.c_str() : nullptr);
+                char vShort[24] = "n/a";
+                if (vHash && vHash[0])
+                    sprintf_s(vShort, "%.9s", vHash);
+                const int vst = RobloxVersion::GetStatus();
+                char chipTxt[80];
+                sprintf_s(chipTxt, "Roblox %s", vShort);
+
+                ImVec2 chipTS = l_Font_Small
+                    ? l_Font_Small->CalcTextSizeA(l_Font_Small->FontSize, FLT_MAX, 0.0f, chipTxt)
+                    : ImGui::CalcTextSize(chipTxt, 0, false, -1.0f);
+                float chipW = chipTS.x + 26.0f, chipH = 18.0f;
+                ImVec2 chipMin(cc1m.x + cs.x - chipW - 16.0f, cc1m.y + 10.0f);
+                ImVec2 chipMax(chipMin.x + chipW, chipMin.y + chipH);
+
+                ImU32 chipBg = (vst == 1) ? Pal(0.02f, 0.06f, 0.04f)
+                    : (vst == 2) ? Pal(0.08f, 0.05f, 0.015f)
+                    : Pal(0.045f, 0.048f, 0.058f);
+                ImU32 chipBr = (vst == 1) ? Pal(0.08f, 0.20f, 0.12f, 0.6f)
+                    : (vst == 2) ? Pal(0.30f, 0.18f, 0.05f, 0.6f)
+                    : Pal(0.10f, 0.11f, 0.13f, 0.6f);
+                dl->AddRectFilled(chipMin, chipMax, chipBg, 9.0f);
+                dl->AddRect(chipMin, chipMax, chipBr, 9.0f, 0, 1.0f);
+
+                ImU32 dotCol = (vst == 1) ? Pal(0.20f, 0.72f, 0.32f)
+                    : (vst == 2) ? Pal(1.00f, 0.72f, 0.20f)
+                    : Pal(0.45f, 0.50f, 0.58f);
+                dl->AddCircleFilled(ImVec2(chipMin.x + 11.0f, chipMin.y + chipH * 0.5f), 3.0f, dotCol);
+
+                if (l_Font_Small)
+                    dl->AddText(l_Font_Small, 0,
+                        ImVec2(chipMin.x + 21.0f, chipMin.y + (chipH - l_Font_Small->FontSize) * 0.5f),
+                        Pal(0.80f, 0.86f, 0.92f), chipTxt);
+                else
+                    dl->AddText(ImGui::GetFont(), 11.0f,
+                        ImVec2(chipMin.x + 21.0f, chipMin.y + (chipH - 11.0f) * 0.5f),
+                        Pal(0.80f, 0.86f, 0.92f), chipTxt);
+
+                if (ImGui::IsMouseHoveringRect(chipMin, chipMax))
+                {
+                    static char tool[192];
+                    if (vst == 2)
+                        sprintf_s(tool, "%s\nInstalled: %s\nOffsets for: %s",
+                            SX("Offsets target a different build").c_str(),
+                            rv.empty() ? "?" : rv.c_str(), Offsets::ClientVersion.c_str());
+                    else if (vst == 1)
+                        sprintf_s(tool, "%s", SX("Offsets match this Roblox build").c_str());
+                    else
+                        sprintf_s(tool, "%s", SX("Roblox client not found").c_str());
+                    ImGui::SetTooltip("%s", tool);
+                }
+            }
+
             // Autoload toggle — 13px label
             {
                 float ty = cc1m.y + 36.0f;
@@ -1210,7 +1621,10 @@ namespace Loader
                     40.0f, 18.0f, &Options::Loader::AttachOnStart, 3);
                 ImGui::SetCursorScreenPos(ImVec2(cc1m.x + 16.0f, ty));
                 if (ImGui::InvisibleButton("##autoload", ImVec2(cs.x - 32.0f, 26.0f)))
+                {
                     Options::Loader::AttachOnStart = !Options::Loader::AttachOnStart;
+                    SaveLoaderSettings();
+                }
             }
 
             // Config list
@@ -1270,6 +1684,7 @@ namespace Loader
                         else
                             strncpy_s(Options::Loader::AutoloadConfig, ConfigFiles[i].c_str(),
                                 sizeof(Options::Loader::AutoloadConfig) - 1);
+                        SaveLoaderSettings();
                     }
                     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 1.0f);
                 }
@@ -1359,6 +1774,9 @@ namespace Loader
     // ── Main entry ─────────────────────────────────────────────────────
     static bool Run()
     {
+        // Restore saved loader appearance/ambient/stealth settings before any UI frame
+        LoadLoaderSettings();
+
         // Window class with drop shadow (XOR-obfuscated class name; persists for the process)
         static const std::wstring clsName = [] {
             std::string n = SX("SeraphLoader");
