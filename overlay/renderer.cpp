@@ -64,6 +64,9 @@
 // KissFFT - simple embedded radix-2 FFT (no external deps, power-of-two sizes)
 #define kiss_fft_scalar float
 
+// Shaders
+#include "shaders/ShaderBackgrounds.h"
+
 struct kiss_fft_state {
     int nfft;
     int inverse;
@@ -1823,6 +1826,9 @@ bool g_SwapChainOccluded = false;
 UINT g_ResizeWidth = 0, g_ResizeHeight = 0;
 ID3D11RenderTargetView* g_mainRenderTargetView = nullptr;
 
+// Shader background: one effect, one instance, spanning the whole menu window.
+static shader::ShaderSlot g_bg;
+
 // Persistent script text box for the Executor tab (survives tab switches).
 static editor::lua_editor g_executorEditor;
 
@@ -3479,25 +3485,6 @@ auto draw = ImGui::GetWindowDrawList();
         draw->AddRectFilled(ImVec2(p.x, p.y), ImVec2(p.x + s.x, p.y + headerH),
             ImGui::ColorConvertFloat4ToU32(headerBg), 16.0f * sc, ImDrawFlags_RoundCornersTop);
 
-        // Accent strip at bottom of header (0,52)-(827,55)
-        draw->AddRectFilled(
-            ImVec2(p.x, p.y + 52.0f * sc),
-            ImVec2(p.x + s.x, p.y + 55.0f * sc),
-            colMainStr);
-
-        // Logo: "SERAPH" centered in header
-        {
-            const std::string logoText = SX("SERAPH");
-            ImFont* lf = UI::logo_font ? UI::logo_font : io.FontDefault;
-            const float logoSize = UI::logo_font ? lf->FontSize : 25.0f * sc;
-            ImVec2 tsz = lf->CalcTextSizeA(logoSize, FLT_MAX, 0.f, logoText.c_str());
-            ImVec2 c = ImVec2(p.x + (s.x - tsz.x) * 0.5f, p.y + (52.0f * sc - logoSize) * 0.5f);
-            ImU32 lc = ImGui::ColorConvertFloat4ToU32(ImVec4(0.9f, 0.9f, 0.94f, 1.0f));
-            draw->AddText(lf, logoSize, ImVec2(c.x + 1.2f, c.y + 1.2f),
-                ImGui::ColorConvertFloat4ToU32(ImVec4(mainA.x, mainA.y, mainA.z, 0.20f)), logoText.c_str());
-            draw->AddText(lf, logoSize, c, lc, logoText.c_str());
-        }
-
         // Sidebar panel (0,55)-(187,604), near-black, bottom-left rounded
         const ImVec2 sideMin = ImVec2(p.x, p.y + headerH);
         const ImVec2 sideMax = ImVec2(p.x + sbW, p.y + s.y);
@@ -3514,6 +3501,50 @@ auto draw = ImGui::GetWindowDrawList();
             ImVec2(p.x + sbW, p.y + headerH),
             ImVec2(p.x + s.x, p.y + s.y),
             colWin, 16.0f * sc, ImDrawFlags_RoundCornersBottomRight);
+
+        // ── Shader-based animated background ─────────────────────────────
+        // ONE effect, ONE instance, covering the entire menu window: sidebar
+        // and content are the same continuous image rather than two separate
+        // renders, so there is no seam down the middle and the pointer drives
+        // a single field. Runs edge to edge including behind the title bar.
+        {
+            const int bgIndex = (Options::Misc::ShaderBackground >= 0 &&
+                                 Options::Misc::ShaderBackground < shader::BG_COUNT)
+                ? Options::Misc::ShaderBackground : shader::BG_COLOR_BENDS;
+            const float bgAlpha = Options::Misc::ShaderBackgroundOpacity * menuAlpha;
+
+            const ImVec2 bgMin = p;
+            const ImVec2 bgMax = ImVec2(p.x + s.x, p.y + s.y);
+            const ImVec2 bgSize(s.x, s.y);
+
+            g_bg.Update(bgIndex, dt, bgSize, bgMin);
+
+            if (ID3D11ShaderResourceView* srv = g_bg.Srv(bgIndex))
+            {
+                // Clipped to the window rect so the shader respects the
+                // rounded corners instead of squaring them off.
+                draw->PushClipRect(bgMin, bgMax, true);
+                draw->AddImage(
+                    (ImTextureID)srv, bgMin, bgMax,
+                    ImVec2(0.f, 0.f), ImVec2(1.f, 1.f),
+                    ImGui::ColorConvertFloat4ToU32(ImVec4(1.f, 1.f, 1.f, bgAlpha)));
+                draw->PopClipRect();
+            }
+        }
+
+        // Logo: "SERAPH" centered in header. Drawn after the shader so the
+        // title stays legible instead of being washed out by the effect.
+        {
+            const std::string logoText = SX("SERAPH");
+            ImFont* lf = UI::logo_font ? UI::logo_font : io.FontDefault;
+            const float logoSize = UI::logo_font ? lf->FontSize : 25.0f * sc;
+            ImVec2 tsz = lf->CalcTextSizeA(logoSize, FLT_MAX, 0.f, logoText.c_str());
+            ImVec2 c = ImVec2(p.x + (s.x - tsz.x) * 0.5f, p.y + (52.0f * sc - logoSize) * 0.5f);
+            ImU32 lc = ImGui::ColorConvertFloat4ToU32(ImVec4(0.9f, 0.9f, 0.94f, 1.0f));
+            draw->AddText(lf, logoSize, ImVec2(c.x + 1.2f, c.y + 1.2f),
+                ImGui::ColorConvertFloat4ToU32(ImVec4(mainA.x, mainA.y, mainA.z, 0.20f)), logoText.c_str());
+            draw->AddText(lf, logoSize, c, lc, logoText.c_str());
+        }
 
 // Use the chosen menu font. Fall back to ImGui's default font
 // if MenuFonts hasn't populated yet (only on the very first
@@ -3924,17 +3955,65 @@ UI::labelsection("SMOOTHING & FEEL");
 
                     static const char* saModes[]{ "Camera Rotation", "Mouse Move", "Both" };
                     UI::Combo("Method", reinterpret_cast<int*>(&Options::Aimbot::SilentAimMethod), saModes, IM_ARRAYSIZE(saModes), cardW);
-                    
+
+                    static const char* saDelivery[]{ "Viewport Offset", "Camera Rotation", "Both" };
+                    UI::Combo("Delivery", &Options::Aimbot::SilentAimDelivery, saDelivery, IM_ARRAYSIZE(saDelivery), cardW);
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("How the shot is delivered.\nViewport Offset shifts the projection so the shot is cast through the target - this is what Rivals honours reliably.\nCamera Rotation writes the camera matrix, which Roblox recomputes every frame and is only sampled some frames.");
+
+                    UI::labelsection("HIT PART");
+                    static const char* saHitModes[]{ "Fixed Part", "Closest Part", "Adaptive" };
+                    UI::Combo("Hit Mode", &Options::Aimbot::SilentAimHitMode, saHitModes, IM_ARRAYSIZE(saHitModes), cardW);
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Fixed Part always uses Target Part.\nAdaptive keeps Target Part while it has line of sight, then steps down the body when it is behind cover.\nIndependent of the main aimbot's Hitbox Mode.");
+
+                    if (Options::Aimbot::SilentAimHitMode != 1)
+                    {
+                        static const char* saBones[]{ "Head", "UpperTorso", "LowerTorso", "HumanoidRootPart" };
+                        UI::Combo("Target Part", &Options::Aimbot::SilentAimTargetBone, saBones, IM_ARRAYSIZE(saBones), cardW);
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rivals uses R6 rigs, so both torso options resolve to the Torso part. Head resolves to the Head part.");
+                    }
+
+                    UI::labelsection("TRACKING");
+                    UI::Checkbox("Sticky Target", &Options::Aimbot::SilentAimSticky);
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Keeps the current target instead of re-picking the nearest one every frame.");
+                    if (Options::Aimbot::SilentAimSticky)
+                    {
+                        UI::SliderFloat("Switch Delay (ms)", &Options::Aimbot::SilentAimSwitchDelay, 0.f, 500.f, "%.0f");
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Minimum time before the lock may move to a different enemy.");
+                    }
+
                     UI::Checkbox("Team Check", &Options::Aimbot::SilentAimTeamCheck);
+                    UI::Checkbox("Require Visible", &Options::Aimbot::SilentAimRequireVisible);
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Off by default. Needs Wall Check on too.\nThe map raycast is not tuned for Rivals geometry and can report valid targets as covered, which stops silent aim acquiring anything at all.");
+
+                    UI::labelsection("PREDICTION");
                     UI::Checkbox("Prediction", &Options::Aimbot::SilentAimPrediction);
                     if (Options::Aimbot::SilentAimPrediction)
                     {
-                        UI::SliderFloat("Prediction X", &Options::Aimbot::SilentAimPredictionX, 0.5f, 3.0f, "%.2f");
-                        UI::SliderFloat("Prediction Y", &Options::Aimbot::SilentAimPredictionY, 0.5f, 3.0f, "%.2f");
+                        UI::SliderFloat("Projectile Speed", &Options::Aimbot::SilentAimProjectileSpeed, 0.f, 500.f, "%.0f");
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Weapon speed in studs/second. Prediction uses real time of flight (distance / speed).\nSet to 0 to use the velocity multipliers below instead.");
+
+                        if (Options::Aimbot::SilentAimProjectileSpeed > 1.f)
+                        {
+                            UI::Checkbox("Drop Compensation", &Options::Aimbot::SilentAimDropCompensation);
+                            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lifts the aim point to counter bullet drop over the flight time (Roblox gravity 196.2 studs/s^2).");
+                        }
+                        else
+                        {
+                            UI::SliderFloat("Prediction X", &Options::Aimbot::SilentAimPredictionX, 0.5f, 3.0f, "%.2f");
+                            UI::SliderFloat("Prediction Y", &Options::Aimbot::SilentAimPredictionY, 0.5f, 3.0f, "%.2f");
+                        }
                     }
 
-                    static const char* saBones[]{ "Head", "UpperTorso", "LowerTorso", "HumanoidRootPart" };
-                    UI::Combo("Target Part", &Options::Aimbot::SilentAimTargetBone, saBones, IM_ARRAYSIZE(saBones), cardW);
+                    UI::labelsection("ALIGNMENT");
+                    UI::SliderFloat("Muzzle Compensation", &Options::Aimbot::SilentAimMuzzleComp, 0.f, 1.f, "%.2f");
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rivals spawns bullets at the weapon tip rather than the camera, which sends close-range shots past the aimed part.\nBlends the aim origin from the camera toward the muzzle to correct the parallax.");
+
+                    UI::Checkbox("Only While Firing", &Options::Aimbot::SilentAimFireOnly);
+                    if (Options::Aimbot::SilentAimFireOnly)
+                    {
+                        UI::SliderFloat("Hold After Fire (ms)", &Options::Aimbot::SilentAimHoldMs, 0.f, 300.f, "%.0f");
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Keeps the aim applied for this long after the trigger is released, so the last shot of a burst still lands.");
+                    }
                 }
 
                 UI::labelsection("SILENT LOCK");
@@ -4226,6 +4305,14 @@ UI::labelsection("SMOOTHING & FEEL");
                         {
                             static const char* hitboxModes[]{ "Fixed Bone", "Closest Part" };
                             UI::Combo("Hitbox Mode", &prof.ClosestPart, hitboxModes, IM_ARRAYSIZE(hitboxModes));
+                            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Applies to the aimbot. Silent aim uses its own Hit Mode below so this cannot discard the selected bone.");
+                        }
+
+                        if (prof.SilentAim)
+                        {
+                            static const char* wpSilentHitModes[]{ "Fixed Part", "Closest Part", "Adaptive" };
+                            UI::Combo("Silent Hit Mode", &prof.SilentAimHitMode, wpSilentHitModes, IM_ARRAYSIZE(wpSilentHitModes));
+                            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Adaptive keeps Target Bone while it has line of sight, then steps down the body when it is behind cover.");
                         }
 
                         UI::SliderFloat("Range", &prof.Range, 1.f, 1000.f, "%.0f");
@@ -5020,6 +5107,16 @@ ImGui::ColorEdit3 ("Particle Color", MenuWeather::Color, ImGuiColorEditFlags_NoI
 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Falling snowflakes or rain streaks across the menu background. Settings are saved with your config.");
 
 ImGui::Dummy(ImVec2(0, 15));
+
+// Shader backdrop for the content panel and the sidebar (same effect on both).
+UI::labelsection("SHADER BACKGROUND");
+UI::Combo("Effect", &Options::Misc::ShaderBackground,
+    shader::BackgroundNames(), shader::BG_COUNT);
+if (ImGui::IsItemHovered()) ImGui::SetTooltip("Animated shader shown behind the content panel and the sidebar. Settings are saved with your config.");
+UI::SliderFloat("Opacity", &Options::Misc::ShaderBackgroundOpacity, 0.0f, 1.0f, "%.2f");
+if (ImGui::IsItemHovered()) ImGui::SetTooltip("How strongly the shader blends over the panel background.");
+
+ImGui::Dummy(ImVec2(0, 15));
 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 0.6f));
 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.3f, 0.3f, 0.8f));
 ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
@@ -5663,11 +5760,9 @@ if (IsGameOnTop("Roblox"))
 		RunMacro();
 	}
 	RunTriggerbot();
-	if (Options::Aimbot::ShowFOV)
-	{
-		RunAimCore(ImGui::GetBackgroundDrawList());
-	}
-
+	// FOV drawing is handled unconditionally by RenderAdvancedFOV below. This
+	// used to call RunAimCore() again under ShowFOV, which applied the aim
+	// twice per frame and advanced sticky/toggle/switch-delay state twice.
 	RenderAdvancedFOV(ImGui::GetBackgroundDrawList());
 	RenderCrosshair(ImGui::GetBackgroundDrawList());
 	if (Options::Rivals::KatanaAlert && AnyRivalsKatanaUser())

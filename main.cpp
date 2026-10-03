@@ -47,7 +47,6 @@
 #include "features/thirdperson.h"
 #include "features/aimview.h"
 #include "tray.h"
-#include "overlay/loader.h"
 #include "features/rivals_skinchanger.h"
 #include "features/mm2.h"
 #include "features/bladeball.h"
@@ -231,33 +230,16 @@ int main()
 
     InitializeConfigPaths();
 
-    // The loader UI (stealth/theme/font/config selection) is only shown on the
-    // very first launch. Reattaches afterwards are fully automatic: when Roblox
-    // closes and reopens, the overlay reappears without any user interaction.
-    bool firstLaunch = true;
+    // The loader UI (stealth/theme/font/config selection) has been removed.
+    // The overlay now attaches automatically: once Roblox is running it
+    // reappears without any user interaction, and reattaches on relaunch.
     int loopIter = 0;
     while (true)
     {
         loopIter++;
         SeraphLog("[S] main: loop iteration " + std::to_string(loopIter));
-        // â”€â”€ Loader UI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        if (firstLaunch && !Options::Loader::AutoAttach)
-        {
-            SeraphLog("[S] main: showing loader (first launch)");
-            bool injected = Loader::Run();
-            SeraphLog(std::string("[S] main: loader returned ") + (injected ? "true" : "false"));
-            if (!injected)
-            {
-                OutputDebugStringA("[S] main: loader returned false, exiting\n");
-                return 0; // user closed the loader without injecting
-            }
-            OutputDebugStringA("[S] main: loader returned true, proceeding to attach\n");
-        }
-        else
-        {
-            SeraphLog("[S] main: skipping loader (auto reattach)");
-        }
-        firstLaunch = false;
+        // Attach automatically once Roblox is up.
+        SeraphLog("[S] main: loader UI removed, attaching automatically");
         OutputDebugStringA("[S] main: checking for Roblox...\n");
         while (!IsGameRunning(L"RobloxPlayerBeta.exe"))
         {

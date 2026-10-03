@@ -644,6 +644,8 @@ inline json BuildConfigJson()
         { "Target Player", std::string(Options::Misc::TargetPlayer) },
         { "Explorer Enabled", Options::Misc::ExplorerEnabled },
         { "Menu Scale", Options::Misc::MenuScale },
+        { "Shader Background", Options::Misc::ShaderBackground },
+        { "Shader Background Opacity", Options::Misc::ShaderBackgroundOpacity },
         { "Debug Log", Options::Misc::DebugLog },
         { "Hide From Tabs", Options::Misc::HideFromTabs },
         { "Hide Process", Options::Misc::HideProcess },
@@ -1381,6 +1383,8 @@ inline void ApplyConfigJson(const json& data)
         }
         LoadVal(ms, "Explorer Enabled", Options::Misc::ExplorerEnabled);
         LoadVal(ms, "Menu Scale", Options::Misc::MenuScale);
+        LoadVal(ms, "Shader Background", Options::Misc::ShaderBackground);
+        LoadVal(ms, "Shader Background Opacity", Options::Misc::ShaderBackgroundOpacity);
         LoadVal(ms, "Hide From Tabs", Options::Misc::HideFromTabs);
         LoadVal(ms, "Hide Process", Options::Misc::HideProcess);
         LoadVal(ms, "Debug Log", Options::Misc::DebugLog);

@@ -52,10 +52,20 @@ inline int ApplyWeaponProfile()
             Options::Aimbot::StickyAim = prof.StickyAim;
             Options::Aimbot::SilentAim = prof.SilentAim;
             Options::Aimbot::SilentAimMode = prof.SilentAimMode;
-            Options::Aimbot::TargetBone = prof.TargetBone;
+            // The profile "Target Bone" combo is { Head, Torso, Upper Torso,
+            // Lower Torso } but Aimbot::TargetBone is the 8-entry aimbot list
+            // { Head, Torso, Left Arm, Right Arm, Left Leg, Right Leg,
+            //   Lower Torso, Upper Torso }. Passing the raw 4-entry index
+            // through resolved "Upper Torso" to the Left Arm and "Lower Torso"
+            // to the Right Arm.
+            static const int kProfileBoneToAimbot[4] = { 0, 1, 7, 6 };
+            Options::Aimbot::TargetBone = kProfileBoneToAimbot[prof.TargetBone & 3];
             Options::Aimbot::IgnoreJump = prof.IgnoreJump;
             Options::Aimbot::JumpThreshold = prof.JumpThreshold;
             Options::Aimbot::HitboxMode = prof.ClosestPart;
+            // Silent aim keeps its own hit mode so the main aimbot's
+            // ClosestPart selection cannot discard the profile's bone.
+            Options::Aimbot::SilentAimHitMode = prof.SilentAimHitMode;
 
             return i;
         }
@@ -885,7 +895,9 @@ inline void SilentLockAim()
     {
         if (wasActive && hasSaved)
         {
-            if (Globals::Roblox::Camera.address)
+            // Restoring the saved rotation here would clobber a staged silent
+            // aim for the same frame, so hand off to the delivery path instead.
+            if (Globals::Roblox::Camera.address && !SilentAim::s_DeliveryReady)
             {
                 Memory->write<Matrixes::Matrix3x3>(Globals::Roblox::Camera.address + Offsets::Camera::Rotation, savedRotation);
                 Memory->write<Vector2int16>(Globals::Roblox::Camera.address + Offsets::Camera::Viewport, savedViewport);
@@ -1355,19 +1367,11 @@ inline void DrawFOVShape(ImDrawList* dl, const ImVec2& center, float r, ImU32 co
     }
 }
 
-inline void RunAimCore(ImDrawList* drawList)
+inline void RunAimCoreInternal(ImDrawList* drawList)
 {
-    // Apply per-weapon aimbot profile (if the local player is holding a
-    // weapon that matches one). This mutates the live Aimbot settings so
-    // both the camera aimbot and the raycast silent aim use the profile.
-    ApplyWeaponProfile();
-
     // Check if aimbot is enabled first
     if (!Options::Aimbot::Aimbot)
         return;
-
-    // Run raycast silent aim
-    SilentAim::RunSilentAim();
 
     auto localTeam = Globals::Roblox::LocalPlayer.Team();
     auto localCharacter = Globals::Roblox::LocalPlayer.Character();
@@ -1865,6 +1869,31 @@ inline void RunAimCore(ImDrawList* drawList)
             }
         }
     }
+}
+
+// Frame entry point.
+//
+// Split from RunAimCoreInternal so the silent aim write lands LAST. Inside the
+// aimbot body, ResetViewport() (most branches) and CameraRotation() both write
+// the same camera fields silent aim needs, so whichever ran last used to win -
+// which is why hits were intermittent and the hit location flipped between the
+// head and the body depending on the branch taken that frame.
+inline void RunAimCore(ImDrawList* drawList)
+{
+    // Apply per-weapon aimbot profile (if the local player is holding a
+    // weapon that matches one). This mutates the live Aimbot settings so
+    // both the camera aimbot and the raycast silent aim use the profile.
+    ApplyWeaponProfile();
+
+    // Raycast silent aim. Runs independently of the main aimbot toggle, so the
+    // panel's own Enabled switch is not gated behind Aimbot::Aimbot.
+    SilentAim::RunSilentAim();
+
+    if (Options::Aimbot::Aimbot)
+        RunAimCoreInternal(drawList);
+
+    // Delivered after the aimbot path so nothing above can overwrite it.
+    SilentAim::CommitDelivery();
 }
 
 

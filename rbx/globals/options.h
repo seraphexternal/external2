@@ -60,6 +60,14 @@ namespace Options
 
 		// Panic button - deletes all Seraph/Fleasion files and registry entries
 		inline bool PanicButtonPressed = false;
+
+		// Shader background effect index (see shader::BackgroundId).
+		// Shared by the content panel and the sidebar.
+		// 7 = BG_LIQUID_ETHER. Mirrors the enum in
+		// overlay/shaders/ShaderBackgrounds.h, which is not included here to
+		// avoid pulling the shader classes into every options consumer.
+		inline int ShaderBackground = 7;
+		inline float ShaderBackgroundOpacity = 0.55f;
 	}
 	// Animation Changer (Misc tab). Drives the local character's "Animate"
 	// controller by rewriting each slot's Animation instances to a chosen
@@ -319,12 +327,57 @@ namespace Options
 		inline bool SilentAimCamera = true; // rotate camera
 		inline bool SilentAimMouse = false; // move mouse
 		inline bool SilentAimRealCursor2 = true; // use real cursor
-		inline int SilentAimTargetBone = 0; // 0=Head, 1=Torso, 2=UpperTorso, 3=LowerTorso
+		// Index into the raycast "Target Part" combo:
+		// { "Head", "UpperTorso", "LowerTorso", "HumanoidRootPart" }
+		inline int SilentAimTargetBone = 0;
 		inline bool SilentAimTeamCheck = true;
 		inline bool SilentAimPrediction = false;
 		inline float SilentAimPredictionX = 1.0f;
 		inline float SilentAimPredictionY = 1.0f;
 		inline int SilentAimMethod = 0; // 0=Camera, 1=Mouse, 2=Both
+
+		// How the shot is actually delivered.
+		// 0 = Viewport offset (what Rivals honours), 1 = camera rotation,
+		// 2 = both.
+		// The camera rotation field is recomputed by Roblox from the camera
+		// subject every frame, so a rotation write is only sampled reliably
+		// some frames - that is what made hits intermittent. The viewport
+		// offset survives, because the shot is cast through it.
+		inline int SilentAimDelivery = 0;
+
+		// Hit mode is deliberately separate from Aimbot::HitboxMode /
+		// Aimbot::ClosestPart. Those drive the main aimbot and are overwritten
+		// every frame by ApplyWeaponProfile(), so sharing them made silent aim
+		// ignore the selected part whenever a profile was set to Closest Part.
+		inline int SilentAimHitMode = 0; // 0=Fixed Part, 1=Closest Part, 2=Adaptive
+
+		// Require line of sight to the selected part before shooting at it.
+		// Off by default: IsMapBlocking is not tuned for Rivals geometry and
+		// when it reports everything as covered it rejects every candidate,
+		// which stops silent aim acquiring targets at all.
+		inline bool SilentAimRequireVisible = false;
+
+		// Sticky targeting: hold the current target instead of re-picking the
+		// nearest one every frame, which stops the lock flipping mid-burst.
+		inline bool SilentAimSticky = true;
+		inline float SilentAimSwitchDelay = 0.f;
+
+		// Prediction. Set ProjectileSpeed > 1 to use real time-of-flight
+		// (distance / speed); leave at 0 to fall back to the PredictionX/Y
+		// velocity multipliers above.
+		inline float SilentAimProjectileSpeed = 0.f;
+		inline bool SilentAimDropCompensation = false;
+
+		// Rivals spawns bullets at the weapon tip, not the camera. Blending the
+		// aim origin from the camera toward the muzzle (0 = camera only,
+		// 1 = full muzzle) removes the near-range parallax that otherwise
+		// sends shots past a correctly selected part.
+		inline float SilentAimMuzzleComp = 0.f;
+
+		// Only apply the aim while firing, holding it for HoldMs afterwards so
+		// the final shot of a burst still lands.
+		inline bool SilentAimFireOnly = false;
+		inline float SilentAimHoldMs = 60.f;
 
 		// Aim Info: draws a small HUD with the current target's name, distance,
 		// health and the body part that would be hit.
@@ -975,10 +1028,17 @@ namespace Rage
 		bool StickyAim = false;
 		bool SilentAim = false;
 		int SilentAimMode = 0;           // 0=camera, 1=mouse spoof
-		int TargetBone = 0;              // 0=Head, 1=Torso, 2=UpperTorso, 3=LowerTorso
+		// Index into the profile "Target Bone" combo:
+		// { "Head", "Torso", "Upper Torso", "Lower Torso" }
+		// ApplyWeaponProfile() translates this onto the aimbot's 8-entry enum.
+		int TargetBone = 0;
+		// 0=Fixed Part, 1=Closest Part, 2=Adaptive. Kept apart from ClosestPart
+		// (which drives the main aimbot) so a profile cannot silently discard
+		// the selected part for silent aim.
+		int SilentAimHitMode = 0;
 		bool IgnoreJump = false;
 		float JumpThreshold = 20.0f;
-		int ClosestPart = 0;             // 0=Fixed Bone, 1=Closest Part
+		int ClosestPart = 0;             // 0=Fixed Bone, 1=Closest Part (main aimbot)
 	};
 
 	namespace WeaponProfiles
