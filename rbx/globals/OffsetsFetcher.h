@@ -14,6 +14,7 @@
 #include "../configs/json.hpp"            // nlohmann::json
 #include "../../features/obfuscate.h"
 #include "../../rbx/globals/options.h"
+#include "RobloxVersion.h"
 
 using json = nlohmann::json;
 
@@ -162,6 +163,22 @@ namespace OffsetsFetcher {
         FetchAndApply(url, false);
     }
 
+    // Override with the dump for the version the user is actually running or
+    // has installed. RobloxVersion detects the live client independently of
+    // the bundled offsets, and the per-version endpoint serves the exact dump
+    // for it -- this takes priority over both the bundled and latest dumps.
+    inline bool FetchLiveVersionOverride()
+    {
+        const std::string live = RobloxVersion::GetClientVersion();
+        if (live.empty()) {
+            lastFetchStatus = "skip: no live Roblox version detected";
+            detail::Log("[OffsetsFetcher] " + lastFetchStatus);
+            return false;
+        }
+        std::string url = "https://offsets.imtheo.lol/" + live + "/offsets.json";
+        return FetchAndApply(url, true, false);
+    }
+
     // Override with the live/latest offsets -- only when they differ from the
     // bundled version (Roblox likely updated). Survives client updates.
     inline void FetchLatestOverride()
@@ -174,7 +191,13 @@ namespace OffsetsFetcher {
     inline void FetchAll()
     {
         FetchBundledFill();
-        FetchLatestOverride();
+        FetchLiveVersionOverride();
+        // The latest dump force-overwrites every offset, so it must never run
+        // after a successful per-version fetch -- it would clobber the exact
+        // values with whatever version the dumper last ran against. Only fall
+        // back to it when no live per-version dump could be fetched.
+        if (!loaded)
+            FetchLatestOverride();
     }
 
     inline void Reset()

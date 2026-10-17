@@ -20,7 +20,10 @@
 #include "utils/utils.h"
 #include "../rbx/globals/globals.h"
 #include "../rbx/globals/options.h"
+// rankicons.h must precede esp.h - the ESP draws from it.
+#include "../features/rankicons.h"
 #include "../features/esp.h"
+#include "../features/worldweather.h"
 #include "../features/aimbot.h"
 #include "../features/triggerbot.h"
 #include "../features/macro.h"

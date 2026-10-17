@@ -1,9 +1,12 @@
 #pragma once
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cfloat>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 #include "../rbx/globals/globals.h"
@@ -90,19 +93,88 @@ namespace SilentAim
     inline int      s_TargetBoneIndex = 0;
     inline RobloxInstance s_TargetPart = RobloxInstance(0);
 
-    // Set once the per-frame aim has been resolved, and consumed by
-    // CommitDelivery() at the very end of RunAimCore. Splitting resolve from
-    // write is what keeps the aimbot's own ResetViewport()/CameraRotation()
-    // calls - which run after this file's entry point - from overwriting the
-    // silent aim before the shot is cast.
+    // ── Delivery state ─────────────────────────────────────────────────────
+    //
+    // Delivery deliberately stays on the render thread. Two attempts at moving
+    // it to a ~1ms worker thread both made accuracy worse - the first crashed
+    // on launch because it iterated CachedPlayerObjects while playerobjectscache.h
+    // was std::move-ing it. The second regressed the hit rate to 1 in 7, but the
+    // cause was NOT driver concurrency: this file and the aimbot's own silent
+    // branch were both writing Camera::Viewport every frame with different
+    // targets chosen from different FOVs, overwriting each other. That is fixed
+    // by the AimingType == 3 gate in IsSilentAimEnabled().
+    //
+    // MemoryManager is also safe to share: openTransientHandle() opens and
+    // closes a handle per call and kernelReadRaw/kernelWriteRaw go through the
+    // stateless BYOVD MmCopyVirtualMemory path, so there is no shared state to
+    // race on. Only attachToProcess() / setProcessId() must stay single-threaded,
+    // and neither is called from here.
+
+    // ── Staged aim, published by the render thread, consumed by delivery ──
+    //
+    // Targeting stays on the render thread because it walks the player cache.
+    // The delivery thread only ever writes the camera from this snapshot.
+    struct StagedAim
+    {
+        bool valid = false;
+        bool useRotation = false;
+        Vectors::Vector2 screenLocal{ 0.f, 0.f };
+        Matrixes::Matrix3x3 rotation
+        {
+            1.f, 0.f, 0.f,
+            0.f, 1.f, 0.f,
+            0.f, 0.f, 1.f
+        };
+    };
+
+    inline std::mutex s_StageMutex;
+    inline StagedAim s_Staged;
+
+    inline void StageAim(bool valid, const Vectors::Vector2& screenLocal,
+        const Matrixes::Matrix3x3& rotation, bool useRotation)
+    {
+        std::lock_guard<std::mutex> lock(s_StageMutex);
+        s_Staged.valid = valid;
+        if (valid)
+        {
+            s_Staged.screenLocal = screenLocal;
+            s_Staged.rotation = rotation;
+            s_Staged.useRotation = useRotation;
+        }
+    }
+
+    // Set once the frame's aim has been resolved, for diagnostics and for the
+    // aimbot's suppression check.
     inline bool s_DeliveryReady = false;
     inline Vectors::Vector2 s_DeliverScreen = { 0.f, 0.f };
+    inline Vectors::Vector2 s_DeliverScreenLocal = { 0.f, 0.f };
     inline Matrixes::Matrix3x3 s_DeliverRotation
     {
         1.f, 0.f, 0.f,
         0.f, 1.f, 0.f,
         0.f, 0.f, 1.f
     };
+    inline Vectors::Vector3 s_DeliverAimPoint = { 0.f, 0.f, 0.f };
+    inline float s_DeliverRange = 0.f;
+    inline float s_DeliverTimeOfFlight = 0.f;
+
+    // Owned exclusively by the delivery thread.
+    inline bool s_WroteViewport = false;
+    inline bool s_WroteRotation = false;
+    inline Matrixes::Matrix3x3 s_SavedRotation
+    {
+        1.f, 0.f, 0.f,
+        0.f, 1.f, 0.f,
+        0.f, 0.f, 1.f
+    };
+
+    // True while this file's aim is live in the camera. Read by the aimbot to
+    // keep it from writing the same fields in the same frame.
+    inline std::atomic<bool> s_Engaged{ false };
+
+    // The aim tab's open state, so delivery stands down while the user is in
+    // the menu instead of steering the camera with nobody watching.
+    inline bool s_MenuVisible = false;
 
     // Camera::Viewport is a pair of int16s. Named separately from the
     // ViewportOffset16 in aimbot.h, which this header is included before.
@@ -111,6 +183,44 @@ namespace SilentAim
         int16_t x;
         int16_t y;
     };
+
+    // Builds the Camera::Viewport value that puts a target currently at
+    // `local` (client-relative, origin top-left) under the crosshair.
+    //
+    // The neutral value is the full client size - that is what ResetViewport()
+    // writes and it visibly puts the view back, so neutral == dims is a fact we
+    // can rely on. What we do NOT have to assume is how the game turns a written
+    // value into a pixel shift, so this is expressed purely as a deviation from
+    // neutral:
+    //
+    //   needed shift = centre - local = dims/2 - local
+    //   written      = neutral + needed shift = 1.5 * dims - local
+    //
+    // The old code wrote `2 * (dims - local)`. Its deviation from neutral is
+    // `dims - 2*local`, which is exactly twice the deviation we want - so the
+    // correction was 2x too large at every offset except dead centre. That is
+    // the whole explanation for the reported pattern: dead-on shots landed, and
+    // the further the target sat from the crosshair the harder it overshot.
+    inline Vectors::Vector2 MakeViewportOffset(const Vectors::Vector2& dims,
+        const Vectors::Vector2& local)
+    {
+        return Vectors::Vector2
+        {
+            dims.x + (dims.x * 0.5f) - local.x,
+            dims.y + (dims.y * 0.5f) - local.y
+        };
+    }
+
+    // Strips the client origin from an absolute WorldToScreen() result, so it
+    // shares a coordinate space with Globals::Viewport::Dimensions.
+    inline Vectors::Vector2 ToLocalScreen(const Vectors::Vector2& absolute)
+    {
+        return Vectors::Vector2
+        {
+            absolute.x - static_cast<float>(Globals::Viewport::ScreenPos.x),
+            absolute.y - static_cast<float>(Globals::Viewport::ScreenPos.y)
+        };
+    }
 
     // ── Part resolution ────────────────────────────────────────────────────
     // Rivals is R6, so there is no UpperTorso/LowerTorso part. Both collapse
@@ -296,8 +406,26 @@ namespace SilentAim
             && Options::WeaponProfiles::ActiveProfile < static_cast<int>(Options::WeaponProfiles::Profiles.size());
     }
 
+    // AimingType 3 is "Usilent" - this raycast silent aim. It is reachable only
+    // through the AIMBOT "Method" dropdown, per the request to keep it out of
+    // its own panel in the Aim tab.
+    //
+    // Hard-gating on AimingType matters for more than tidiness: this file and
+    // the aimbot's own ShouldUseSilentAim() branch both write Camera::Viewport.
+    // When both ran together they picked different targets (this one uses
+    // SilentAimFOV and picks the closest enemy; the aimbot uses Aimbot::FOV and
+    // StickyAim), so they overwrote each other every frame. That fight is what
+    // dropped the hit rate to roughly 1 in 7. Exactly one of them may write.
+    inline bool IsUsilentMethod()
+    {
+        return Options::Aimbot::AimingType == 3;
+    }
+
     inline bool IsSilentAimEnabled()
     {
+        if (!IsUsilentMethod())
+            return false;
+
         if (IsProfileActive())
         {
             const auto& prof = Options::WeaponProfiles::Profiles[Options::WeaponProfiles::ActiveProfile];
@@ -462,7 +590,63 @@ namespace SilentAim
     // The target part's own velocity beats the HumanoidRootPart average, which
     // smooths out the head bob and strafing movement that actually throws off
     // a shot.
-    inline Vectors::Vector3 PartVelocity(const RobloxInstance& part)
+    // ── Diagnostics ────────────────────────────────────────────────────────
+// Live snapshot of what the aim code actually decided and wrote, rendered by
+// the AIM DEBUG block in the Aim tab.
+//
+// This exists because the interesting failures here are all silent: a bone
+// resolved to the wrong part, a viewport offset in the wrong units, an aim
+// point projected off-screen. Each of those looks identical from the outside -
+// "it missed" - so guessing at them from the outside wasted several rounds.
+// Read the numbers instead.
+namespace Diagnostics
+{
+    struct AimSnapshot
+    {
+        bool valid = false;          // a target was resolved this frame
+        bool engaged = false;        // something was written to the camera
+        bool wroteViewport = false;
+        bool wroteRotation = false;
+        int  delivery = -1;          // -1 = main aimbot path
+        int  bone = -1;
+        Vectors::Vector3 aimPoint{ 0.f, 0.f, 0.f };
+        Vectors::Vector3 velocity{ 0.f, 0.f, 0.f };
+        Vectors::Vector2 screenLocal{ 0.f, 0.f };
+        Vectors::Vector2 dims{ 0.f, 0.f };
+        float range = 0.f;
+        float timeOfFlight = 0.f;
+        int   writtenX = 0;
+        int   writtenY = 0;
+        int   neutralX = 0;
+        int   neutralY = 0;
+    };
+
+    inline AimSnapshot s_Snapshot;
+
+    inline void Reset()
+    {
+        s_Snapshot.valid = false;
+        s_Snapshot.aimPoint = { 0.f, 0.f, 0.f };
+        s_Snapshot.velocity = { 0.f, 0.f, 0.f };
+        s_Snapshot.screenLocal = { 0.f, 0.f };
+        s_Snapshot.range = 0.f;
+        s_Snapshot.timeOfFlight = 0.f;
+        s_Snapshot.writtenX = 0;
+        s_Snapshot.writtenY = 0;
+    }
+
+    inline void Clear()
+    {
+        Reset();
+        s_Snapshot.engaged = false;
+        s_Snapshot.wroteViewport = false;
+        s_Snapshot.wroteRotation = false;
+        s_Snapshot.bone = -1;
+        s_Snapshot.delivery = -1;
+    }
+}
+
+inline Vectors::Vector3 PartVelocity(const RobloxInstance& part)
     {
         if (!part.address)
             return { 0.f, 0.f, 0.f };
@@ -585,6 +769,10 @@ namespace SilentAim
     {
         s_VisibilityMemo.clear();
         s_DeliveryReady = false;
+        // Nothing staged until this frame resolves a target. Cleared under the
+        // mutex so the delivery thread cannot read it mid-update.
+        StageAim(false, { 0.f, 0.f }, s_SavedRotation, false);
+        Diagnostics::Reset();
     }
 
     inline bool PartVisibleCached(const RobloxInstance& part, uintptr_t ignoreModel)
@@ -856,12 +1044,10 @@ namespace SilentAim
             Globals::Roblox::Camera.address + Offsets::Camera::Rotation, rot);
     }
 
-    // Resolves the final aim point for this frame and stages it for
-    // CommitDelivery(). Deliberately performs no camera or viewport writes.
+    // Resolves the final aim point for this frame and publishes it to the
+    // delivery thread. Deliberately performs no camera or viewport writes.
     inline void PrepareDelivery()
     {
-        s_DeliveryReady = false;
-
         if (!s_Active || !Globals::Roblox::Camera.address || !Globals::Viewport::Valid)
             return;
 
@@ -927,38 +1113,172 @@ namespace SilentAim
         if (screenPos.x < 0.f || screenPos.y < 0.f)
             return;
 
-        s_DeliverScreen = screenPos;
-        s_DeliverRotation = rotationMatrix;
-        s_DeliveryReady = true;
-    }
-
-    // Writes the staged aim. Called last in RunAimCore so the aimbot's own
-    // camera/viewport writes earlier in the frame cannot win.
-    inline void CommitDelivery()
-    {
-        if (!s_DeliveryReady)
+        // WorldToScreen() returns ABSOLUTE screen coordinates: it adds
+        // Viewport::ScreenPos, the Roblox window origin from ClientToScreen.
+        // Camera::Viewport is expressed in the game's own window-relative space,
+        // so the absolute value has to have the origin removed before it goes
+        // into 2*(dims - screen) - otherwise the shot is displaced by twice the
+        // window origin on any setup where the game is not at (0,0).
+        const Vectors::Vector2 screenAbsolute = WorldToScreen(targetPos);
+        if (screenAbsolute.x < 0.f || screenAbsolute.y < 0.f)
             return;
 
-        const int delivery = Options::Aimbot::SilentAimDelivery;
-
-        // 0 = viewport, 1 = camera rotation, 2 = both
-        if (delivery == 0 || delivery == 2)
+        const Vectors::Vector2 screenLocal
         {
-            const Vectors::Vector2 dims = Memory->read<Vectors::Vector2>(
-                Globals::Roblox::VisualEngine + Offsets::VisualEngine::Dimensions);
+            screenAbsolute.x - static_cast<float>(Globals::Viewport::ScreenPos.x),
+            screenAbsolute.y - static_cast<float>(Globals::Viewport::ScreenPos.y)
+        };
 
-            ViewportOffset16 offset
+        s_DeliverScreen = screenAbsolute;
+        s_DeliverScreenLocal = screenLocal;
+        s_DeliverRotation = rotationMatrix;
+        s_DeliverAimPoint = targetPos;
+        s_DeliverRange = distance;
+        s_DeliverTimeOfFlight = 0.f;
+        s_DeliveryReady = true;
+
+        const int delivery = Options::Aimbot::SilentAimDelivery;
+        const bool useRotation = (delivery == 1 || delivery == 2);
+
+        // Publish for the delivery thread. It re-asserts every ~1ms because
+        // Roblox overwrites the camera each frame; see DeliveryTick().
+        StageAim(true, screenLocal, rotationMatrix, useRotation);
+
+        Diagnostics::s_Snapshot.valid = true;
+        Diagnostics::s_Snapshot.delivery = delivery;
+        Diagnostics::s_Snapshot.bone = s_TargetBoneIndex;
+        Diagnostics::s_Snapshot.aimPoint = targetPos;
+        Diagnostics::s_Snapshot.screenLocal = screenLocal;
+        Diagnostics::s_Snapshot.range = distance;
+    }
+
+    // Runs ONLY on the delivery thread. Writes the camera from the staged snapshot
+    // and restores it when there is nothing staged. No targeting, no player
+    // cache, no reads beyond the camera's own dimensions.
+    //
+    // The reason this is a fast loop rather than a once-per-frame write is
+    // purely a race. Roblox runs its own camera update every frame and
+    // overwrites whatever we wrote, so a single write per rendered frame only
+    // survives if it happens to land after Roblox's update and before the shot
+    // is cast. Which is exactly the reported symptom: a partial, flaky hit rate
+    // that never converges, and which used to get worse the further the target
+    // sat from the crosshair (a larger write is more likely to be blended away
+    // by the camera controller than a small one). Re-asserting every ~1ms makes
+    // the value in the camera at most a millisecond old at the moment of the
+    // shot, so the chance of Roblox winning the race in between drops to roughly
+    // one frame in sixteen.
+    inline void DeliveryTick()
+    {
+        const Vectors::Vector2 dims = Globals::Viewport::Dimensions;
+
+        const bool standDown = !Globals::Roblox::isRivals
+            || s_MenuVisible
+            || !Globals::Roblox::Camera.address
+            || dims.x < 1.f || dims.y < 1.f;
+
+        StagedAim snap;
+        {
+            std::lock_guard<std::mutex> lock(s_StageMutex);
+            snap = s_Staged;
+        }
+
+        if (standDown || !snap.valid)
+        {
+            // Hand the camera back. Nothing else does this: ResetViewport() only
+            // runs when the *main aimbot* has a target of its own, so without it
+            // the last spoofed offset - or worse, the last rotation - stays
+            // latched and the view ends up pointing at a dead enemy.
+            if (!standDown && Globals::Roblox::Camera.address)
             {
-                static_cast<int16_t>(2 * (dims.x - s_DeliverScreen.x)),
-                static_cast<int16_t>(2 * (dims.y - s_DeliverScreen.y))
+                if (s_WroteViewport)
+                {
+                    Memory->write<ViewportOffset16>(
+                        Globals::Roblox::Camera.address + Offsets::Camera::Viewport,
+                        ViewportOffset16
+                        {
+                            static_cast<int16_t>(dims.x),
+                            static_cast<int16_t>(dims.y)
+                        });
+                }
+
+                if (s_WroteRotation)
+                    WriteCameraRotation(s_SavedRotation);
+            }
+
+            s_WroteViewport = false;
+            s_WroteRotation = false;
+            s_Engaged.store(false, std::memory_order_relaxed);
+            return;
+        }
+
+        // Rotation or viewport, never a stale mix of both.
+        //
+        // Writing the rotation aims the camera straight at the target, which
+        // puts the target at the centre of the screen - so the viewport offset
+        // that would line it up is the neutral value. Applying the *staged*
+        // offset on top of that as well double-corrects, and the shot lands off
+        // by exactly the difference between where the target was and where the
+        // rotation just moved it.
+        if (snap.useRotation)
+        {
+            // Capture the player's real view once per engagement, before the
+            // first rotation write, so disengaging can put it back exactly.
+            if (!s_WroteRotation)
+            {
+                s_SavedRotation = ReadCameraRotation();
+                s_WroteRotation = true;
+            }
+
+            WriteCameraRotation(snap.rotation);
+
+            // Neutral is constant for the whole engagement, so writing it on
+            // every tick was pure cost - and cost is what made the menu
+            // unusable. Each write opens and closes a process handle in the
+            // driver, so doing two per tick meant ~2000 handle operations a
+            // second while aiming. Once per engagement is enough: nothing else
+            // writes Camera::Viewport while we hold the rotation.
+            if (!s_WroteViewport)
+            {
+                Memory->write<ViewportOffset16>(
+                    Globals::Roblox::Camera.address + Offsets::Camera::Viewport,
+                    ViewportOffset16
+                    {
+                        static_cast<int16_t>(dims.x),
+                        static_cast<int16_t>(dims.y)
+                    });
+
+                s_WroteViewport = true;
+            }
+
+            Diagnostics::s_Snapshot.writtenX = static_cast<int>(dims.x);
+            Diagnostics::s_Snapshot.writtenY = static_cast<int>(dims.y);
+        }
+        else
+        {
+            const Vectors::Vector2 offset = MakeViewportOffset(dims, snap.screenLocal);
+
+            ViewportOffset16 written
+            {
+                static_cast<int16_t>(offset.x),
+                static_cast<int16_t>(offset.y)
             };
 
             Memory->write<ViewportOffset16>(
-                Globals::Roblox::Camera.address + Offsets::Camera::Viewport, offset);
+                Globals::Roblox::Camera.address + Offsets::Camera::Viewport, written);
+
+            s_WroteViewport = true;
+
+            Diagnostics::s_Snapshot.writtenX = written.x;
+            Diagnostics::s_Snapshot.writtenY = written.y;
         }
 
-        if (delivery == 1 || delivery == 2)
-            WriteCameraRotation(s_DeliverRotation);
+        s_Engaged.store(true, std::memory_order_relaxed);
+
+        Diagnostics::s_Snapshot.neutralX = static_cast<int>(dims.x);
+        Diagnostics::s_Snapshot.neutralY = static_cast<int>(dims.y);
+        Diagnostics::s_Snapshot.dims = dims;
+        Diagnostics::s_Snapshot.wroteViewport = s_WroteViewport;
+        Diagnostics::s_Snapshot.wroteRotation = s_WroteRotation;
 
         if (GetEffectiveSilentAimMethod() == 1 || GetEffectiveSilentAimMethod() == 2)
         {
@@ -966,11 +1286,59 @@ namespace SilentAim
             {
                 POINT cur{};
                 GetCursorPos(&cur);
+                // Absolute screen coords here: this moves the real OS cursor.
                 MouseSendInput(s_DeliverScreen, cur, 1.0f);
             }
         }
+    }
 
-        s_DeliveryReady = false;
+    namespace DeliveryThread
+    {
+        inline std::atomic<bool> s_Running{ false };
+
+        inline void Worker()
+        {
+            while (s_Running.load(std::memory_order_relaxed))
+            {
+                DeliveryTick();
+
+                // Only sleep once something is actually staged. When there is no
+                // target the tick is a handful of atomic loads and returns, so
+                // spinning at 1kHz for the whole session just burns a core for
+                // nothing - that is most of why the machine felt unresponsive.
+                {
+                    std::lock_guard<std::mutex> lock(s_StageMutex);
+                    if (!s_Staged.valid)
+                    {
+                        Sleep(8);
+                        continue;
+                    }
+                }
+
+                // Engaged: re-assert often enough to stay ahead of the game's
+                // ~16ms camera update, but not so often that the driver's
+                // per-write handle cost starves the UI thread. 5ms still lands
+                // roughly three writes per frame; 1ms quadrupled the handle
+                // traffic for no measurable gain.
+                Sleep(5);
+            }
+        }
+
+        // Started on demand and left resident. While silent aim is off, DeliveryTick
+        // restores and idles, so the cost is one predicated pass a millisecond.
+        inline void EnsureStarted()
+        {
+            // Opt-in: the worker competes with the UI thread for driver handles,
+            // and that showed up as an unresponsive menu. Default off.
+            if (!Options::Aimbot::SilentAimFastHold)
+                return;
+
+            if (s_Running.load(std::memory_order_relaxed))
+                return;
+
+            s_Running.store(true, std::memory_order_relaxed);
+            std::thread(Worker).detach();
+        }
     }
 
     // ── Entry point ────────────────────────────────────────────────────────
@@ -1024,4 +1392,59 @@ namespace SilentAim
         if (s_Active)
             PrepareDelivery();
     }
-}
+
+    // ── Entry point order ─────────────────────────────────────────────────
+    // RunAimCore calls RunSilentAim() to resolve the target, then
+    // CommitDelivery() to write (or restore) the camera. Both on the render
+    // thread.
+    //
+    // The delivery mode only chooses WHICH field gets written. Earlier there was
+    // a ~1ms delivery thread here, on the theory that a once-per-frame write is
+    // stale by the time the bullet is cast. It was tried twice and made things
+    // worse both times - once it crashed on launch, and once it dropped the hit
+    // rate from roughly 1 in 3 to 1 in 7 - because the shared Memory driver is
+    // not safe to call from a second thread while the render loop is using it.
+    // Staleness is addressed in RunSilentAim instead, by resolving the target
+    // as late as possible before delivery.
+
+    // Writes the staged aim. Called last in RunAimCore so the aimbot's own
+    // camera/viewport writes earlier in the frame cannot win.
+    inline void CommitDelivery()
+    {
+        if (!s_DeliveryReady)
+            return;
+
+        const int delivery = Options::Aimbot::SilentAimDelivery;
+
+        // 0 = viewport, 1 = camera rotation, 2 = both
+        if (delivery == 0 || delivery == 2)
+        {
+            const Vectors::Vector2 dims = Memory->read<Vectors::Vector2>(
+                Globals::Roblox::VisualEngine + Offsets::VisualEngine::Dimensions);
+
+            ViewportOffset16 offset
+            {
+                static_cast<int16_t>(2 * (dims.x - s_DeliverScreen.x)),
+                static_cast<int16_t>(2 * (dims.y - s_DeliverScreen.y))
+            };
+
+            Memory->write<ViewportOffset16>(
+                Globals::Roblox::Camera.address + Offsets::Camera::Viewport, offset);
+        }
+
+        if (delivery == 1 || delivery == 2)
+            WriteCameraRotation(s_DeliverRotation);
+
+        if (GetEffectiveSilentAimMethod() == 1 || GetEffectiveSilentAimMethod() == 2)
+        {
+            if (Options::Aimbot::SilentAimRealCursor2)
+            {
+                POINT cur{};
+                GetCursorPos(&cur);
+                MouseSendInput(s_DeliverScreen, cur, 1.0f);
+            }
+        }
+
+        s_DeliveryReady = false;
+    }
+    }

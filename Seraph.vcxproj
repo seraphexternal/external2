@@ -189,6 +189,7 @@
     <ClCompile Include="features\stealth\byovd_client.cpp" />
     <ClCompile Include="features\stealth\dma_controller.cpp" />
     <ClCompile Include="features\stealth\stealth_integration.cpp" />
+    <ClCompile Include="features\emote_system.cpp" />
   </ItemGroup>
   <!-- Luau VM/Compiler/Ast (external executor engine; warnings off like zstd). -->
   <ItemGroup>
@@ -474,6 +475,7 @@
     <ClInclude Include="overlay\animation.h" />
     <ClInclude Include="features\hitboxexpander.h" />
     <ClInclude Include="features\speed.h" />
+    <ClInclude Include="features\emote_system.h" />
     <ClInclude Include="Memory\MemoryManager.h" />
     <ClInclude Include="rbx\globals\globals.h" />
     <ClInclude Include="rbx\offsets.h" />

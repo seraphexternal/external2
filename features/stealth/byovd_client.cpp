@@ -2,8 +2,10 @@
 #include "../../driver/byovd_protocol.h"
 #include <vector>
 #include <cstring>
+#include <mutex>
 
 static HANDLE g_drv = INVALID_HANDLE_VALUE;
+static std::mutex g_ioMutex;
 
 namespace BYOVD {
 
@@ -28,6 +30,7 @@ namespace BYOVD {
     // cheat never issues NtReadVirtualMemory/NtWriteVirtualMemory itself.
     bool KernelReadProcessMemory(HANDLE pid, uint64_t addr, void* buffer, size_t size) {
         if (g_drv == INVALID_HANDLE_VALUE || !buffer || size == 0) return false;
+        std::lock_guard<std::mutex> lock(g_ioMutex);
         std::vector<uint8_t> inout(sizeof(BYOVD_READ_PROC_REQUEST) + size);
         BYOVD_READ_PROC_REQUEST* req = (BYOVD_READ_PROC_REQUEST*)inout.data();
         req->pid = (uint32_t)(ULONG_PTR)pid;
@@ -45,6 +48,7 @@ namespace BYOVD {
 
     bool KernelWriteProcessMemory(HANDLE pid, uint64_t addr, const void* buffer, size_t size) {
         if (g_drv == INVALID_HANDLE_VALUE || !buffer || size == 0) return false;
+        std::lock_guard<std::mutex> lock(g_ioMutex);
         std::vector<uint8_t> inout(sizeof(BYOVD_WRITE_PROC_REQUEST) + size);
         BYOVD_WRITE_PROC_REQUEST* req = (BYOVD_WRITE_PROC_REQUEST*)inout.data();
         req->pid = (uint32_t)(ULONG_PTR)pid;

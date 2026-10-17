@@ -602,6 +602,15 @@ namespace {
 			}
 		}
 
+		{
+			std::lock_guard<std::mutex> plk(Globals::Caches::CachedPlayerObjectsMutex);
+			for (const auto& p : Globals::Caches::CachedPlayerObjects)
+			{
+				if (!p.Name.empty())
+					want.push_back({0, p.Name});
+			}
+		}
+
 		float now = (float)ImGui::GetTime();
 		bool kick = false;
 		{

@@ -6,28 +6,64 @@
 #include <vector>
 #include <string>
 
-// Parts we disable collision for
-static const std::vector<std::string> g_NoclipParts = {
-    "Head", "Torso", "UpperTorso", "LowerTorso", "HumanoidRootPart"
-};
-
-// Track addresses where we cleared the CanCollide bit so we can restore
+// Track flag addresses we cleared so we can restore them later.
 static std::vector<uintptr_t> g_ModifiedNoclipAddrs;
 static bool g_NoclipWasActive = false;
 
-// Restore collision flags on all parts we previously modified
+// Solid BasePart classes we are willing to clear CanCollide on.
+static bool NoclipIsBasePartClass(const std::string& cls)
+{
+    return cls == "Part" || cls == "MeshPart" || cls == "UnionOperation" ||
+           cls == "WedgePart" || cls == "CornerWedgePart" || cls == "TrussPart" ||
+           cls == "Seat" || cls == "VehicleSeat";
+}
+
+// Recursively clear CanCollide on every BasePart under `inst`, collecting the
+// flags addresses it touches. Nesting matters: accessory/tool handles live
+// under an intermediate instance, so a flat name lookup misses them.
+static void NoclipClearRecursive(const RobloxInstance& inst, std::vector<uintptr_t>& out, int depth)
+{
+    if (!inst.address || depth > 3 || out.size() > 256)
+        return;
+
+    try
+    {
+        for (auto& child : inst.GetChildrenBulk())
+        {
+            if (!child.address)
+                continue;
+
+            if (NoclipIsBasePartClass(child.Class()))
+            {
+                const uintptr_t primitive = Memory->read<uintptr_t>(child.address + Offsets::BasePart::Primitive);
+                if (primitive)
+                {
+                    const uintptr_t flagsAddr = primitive + Offsets::Primitive::Flags;
+                    const uint8_t canCollideBit = (uint8_t)Offsets::PrimitiveFlags::CanCollide;
+                    const uint8_t flags = Memory->read<uint8_t>(flagsAddr);
+                    out.push_back(flagsAddr);
+                    if (flags & canCollideBit)
+                        Memory->write<uint8_t>(flagsAddr, (uint8_t)(flags & ~canCollideBit));
+                }
+            }
+
+            NoclipClearRecursive(child, out, depth + 1);
+        }
+    }
+    catch (...) {}
+}
+
+// Restore collision flags on all parts we previously modified.
 static void RestoreNoclipCollision()
 {
+    const uint8_t canCollideBit = (uint8_t)Offsets::PrimitiveFlags::CanCollide;
     for (uintptr_t addr : g_ModifiedNoclipAddrs)
     {
         try
         {
-            uint8_t flags = Memory->read<uint8_t>(addr);
-            constexpr uint8_t canCollideBit = 0x8;
+            const uint8_t flags = Memory->read<uint8_t>(addr);
             if (!(flags & canCollideBit))
-            {
-                Memory->write<uint8_t>(addr, flags | canCollideBit);
-            }
+                Memory->write<uint8_t>(addr, (uint8_t)(flags | canCollideBit));
         }
         catch (...) {}
     }
@@ -36,9 +72,12 @@ static void RestoreNoclipCollision()
 
 inline void NoclipLoop()
 {
+    static std::vector<uintptr_t> touched;
+    touched.reserve(128);
+
     while (Globals::running)
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        std::this_thread::sleep_for(std::chrono::milliseconds(3));
 
         // ---- Keybind handling ----
         if (Options::Noclip::NoclipKey != 0)
@@ -95,32 +134,11 @@ inline void NoclipLoop()
             if (!character.address)
                 continue;
 
-            g_ModifiedNoclipAddrs.clear(); // rebuild each tick (character may respawn)
-
-            for (const auto& partName : g_NoclipParts)
-            {
-                auto part = character.FindFirstChild(partName);
-                if (!part.address)
-                    continue;
-
-                uintptr_t primitive = Memory->read<uintptr_t>(part.address + Offsets::BasePart::Primitive);
-                if (!primitive)
-                    continue;
-
-                const uintptr_t canCollideAddr = primitive + Offsets::PrimitiveFlags::CanCollide;
-                uint8_t currentFlags = Memory->read<uint8_t>(canCollideAddr);
-                constexpr uint8_t canCollideBit = 0x8;
-
-                // Track this address so we can restore later
-                g_ModifiedNoclipAddrs.push_back(canCollideAddr);
-
-                // Clear the CanCollide bit to disable collisions
-                if (currentFlags & canCollideBit)
-                {
-                    uint8_t newFlags = currentFlags & ~canCollideBit;
-                    Memory->write<uint8_t>(canCollideAddr, newFlags);
-                }
-            }
+            // Rebuild every tick: the character may respawn and nested parts
+            // (tools/accessories) can appear or disappear.
+            touched.clear();
+            NoclipClearRecursive(character, touched, 0);
+            g_ModifiedNoclipAddrs = touched;
         }
         catch (...)
         {

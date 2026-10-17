@@ -296,9 +296,19 @@ inline json BuildConfigJson()
         { "Team Check", Options::ESP::TeamCheck },
         { "Box", Options::ESP::Box },
         { "Box Type", Options::ESP::BoxType },
+        { "Box Fill", Options::ESP::BoxFill },
+        { "Box Fill Gradient", Options::ESP::BoxFillGradient },
+        { "Box Fill Type", Options::ESP::BoxFillType },
+        { "Box Fill Gradient Rotate", Options::ESP::BoxFillGradientRotate },
+        { "Box Fill Speed", Options::ESP::BoxFillSpeed },
+        { "Box Fill Color", ToJsonColor(Options::ESP::BoxFillColor, 4) },
+        { "Box Fill Top Color", ToJsonColor(Options::ESP::BoxFillTopColor, 4) },
+        { "Box Fill Bottom Color", ToJsonColor(Options::ESP::BoxFillBottomColor, 4) },
+        { "Box Fill Opacity", Options::ESP::BoxFillOpacity },
         { "Tracers", Options::ESP::Tracers },
         { "TracersStart", Options::ESP::TracersStart },
         { "Skeleton", Options::ESP::Skeleton },
+        { "Skeleton Visibility Color", Options::ESP::SkeletonVisibilityColor },
         { "Name", Options::ESP::Name },
         { "Distance", Options::ESP::Distance },
         { "Health", Options::ESP::Health },
@@ -453,6 +463,7 @@ inline json BuildConfigJson()
         { "Flickbot Team Check", Options::Aimbot::FlickbotTeamCheck },
         { "FOV Color", ToJsonColor(Options::Aimbot::FOVColor, 3) },
         { "FOV Fill Color", ToJsonColor(Options::Aimbot::FOVFillColor, 4) },
+        { "Fill Opacity", Options::Aimbot::FOVFillOpacity },
         { "FOV Thickness", Options::Aimbot::FOVThickness },
         { "FOV Color Mode", Options::Aimbot::FOVColorMode },
         { "FOV Gradient Speed", Options::Aimbot::FOVGradientSpeed },
@@ -614,6 +625,13 @@ inline json BuildConfigJson()
         { "V Length", Options::Crosshair::VLength }
     };
 
+    j["Music"] = {
+        { "Miniplayer", Options::Music::Miniplayer },
+        { "Miniplayer X", Options::Music::MiniplayerX },
+        { "Miniplayer Y", Options::Music::MiniplayerY },
+        { "Miniplayer Size", Options::Music::MiniplayerSize }
+    };
+
     j["Misc"] = {
         { "FOV Enabled", Options::Misc::FOVEnabled },
         { "FOV", Options::Misc::FOV },
@@ -643,6 +661,7 @@ inline json BuildConfigJson()
         { "Rainbow Speed", Options::Misc::RainbowSpeed },
         { "Target Player", std::string(Options::Misc::TargetPlayer) },
         { "Explorer Enabled", Options::Misc::ExplorerEnabled },
+        { "Server Browser", Options::Misc::ServerBrowserEnabled },
         { "Menu Scale", Options::Misc::MenuScale },
         { "Shader Background", Options::Misc::ShaderBackground },
         { "Shader Background Opacity", Options::Misc::ShaderBackgroundOpacity },
@@ -790,6 +809,22 @@ inline json BuildConfigJson()
         { "ToggleType", Options::VoidHide::ToggleType }
     };
 
+    j["ModelChanger"] = {
+        { "Enabled", Options::ModelChanger::Enabled },
+        { "Model", Options::ModelChanger::Model },
+        { "Scale", Options::ModelChanger::Scale },
+        { "YawOffset", Options::ModelChanger::YawOffset },
+        { "PitchOffset", Options::ModelChanger::PitchOffset },
+        { "FollowFacing", Options::ModelChanger::FollowFacing },
+        { "HideCharacter", Options::ModelChanger::HideCharacter },
+        { "Animate", Options::ModelChanger::Animate },
+        { "UseGameProfile", Options::ModelChanger::UseGameProfile },
+        { "GameProfileAutoLoad", Options::ModelChanger::GameProfileAutoLoad },
+        { "GameProfileUseAssetIds", Options::ModelChanger::GameProfileUseAssetIds },
+        { "GameProfileAssetESP", Options::ModelChanger::GameProfileAssetESP },
+        { "GameProfileAssetAimbot", Options::ModelChanger::GameProfileAssetAimbot }
+    };
+
     j["Bhop"] = {
         { "Enabled", Options::Bhop::Enabled },
         { "BhopKey", Options::Bhop::BhopKey }
@@ -872,6 +907,16 @@ inline json BuildConfigJson()
         { "EditMode", Options::Preview3D::EditMode },
         { "Scale", Options::Preview3D::Scale },
         { "Skeleton", Options::Preview3D::Skeleton }
+    };
+
+    j["ModelChanger"] = {
+        { "Enabled", Options::ModelChanger::Enabled },
+        { "Model", Options::ModelChanger::Model },
+        { "Scale", Options::ModelChanger::Scale },
+        { "YawOffset", Options::ModelChanger::YawOffset },
+        { "PitchOffset", Options::ModelChanger::PitchOffset },
+        { "FollowFacing", Options::ModelChanger::FollowFacing },
+        { "HideCharacter", Options::ModelChanger::HideCharacter }
     };
 
     j["Desync"] = {
@@ -1004,9 +1049,20 @@ inline void ApplyConfigJson(const json& data)
             Options::ESP::BoxType = oldBox ? 1 : 0;
         }
 
+        LoadVal(esp, "Box Fill", Options::ESP::BoxFill);
+        LoadVal(esp, "Box Fill Gradient", Options::ESP::BoxFillGradient);
+        LoadVal(esp, "Box Fill Type", Options::ESP::BoxFillType);
+        LoadVal(esp, "Box Fill Gradient Rotate", Options::ESP::BoxFillGradientRotate);
+        LoadVal(esp, "Box Fill Speed", Options::ESP::BoxFillSpeed);
+        LoadFloatArray(esp, "Box Fill Color", Options::ESP::BoxFillColor);
+        LoadFloatArray(esp, "Box Fill Top Color", Options::ESP::BoxFillTopColor);
+        LoadFloatArray(esp, "Box Fill Bottom Color", Options::ESP::BoxFillBottomColor);
+        LoadVal(esp, "Box Fill Opacity", Options::ESP::BoxFillOpacity);
+
         LoadVal(esp, "Tracers", Options::ESP::Tracers);
         LoadVal(esp, "TracersStart", Options::ESP::TracersStart);
         LoadVal(esp, "Skeleton", Options::ESP::Skeleton);
+        LoadVal(esp, "Skeleton Visibility Color", Options::ESP::SkeletonVisibilityColor);
         LoadVal(esp, "Name", Options::ESP::Name);
         LoadVal(esp, "Distance", Options::ESP::Distance);
         LoadVal(esp, "Health", Options::ESP::Health);
@@ -1216,6 +1272,7 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(aim, "Custom Curve Enabled", Options::Aimbot::CustomCurveEnabled);
         LoadFloatArray(aim, "FOV Color", Options::Aimbot::FOVColor);
         LoadFloatArray(aim, "FOV Fill Color", Options::Aimbot::FOVFillColor);
+        LoadVal(aim, "Fill Opacity", Options::Aimbot::FOVFillOpacity);
         LoadFloatArray(aim, "Custom Curve P1", Options::Aimbot::CustomCurveP1);
         LoadFloatArray(aim, "Custom Curve P2", Options::Aimbot::CustomCurveP2);
         LoadVal(aim, "Ignore Jump", Options::Aimbot::IgnoreJump);
@@ -1347,6 +1404,15 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(ch, "V Length", Options::Crosshair::VLength);
     }
 
+    if (data.is_object() && data.contains("Music"))
+    {
+        const auto& mu = data["Music"];
+        LoadVal(mu, "Miniplayer", Options::Music::Miniplayer);
+        LoadVal(mu, "Miniplayer X", Options::Music::MiniplayerX);
+        LoadVal(mu, "Miniplayer Y", Options::Music::MiniplayerY);
+        LoadVal(mu, "Miniplayer Size", Options::Music::MiniplayerSize);
+    }
+
     if (data.is_object() && data.contains("Misc"))
     {
         const auto& ms = data["Misc"];
@@ -1382,6 +1448,7 @@ inline void ApplyConfigJson(const json& data)
             strncpy_s(Options::Misc::TargetPlayer, tp.c_str(), sizeof(Options::Misc::TargetPlayer) - 1);
         }
         LoadVal(ms, "Explorer Enabled", Options::Misc::ExplorerEnabled);
+        LoadVal(ms, "Server Browser", Options::Misc::ServerBrowserEnabled);
         LoadVal(ms, "Menu Scale", Options::Misc::MenuScale);
         LoadVal(ms, "Shader Background", Options::Misc::ShaderBackground);
         LoadVal(ms, "Shader Background Opacity", Options::Misc::ShaderBackgroundOpacity);
@@ -1690,6 +1757,18 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(p3, "EditMode", Options::Preview3D::EditMode);
         LoadVal(p3, "Scale", Options::Preview3D::Scale);
         LoadVal(p3, "Skeleton", Options::Preview3D::Skeleton);
+    }
+
+    if (data.is_object() && data.contains("ModelChanger"))
+    {
+        const auto& mc = data["ModelChanger"];
+        LoadVal(mc, "Enabled", Options::ModelChanger::Enabled);
+        LoadVal(mc, "Model", Options::ModelChanger::Model);
+        LoadVal(mc, "Scale", Options::ModelChanger::Scale);
+        LoadVal(mc, "YawOffset", Options::ModelChanger::YawOffset);
+        LoadVal(mc, "PitchOffset", Options::ModelChanger::PitchOffset);
+        LoadVal(mc, "FollowFacing", Options::ModelChanger::FollowFacing);
+        LoadVal(mc, "HideCharacter", Options::ModelChanger::HideCharacter);
     }
 
     if (data.is_object() && data.contains("Desync"))

@@ -49,7 +49,98 @@ struct RobloxPlayer
     std::string TeamName = "";
     std::string ToolName = "";
     Vectors::Vector3 Velocity = {0.f, 0.f, 0.f};
+
+    // ── Rivals progression (ESP) ──
+    // Rivals does not expose a rank name. It exposes an ELO number in
+    // CustomLeaderstats/"Current ELO", and the tier is derived from it. ELO is
+    // unranked at -1 and is otherwise always populated.
+    std::int64_t Level = -1;
+    std::int64_t Elo = -1;
+    bool LevelResolved = false;
+    bool RankResolved = false;
+
+    // Icon filename stem resolved once when the progression is read, so the
+    // render loop never does string work per player per frame.
+    std::string RankStem;
+
+    bool UseAnchor = false;
+    Vectors::Vector3 AnchorPos = {0.f, 0.f, 0.f};
 };
+
+// ELO -> tier name. Thresholds are the same ladder the reference ESP used, in
+// the same order, so the two agree on what a given player is.
+//
+// Note this ladder contains a Diamond tier, which is not in assets/rank/, and
+// only the "3" division of each tier has an icon. Both fall back to text.
+inline const char* RankFromElo(std::int64_t elo)
+{
+    if (elo < 0) return "Unranked";
+    if (elo >= 7855) return "ArchNemesis";
+    if (elo >= 3600) return "Nemesis";
+    if (elo >= 3400) return "Onyx 3";
+    if (elo >= 3200) return "Onyx 2";
+    if (elo >= 3000) return "Onyx 1";
+    if (elo >= 2800) return "Diamond 3";
+    if (elo >= 2600) return "Diamond 2";
+    if (elo >= 2400) return "Diamond 1";
+    if (elo >= 2200) return "Platinum 3";
+    if (elo >= 2000) return "Platinum 2";
+    if (elo >= 1800) return "Platinum 1";
+    if (elo >= 1600) return "Gold 3";
+    if (elo >= 1400) return "Gold 2";
+    if (elo >= 1200) return "Gold 1";
+    if (elo >= 1000) return "Silver 3";
+    if (elo >= 800) return "Silver 2";
+    if (elo >= 600) return "Silver 1";
+    if (elo >= 400) return "Bronze 3";
+    if (elo >= 200) return "Bronze 2";
+    return "Bronze 1";
+}
+
+// Maps a tier name onto the icon file stem in assets/rank/. Returns "" when no
+// art exists, which is the signal to draw the name as text instead.
+//
+// Two wrinkles handled here:
+//   - Only division 3 has art, but a Bronze 2 player should still get the bronze
+//     icon rather than the words "Bronze 2", so any division falls back to its
+//     tier's division-3 stem.
+//   - "Nemesis" is the one name that does not equal its filename; it is
+//     NemesisRank.png.
+//
+// The ladder contains a Diamond tier, which was never supplied. It returns "" so
+// the ESP falls back to text until art for it exists.
+inline std::string RankIconStem(const char* tier)
+{
+    if (!tier) return {};
+
+    if (::_stricmp(tier, "Nemesis") == 0)
+        return "nemesisrank";
+    if (::_stricmp(tier, "ArchNemesis") == 0)
+        return "archnemesis";
+
+    // Lowercase and strip spaces so "Gold 2" and "gold2" agree.
+    std::string key;
+    for (const char* p = tier; *p; ++p)
+        if (*p != ' ')
+            key.push_back(static_cast<char>(::tolower(static_cast<unsigned char>(*p))));
+
+    if (key == "unranked")
+        return "unranked";
+
+    // Drop the division suffix before matching the tier. Only division 3 has
+    // art and every division shares it, so "gold2" resolves to gold3.png exactly
+    // like "gold1" and "gold3" do. Matching the bare tier name is not enough:
+    // the key still carries its digit at this point.
+    if (!key.empty() && key.back() >= '0' && key.back() <= '9')
+        key.pop_back();
+
+    static const char* tiers[] = { "bronze", "silver", "gold", "platinum", "onyx", "diamond" };
+    for (const char* t : tiers)
+        if (key == t)
+            return std::string(t) + "3";
+
+    return {};
+}
 
 // True when the player's equipped tool is a katana (Rivals). Matches the tool
 // name case-insensitively so "Katana", "Katanas", etc. all count.
@@ -163,6 +254,64 @@ namespace Globals
             }
         }
     }
+namespace FrameCache
+{
+    inline Vectors::Vector3 CameraPos{};
+    inline sCFrame CameraCFrame{};
+    inline Vectors::Vector3 LocalHRPPos{};
+    inline bool CameraValid = false;
+    inline bool LocalHRPValid = false;
+    inline int LastFrame = -1;
+
+    inline void Update()
+    {
+        // Use GetTickCount for frame detection (no ImGui dependency in globals.h)
+        int frame = static_cast<int>(GetTickCount() / 16); // ~60fps tick buckets
+        if (frame != LastFrame)
+        {
+            if (Roblox::Camera.address)
+            {
+                CameraPos = Memory->read<Vectors::Vector3>(Roblox::Camera.address + Offsets::Camera::Position);
+                Matrixes::Matrix3x3 rot = Memory->read<Matrixes::Matrix3x3>(Roblox::Camera.address + Offsets::Camera::Rotation);
+                Vectors::Vector3 pos = Memory->read<Vectors::Vector3>(Roblox::Camera.address + Offsets::Camera::Position);
+                // Construct sCFrame manually (aggregate struct)
+CameraCFrame = sCFrame{};
+CameraCFrame.r00 = rot.r00; CameraCFrame.r01 = rot.r01; CameraCFrame.r02 = rot.r02;
+CameraCFrame.r10 = rot.r10; CameraCFrame.r11 = rot.r11; CameraCFrame.r12 = rot.r12;
+CameraCFrame.r20 = rot.r20; CameraCFrame.r21 = rot.r21; CameraCFrame.r22 = rot.r22;
+CameraCFrame.x = pos.x; CameraCFrame.y = pos.y; CameraCFrame.z = pos.z;
+                CameraValid = true;
+            }
+            else
+            {
+                CameraValid = false;
+            }
+
+            if (Roblox::LocalPlayer.address)
+            {
+                auto localChar = Roblox::LocalPlayer.Character();
+                auto localHRP = localChar.FindFirstChild("HumanoidRootPart");
+                if (!localHRP.address) localHRP = localChar.FindFirstChild("Torso");
+                if (!localHRP.address) localHRP = localChar.FindFirstChild("UpperTorso");
+                if (localHRP.address)
+                {
+                    LocalHRPPos = localHRP.Position();
+                    LocalHRPValid = true;
+                }
+                else
+                {
+                    LocalHRPValid = false;
+                }
+            }
+            else
+            {
+                LocalHRPValid = false;
+            }
+
+            LastFrame = frame;
+        }
+    }
+}
     namespace DynamicOffsets
     {
         inline uintptr_t PlayerTeam = 0;

@@ -5,6 +5,22 @@
 #include <thread>
 #include <chrono>
 #include <cmath>
+#include <atomic>
+#include <mutex>
+
+// ── PF Aim shared state ─────────────────────────────────────────────────
+// Declared here (global scope, matching the readers in PFAimLoop below) so
+// the camera-lock thread has its staging buffer. Writers lock g_PFAimMutex
+// before touching g_PFAimCamera / g_PFAimRotation.
+inline std::atomic<int64_t> g_PFAimUpdatedMs{ 0 };      // last staged ms
+inline std::atomic<bool>    g_PFAimActive{ false };      // hold the camera lock
+inline std::mutex           g_PFAimMutex;
+inline uintptr_t            g_PFAimCamera = 0;
+inline int                  g_PFAimSavedCameraType = -1;
+inline Matrixes::Matrix3x3  g_PFAimRotation{
+    1.f, 0.f, 0.f,
+    0.f, 1.f, 0.f,
+    0.f, 0.f, 1.f };
 
 // ── Click TP: teleport the local character to the ground point under the cursor ─
 // Unprojects the cursor through the real view-projection matrix and intersects
@@ -128,6 +144,59 @@ inline void ClickTPLoop()
         catch (...)
         {
         }
+    }
+}
+
+// ── PF Aim: dedicated thread that holds the aimbot camera lock on Phantom ────
+// Forces CameraType to 7 and hammers the staged rotation in ~14ms bursts so
+// Roblox's camera script cannot win the inter-frame race (same technique as
+// FreeCam / ThirdPerson). Only the rotation is written; position is untouched.
+inline void PFAimLoop()
+{
+    bool wasHammering = false;
+    while (Globals::running)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+        int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        bool fresh = (now - g_PFAimUpdatedMs.load(std::memory_order_relaxed)) < 100;
+
+        if (!Globals::Roblox::isPhantomForces || !g_PFAimActive.load(std::memory_order_relaxed) || !fresh)
+        {
+            if (wasHammering)
+            {
+                uintptr_t cam;
+                {
+                    std::lock_guard<std::mutex> lock(g_PFAimMutex);
+                    cam = g_PFAimCamera;
+                }
+                if (cam && g_PFAimSavedCameraType >= 0)
+                    Memory->write<int>(cam + Offsets::Camera::CameraType, g_PFAimSavedCameraType);
+                wasHammering = false;
+            }
+            continue;
+        }
+
+        Matrixes::Matrix3x3 rot;
+        uintptr_t cam;
+        {
+            std::lock_guard<std::mutex> lock(g_PFAimMutex);
+            rot = g_PFAimRotation;
+            cam = g_PFAimCamera;
+        }
+
+        if (!cam)
+            continue;
+
+        auto writeStart = std::chrono::high_resolution_clock::now();
+        do {
+            Memory->write<int>(cam + Offsets::Camera::CameraType, 7);
+            Memory->write<Matrixes::Matrix3x3>(cam + Offsets::Camera::Rotation, rot);
+        } while (std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::high_resolution_clock::now() - writeStart).count() < 14000);
+
+        wasHammering = true;
     }
 }
 

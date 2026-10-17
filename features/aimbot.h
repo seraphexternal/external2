@@ -1703,7 +1703,26 @@ inline void RunAimCoreInternal(ImDrawList* drawList)
             if (Globals::Roblox::isPhantomForces)
             {
                 ResetViewport(Dimensions);
-                PFSilentAim(target);
+
+                // Phantom Forces honours the selected aim type like every other
+                // game: Silent uses the camera-spoofing PFSilentAim, Mouse moves
+                // the real cursor, and Camera rotates the view. Previously this
+                // branch always ran PFSilentAim, which silently aimed the camera
+                // and left the mouse aimbot doing nothing in PF.
+                if (ShouldUseSilentAim())
+                {
+                    PFSilentAim(target);
+                }
+                else if (Options::Aimbot::AimingType == 1)
+                {
+                    // PF locks/hides the cursor, so SetCursorPos is ignored.
+                    // Use relative SendInput deltas so the shot tracks the aim.
+                    MouseSendInput(targetPos, p, sensitivity);
+                }
+                else
+                {
+                    CameraRotation(target);
+                }
             }
             else if (Globals::Roblox::isOverkill)
             {

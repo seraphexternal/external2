@@ -1076,3 +1076,111 @@ inline bool AntiKatanaFiringBlocked()
     wasKatana = katana;
     return katana;
 }
+
+namespace Options
+{
+    namespace ModelChanger
+    {
+        inline bool Enabled = false;
+        // Index into the model list discovered from the Models folder (the built-in
+        // Roblox / TungTung / Mario models plus any .glb/.obj you drop in yourself).
+        // See ModelChanger::GetModelList().
+        inline int Model = 0;
+        inline float Scale = 3.0f;       // size multiplier over the character's screen box
+        inline float YawOffset = 0.0f;   // degrees; corrects a model whose default facing is wrong
+        inline float PitchOffset = 0.0f; // degrees; corrects a model that lies down (wrong up axis)
+        inline bool FollowFacing = true; // turn the model with the player's look direction
+        inline bool HideCharacter = true; // hide the local character's parts so only the model shows
+        inline bool Animate = true;       // mirror the player: pose the model from the character's real parts (features/player_mirror.h)
+        inline bool UseOrthographic = true; // Use orthographic projection for consistent model size
+
+        // Emotes (skeletal animation for rigged models). -1 = none playing; the
+        // index maps to EmoteSystem::EmoteManager. See its built-in emote list.
+        inline bool  EmoteEnabled = true;
+        inline int   Emote = -1;
+        inline float EmoteSpeed = 1.0f;
+
+        // Game profile integration (per-PlaceId configs / dumped asset ids).
+        inline bool UseGameProfile = false;
+        inline bool GameProfileAutoLoad = true;
+        inline bool GameProfileUseAssetIds = false;
+        inline bool GameProfileAssetESP = true;
+        inline bool GameProfileAssetAimbot = true;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Reconstructed option declarations
+// --------------------------------------------------------------------
+// options.h was overwritten (restored to the last commit) on 2026-10-16 and
+// lost a batch of declarations that several in-progress features still read.
+// These are re-added here with types inferred from their call sites so the
+// project compiles again. Defaults are best-effort; tweak as needed.
+// ─────────────────────────────────────────────────────────────────────────
+namespace Options
+{
+    namespace Music
+    {
+        inline bool  Miniplayer     = false;
+        inline float MiniplayerX    = 20.0f;
+        inline float MiniplayerY    = 20.0f;
+        inline float MiniplayerSize = 1.0f;   // clamped to 0.7 .. 1.6 at draw time
+    }
+
+    namespace Misc
+    {
+        inline bool ServerBrowserEnabled = false;
+
+        // Media / playback hotkeys (VK codes; 0 = unbound).
+        inline int  MediaPlayPauseKey = 0;
+        inline int  MediaNextKey      = 0;
+        inline int  MediaPrevKey      = 0;
+        inline int  MediaStopKey      = 0;
+        inline int  MediaToggleType   = 2;   // 0 = Hold, 1 = Toggle, 2 = Always On
+        inline bool MediaToggled      = false;
+    }
+
+    namespace ESP
+    {
+        inline bool  Rank                   = false;
+        inline bool  Level                  = false;
+        inline float RankIconSize           = 16.0f;
+        inline bool  RankIconBackground     = true;
+        inline bool  TabList                = false;
+        inline int   TabListKey             = 0;
+        inline int   TabListToggle          = 2;   // 0 = Hold, 1 = Toggle, 2 = Always On
+        inline float BoxFillOpacity         = 0.5f;
+        inline bool  SkeletonVisibilityColor = false;
+    }
+
+    namespace Aimbot
+    {
+        inline float FOVFillOpacity    = 0.5f;
+        inline bool  SilentAimFastHold = false;
+        inline bool  SilentAimHoldLMB  = false;
+        inline float TargetHudScale    = 1.0f;
+        inline float ProjectileSpeed   = 0.0f;  // studs/sec; 0 disables leading
+    }
+
+    namespace World
+    {
+        // In-game world weather (features/worldweather.h + World tab UI).
+        // Distinct from the flat Options::Weather menu-background effect.
+        namespace Weather
+        {
+            inline bool  Enabled       = false;
+            inline int   Type          = 0;        // 0 = snow, 1 = rain
+            inline float Intensity     = 150.0f;   // particle count
+            inline float Speed         = 1.0f;     // vertical fall speed multiplier
+            inline float Wind          = 0.0f;     // horizontal drift, negative = left
+            inline bool  Haze          = false;    // distance fog / haze
+            inline float HazeColor[3]  = { 0.78f, 0.82f, 0.88f };
+            inline float SnowSize      = 1.8f;
+            inline float SnowColor[3]  = { 1.0f, 1.0f, 1.0f };
+            inline float RainThickness = 1.4f;
+            inline float RainStreak    = 0.03f;
+            inline float RainColor[3]  = { 0.65f, 0.75f, 0.95f };
+            inline float SplashColor[3] = { 0.80f, 0.86f, 0.95f };
+        }
+    }
+}

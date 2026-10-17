@@ -19,25 +19,11 @@ inline void RenderRagebotSubtab(ImVec4 main_color)
         UI::Checkbox("Enabled", &Options::Ragebot::Enabled);
         UI::Tooltip("Camera-based aimbot with multi-point targeting.");
 
-        bool rageActive = Options::Ragebot::Enabled &&
-            (Options::Ragebot::ToggleType == 2 ||
-             (Options::Ragebot::RagebotKey != 0 && Options::Ragebot::Toggled));
-        UI::Status(rageActive ? "ACTIVE" : "INACTIVE", rageActive);
-
         static const char* modes[]{ "Hold", "Toggle", "Always On" };
         UI::Combo("Mode", &Options::Ragebot::ToggleType, modes, IM_ARRAYSIZE(modes));
 
         if (Options::Ragebot::ToggleType != 2)
             UI::Bind("##ragebot_key", &Options::Ragebot::RagebotKey, &Options::Ragebot::ToggleType);
-
-        if (Options::Ragebot::ToggleType == 1 && Options::Ragebot::RagebotKey != 0)
-        {
-            ImGui::PushStyleColor(ImGuiCol_Button, Options::Ragebot::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.5f) : ImVec4(0.15f, 0.15f, 0.18f, 0.8f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Options::Ragebot::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.6f) : ImVec4(0.20f, 0.20f, 0.24f, 0.9f));
-            if (UI::Button(Options::Ragebot::Toggled ? "ACTIVE" : "INACTIVE", ImVec2(-1, 24)))
-                Options::Ragebot::Toggled = !Options::Ragebot::Toggled;
-            ImGui::PopStyleColor(2);
-        }
 
         UI::gap(6);
         UI::labelsection("TARGETING");
@@ -99,25 +85,11 @@ inline void RenderRageSubtab(ImVec4 main_color)
         UI::Checkbox("Enabled", &Options::Rage::Enabled);
         UI::Tooltip("Orbits the target with a ghost 'you' and auto-kills it while you stay free to move.");
 
-        bool rageActive = Options::Rage::Enabled &&
-            (Options::Rage::ToggleType == 2 ||
-             (Options::Rage::RageKey != 0 && Options::Rage::Toggled));
-        UI::Status(rageActive ? "ACTIVE" : "INACTIVE", rageActive);
-
         static const char* modes[]{ "Hold", "Toggle", "Always On" };
         UI::Combo("Mode", &Options::Rage::ToggleType, modes, IM_ARRAYSIZE(modes));
 
         if (Options::Rage::ToggleType != 2)
             UI::Bind("##rage_key", &Options::Rage::RageKey, &Options::Rage::ToggleType);
-
-        if (Options::Rage::ToggleType == 1 && Options::Rage::RageKey != 0)
-        {
-            ImGui::PushStyleColor(ImGuiCol_Button, Options::Rage::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.5f) : ImVec4(0.15f, 0.15f, 0.18f, 0.8f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Options::Rage::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.6f) : ImVec4(0.20f, 0.20f, 0.24f, 0.9f));
-            if (UI::Button(Options::Rage::Toggled ? "ACTIVE" : "INACTIVE", ImVec2(-1, 24)))
-                Options::Rage::Toggled = !Options::Rage::Toggled;
-            ImGui::PopStyleColor(2);
-        }
 
         UI::gap(6);
         UI::labelsection("KILL SETTINGS");
@@ -201,28 +173,11 @@ inline void RenderDesyncSubtab(ImVec4 main_color)
 		UI::Checkbox("Enabled", &Options::Desync::Enabled);
 		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Desynchronises your client position from the server.");
 
-		if (Options::Desync::Enabled)
-		{
-			bool desyncActive = Options::Desync::Enabled &&
-				(Options::Desync::ToggleType == 2 ||
-				 (Options::Desync::DesyncKey != 0 && Options::Desync::Toggled));
-			UI::Status(desyncActive ? "ACTIVE" : "INACTIVE", desyncActive);
-		}
-
 		static const char* desyncModes[]{ "Hold", "Toggle", "Always On" };
 		UI::Combo("Mode##desync", &Options::Desync::ToggleType, desyncModes, IM_ARRAYSIZE(desyncModes));
 
 		if (Options::Desync::ToggleType != 2)
 			UI::Bind("##desync_key", &Options::Desync::DesyncKey, &Options::Desync::ToggleType);
-
-		if (Options::Desync::ToggleType == 1 && Options::Desync::DesyncKey != 0)
-		{
-			ImGui::PushStyleColor(ImGuiCol_Button, Options::Desync::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.5f) : ImVec4(0.15f, 0.15f, 0.18f, 0.8f));
-			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Options::Desync::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.6f) : ImVec4(0.20f, 0.20f, 0.24f, 0.9f));
-			if (UI::Button(Options::Desync::Toggled ? "ACTIVE" : "INACTIVE", ImVec2(-1, 24)))
-				Options::Desync::Toggled = !Options::Desync::Toggled;
-			ImGui::PopStyleColor(2);
-		}
 	}
 	UI::CollapsibleEnd();
 
@@ -266,11 +221,6 @@ inline void RenderVoidHideSubtab(ImVec4 main_color)
 		UI::labelsection("MAIN");
 		UI::Checkbox("Enabled", &Options::VoidHide::Enabled);
 		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Automatically hides you when falling into the void.");
-
-		bool voidHideActive = Options::VoidHide::Enabled &&
-			(Options::VoidHide::ToggleType == 2 ||
-			 (Options::VoidHide::VoidHideKey != 0 && Options::VoidHide::Toggled));
-		UI::Status(voidHideActive ? "ACTIVE" : "INACTIVE", voidHideActive);
 	}
 	UI::CollapsibleEnd();
 
@@ -285,15 +235,6 @@ inline void RenderVoidHideSubtab(ImVec4 main_color)
 
 		if (Options::VoidHide::ToggleType != 2)
 			UI::Bind("##voidhide_key", &Options::VoidHide::VoidHideKey, &Options::VoidHide::ToggleType);
-
-		if (Options::VoidHide::ToggleType == 1 && Options::VoidHide::VoidHideKey != 0)
-		{
-			ImGui::PushStyleColor(ImGuiCol_Button, Options::VoidHide::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.5f) : ImVec4(0.15f, 0.15f, 0.18f, 0.8f));
-			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Options::VoidHide::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.6f) : ImVec4(0.20f, 0.20f, 0.24f, 0.9f));
-			if (UI::Button(Options::VoidHide::Toggled ? "ACTIVE" : "INACTIVE", ImVec2(-1, 24)))
-				Options::VoidHide::Toggled = !Options::VoidHide::Toggled;
-			ImGui::PopStyleColor(2);
-		}
 	}
 	UI::CollapsibleEnd();
 }
@@ -317,10 +258,6 @@ inline void RenderBhopSubtab(ImVec4 main_color)
 		UI::labelsection("KEYBIND");
 		UI::Bind("##bhop_key", &Options::Bhop::BhopKey);
 		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hold this key while moving to bunny hop.");
-
-		bool bhopActive = Options::Bhop::Enabled && Options::Bhop::BhopKey != 0 &&
-			(GetAsyncKeyState(Options::Bhop::BhopKey) & 0x8000) != 0;
-		UI::Status(bhopActive ? "ACTIVE" : "INACTIVE", bhopActive);
 	}
 	UI::CollapsibleEnd();
 }

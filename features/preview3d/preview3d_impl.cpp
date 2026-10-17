@@ -15,6 +15,9 @@ using namespace DirectX;
 #include <sstream>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
+#include <cmath>
+#include <cctype>
 
 #include "ModelLoader.h"
 #include "PreviewRenderer.h"

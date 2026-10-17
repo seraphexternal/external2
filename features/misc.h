@@ -6,6 +6,7 @@
 #include "../rbx/math/math.h"
 #include "../seraph_log.h"
 #include "anti_fling.h"
+#include "pf_diag.h"
 
 #include <thread>
 #include <array>
@@ -212,6 +213,8 @@
 			// Anti-Fling — restores the local position/velocity when a fling
 			// spike is detected (runs every tick so it can win the race).
 			AntiFling::Tick();
+
+			PFDiag::Tick();
 
 		// Third Person is handled by the dedicated ThirdPersonLoop thread
 		// (features/thirdperson.h) — it hammers the camera transform every

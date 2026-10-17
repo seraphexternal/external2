@@ -16,16 +16,24 @@
 #include "../features/aimbot.h"
 #include "../features/aimline.h"
 #include "../features/playerfilter.h"
+#include "../features/playerfling.h"
 #include "../features/aimline.h"
 #include "../features/aimline.h"
 #include "../features/orbit.h"
 #include "../features/PlayerAvatars.h"
+#include "../features/server_browser.h"
+#include "../features/modelchanger.h"
+#include "../features/diagnostics.h"
+#include "../features/boxfill_window.h"
+#include "../features/fovfill_window.h"
 #include "animation.h"
 #include "explorer/explorer_window.h"
 #include "explorer/lua_editor.h"
 #include "executor/executor.h"
 #include "injector.h"
 #include <shobjidl.h>
+#include <timeapi.h>
+#pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "ole32.lib")
 #include "../seraph_log.h"
 
@@ -628,6 +636,19 @@ namespace SpotifyVisualizer
     static ImTextureID albumArtTexture = nullptr;
     static bool albumArtLoaded = false;
 
+    // Pixel dimensions of albumArtTexture, captured at upload so the
+    // miniplayer can cover-crop non-square art into a wide card via UVs.
+    static int albumArtPxW = 0;
+    static int albumArtPxH = 0;
+
+    // Screen-space rect of the miniplayer card from the most recent frame,
+    // plus the hotzone state owned by UpdateMiniplayerClickThrough. Both are
+    // read/written only inside renderer.cpp (same translation unit).
+    static ImVec2 g_mpRectMin(0.0f, 0.0f);
+    static ImVec2 g_mpRectMax(0.0f, 0.0f);
+    static bool g_mpRectValid = false;
+    static bool g_mpHotActive = false;
+
     // ---------------------------------------------------------------------
     // Worker side: every SMTC/WASAPI call lives on a dedicated MTA worker
     // thread so nothing can ever block the present loop. The render thread
@@ -963,6 +984,58 @@ namespace SpotifyVisualizer
         }
     }
 
+    // Poll global media keybinds (works even when menu is closed)
+    void PollGlobalMediaKeys()
+    {
+        auto checkKey = [](int vk, int toggleType, bool& toggled) -> bool
+        {
+            if (vk == 0) return false;
+            if (toggleType == 2) return true; // Always on
+            if (toggleType == 1) return (GetAsyncKeyState(vk) & 1) != 0; // Toggle - detect press
+            return (GetAsyncKeyState(vk) & 0x8000) != 0; // Hold
+        };
+
+        static bool prevPlayPause = false, prevNext = false, prevPrev = false, prevStop = false;
+        
+        bool pp = checkKey(Options::Misc::MediaPlayPauseKey, Options::Misc::MediaToggleType, Options::Misc::MediaToggled);
+        bool nx = checkKey(Options::Misc::MediaNextKey, Options::Misc::MediaToggleType, Options::Misc::MediaToggled);
+        bool pr = checkKey(Options::Misc::MediaPrevKey, Options::Misc::MediaToggleType, Options::Misc::MediaToggled);
+        bool st = checkKey(Options::Misc::MediaStopKey, Options::Misc::MediaToggleType, Options::Misc::MediaToggled);
+
+        // Detect edge for toggle mode
+        if (Options::Misc::MediaToggleType == 1)
+        {
+            if (pp && !prevPlayPause) pendingControl.store(ControlCommand::PlayPause);
+            if (nx && !prevNext) pendingControl.store(ControlCommand::Next);
+            if (pr && !prevPrev) pendingControl.store(ControlCommand::Prev);
+            if (st && !prevStop) 
+            {
+                if (currentSession) 
+                {
+                    try { currentSession.TryPauseAsync(); } catch (...) {}
+                }
+            }
+        }
+        else // Hold or Always
+        {
+            if (pp) pendingControl.store(ControlCommand::PlayPause);
+            if (nx) pendingControl.store(ControlCommand::Next);
+            if (pr) pendingControl.store(ControlCommand::Prev);
+            if (st) 
+            {
+                if (currentSession) 
+                {
+                    try { currentSession.TryPauseAsync(); } catch (...) {}
+                }
+            }
+        }
+
+        prevPlayPause = pp;
+        prevNext = nx;
+        prevPrev = pr;
+        prevStop = st;
+    }
+
     // Starts WASAPI loopback capture, retrying every few seconds until it
     // succeeds so a transient failure (device busy, COM not warmed up, no render
     // endpoint yet) recovers automatically instead of sticking the visualizer on
@@ -1006,6 +1079,9 @@ namespace SpotifyVisualizer
 
         while (!smtcStop.load())
         {
+            // Poll global media keybinds every frame so they work even without an active session
+            PollGlobalMediaKeys();
+
             const auto now = std::chrono::steady_clock::now();
 
             if (!sessionManager)
@@ -1194,8 +1270,10 @@ namespace SpotifyVisualizer
         pendingControl.store(cmd, std::memory_order_release);
     }
 
-    // Render visualizer
-    void Render(ImDrawList* draw, ImVec2 pos, ImVec2 size, float dt)
+    // Pull the worker snapshot and album-art revision into render-side state.
+    // Shared by Render (music tab) and RenderMiniplayer (floating card) so
+    // track info and artwork stay live even while the music tab is hidden.
+    void SyncState()
     {
         EnsureWorker();
 
@@ -1236,14 +1314,24 @@ namespace SpotifyVisualizer
                     ReleaseAlbumArt();
                     albumArtTexture = tex;
                     albumArtLoaded = true;
+                    albumArtPxW = w;
+                    albumArtPxH = h;
                 }
             }
             else
             {
                 ReleaseAlbumArt();
+                albumArtPxW = 0;
+                albumArtPxH = 0;
             }
             lastUploadedArtVersion = version;
         }
+    }
+
+    // Render visualizer
+    void Render(ImDrawList* draw, ImVec2 pos, ImVec2 size, float dt)
+    {
+        SyncState();
 
         SimulateFFT(dt);
         
@@ -1813,6 +1901,304 @@ namespace SpotifyVisualizer
             }
         }
     }
+
+    // ---------------------------------------------------------------------------
+    // Miniplayer: compact floating now-playing card. The album art fills the
+    // whole card (cover-cropped through UVs) under a uniform scrim; title,
+    // artist, times, seek bar and transport controls sit on top, every glyph
+    // double-drawn with a 1px shadow so text stays readable over any artwork.
+    // Input only flows while the menu is open or the in-game hover hotzone is
+    // active - see UpdateMiniplayerClickThrough.
+    // ---------------------------------------------------------------------------
+    void RenderMiniplayer(ImDrawList* draw, bool menuOpen)
+    {
+        SyncState();
+
+        const float sc = UI::sc * ImClamp(Options::Music::MiniplayerSize, 0.7f, 1.6f);
+        const float W = 340.0f * sc;
+        const float H = 136.0f * sc;
+        const float R = 10.0f * sc;
+        const float pad = 14.0f * sc;
+
+        const ImVec2 display = ImGui::GetIO().DisplaySize;
+        if (display.x < 64.0f || display.y < 64.0f)
+        {
+            g_mpRectValid = false;
+            return;
+        }
+
+        // First placement anchors to the bottom-right corner; afterwards the
+        // saved position wins (clamped so the card always stays on screen).
+        if (Options::Music::MiniplayerX < 0.0f || Options::Music::MiniplayerY < 0.0f)
+        {
+            Options::Music::MiniplayerX = display.x - W - 24.0f;
+            Options::Music::MiniplayerY = display.y - H - 48.0f;
+        }
+
+        ImVec2 pos(Options::Music::MiniplayerX, Options::Music::MiniplayerY);
+        auto clampPos = [&]() {
+            pos.x = ImClamp(pos.x, 4.0f, ImMax(4.0f, display.x - W - 4.0f));
+            pos.y = ImClamp(pos.y, 4.0f, ImMax(4.0f, display.y - H - 4.0f));
+        };
+        clampPos();
+        ImVec2 p1(pos.x + W, pos.y + H);
+
+        const bool interactive = menuOpen || g_mpHotActive;
+        ImFont* fTitle = UI::medium_font ? UI::medium_font : ImGui::GetFont();
+        ImFont* fSub   = UI::small_icon_font ? UI::small_icon_font : (UI::small_font ? UI::small_font : ImGui::GetFont());
+
+        const ImU32 accent     = IM_COL32(30, 215, 96, 255);
+        const ImU32 textMain   = IM_COL32(255, 255, 255, 255);
+        const ImU32 textSecond = IM_COL32(196, 200, 206, 255);
+        const ImU32 textTert   = IM_COL32(150, 155, 164, 255);
+        const ImU32 warning    = IM_COL32(255, 180, 60, 255);
+        const ImU32 trackFill  = IM_COL32(44, 45, 56, 235);
+
+        auto shadowText = [&](ImFont* font, float size, ImVec2 at, ImU32 col, const std::string& s)
+        {
+            draw->AddText(font, size, ImVec2(at.x + 1.0f, at.y + 1.0f), IM_COL32(0, 0, 0, 175), s.c_str());
+            draw->AddText(font, size, at, col, s.c_str());
+        };
+
+        auto ellipsize = [&](const std::string& text, float maxW, ImFont* font, float size) -> std::string
+        {
+            if (font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str()).x <= maxW)
+                return text;
+            std::string t = text;
+            while (!t.empty() && font->CalcTextSizeA(size, FLT_MAX, 0.0f, (t + "...").c_str()).x > maxW)
+                t.pop_back();
+            return t + "...";
+        };
+
+        auto formatTime = [](float seconds) -> std::string {
+            if (seconds < 0 || !isfinite(seconds)) seconds = 0;
+            int mins = static_cast<int>(seconds) / 60;
+            int secs = static_cast<int>(seconds) % 60;
+            char buf[16];
+            sprintf_s(buf, "%d:%02d", mins, secs);
+            return std::string(buf);
+        };
+
+        // ---- Drag (menu-open only): grabs from last frame's published rect so
+        // every geometry value below is computed exactly once from final pos.
+        static bool mpDragging = false;
+        static ImVec2 mpDragOff(0.0f, 0.0f);
+        static bool mpLastOverCtl = false;
+        if (menuOpen && !mpDragging && !mpLastOverCtl && g_mpRectValid &&
+            ImGui::IsMouseClicked(0) && ImGui::IsMouseHoveringRect(g_mpRectMin, g_mpRectMax))
+        {
+            mpDragging = true;
+            mpDragOff = ImGui::GetIO().MousePos - pos;
+        }
+        if (mpDragging)
+        {
+            if (menuOpen && ImGui::IsMouseDown(0))
+            {
+                pos.x = ImGui::GetIO().MousePos.x - mpDragOff.x;
+                pos.y = ImGui::GetIO().MousePos.y - mpDragOff.y;
+                clampPos();
+            }
+            else
+            {
+                mpDragging = false;
+            }
+        }
+        Options::Music::MiniplayerX = pos.x;
+        Options::Music::MiniplayerY = pos.y;
+        p1 = ImVec2(pos.x + W, pos.y + H);
+
+        // ---- Hit tests ----
+        auto hit = [&](const ImVec2& mn, const ImVec2& mx) {
+            return interactive && ImGui::IsMouseHoveringRect(mn, mx);
+        };
+
+        const float barY = pos.y + 85.0f * sc;
+        const float barH = 4.0f * sc;
+        const ImVec2 barMin(pos.x + pad, barY);
+        const ImVec2 barMax(pos.x + W - pad, barY + barH);
+        const float barW = barMax.x - barMin.x;
+
+        const float deckY = pos.y + 94.0f * sc;
+        const float prevS = 26.0f * sc;
+        const float playS = 32.0f * sc;
+        const float gapS  = 14.0f * sc;
+        const float rowW  = prevS * 2 + playS + gapS * 2;
+        const float rowX  = pos.x + (W - rowW) * 0.5f;
+        const float rowY  = deckY + ((p1.y - 6.0f * sc) - deckY - playS) * 0.5f;
+        const float prevX = rowX;
+        const float playX = rowX + prevS + gapS;
+        const float nextX = playX + playS + gapS;
+        const float prevY = rowY + (playS - prevS) * 0.5f;
+
+        const bool hovPrev = hit(ImVec2(prevX, prevY), ImVec2(prevX + prevS, prevY + prevS));
+        const bool hovPlay = hit(ImVec2(playX, rowY), ImVec2(playX + playS, rowY + playS));
+        const bool hovNext = hit(ImVec2(nextX, prevY), ImVec2(nextX + prevS, prevY + prevS));
+        const bool hovBar  = hit(ImVec2(barMin.x, barY - 9.0f * sc), ImVec2(barMax.x, barY + barH + 9.0f * sc));
+        mpLastOverCtl = hovPrev || hovPlay || hovNext || hovBar;
+
+        // ---- Background: album art (cover-cropped) + scrim ----
+        if (albumArtTexture)
+        {
+            ImVec2 uv0(0.0f, 0.0f), uv1(1.0f, 1.0f);
+            if (albumArtPxW > 0 && albumArtPxH > 0)
+            {
+                const float ratio = (W / H) / ((float)albumArtPxW / (float)albumArtPxH);
+                if (ratio > 1.0f)
+                {
+                    const float vSpan = 1.0f / ratio;
+                    uv0.y = (1.0f - vSpan) * 0.5f;
+                    uv1.y = 1.0f - uv0.y;
+                }
+                else
+                {
+                    uv0.x = (1.0f - ratio) * 0.5f;
+                    uv1.x = 1.0f - uv0.x;
+                }
+            }
+            draw->AddImageRounded(albumArtTexture, pos, p1, uv0, uv1, IM_COL32_WHITE, R);
+        }
+        else
+        {
+            draw->AddRectFilled(pos, p1, IM_COL32(16, 16, 22, 255), R);
+            // Spotify-style wave placeholder while no artwork is loaded.
+            const float cx = pos.x + W * 0.5f;
+            const float cy = pos.y + H * 0.42f;
+            const float r = 17.0f * sc;
+            for (int wave = 0; wave < 3; ++wave)
+            {
+                const float waveR = r * (0.45f + wave * 0.25f);
+                for (int i = 0; i < 20; ++i)
+                {
+                    const float a1 = -IM_PI * 0.55f + (IM_PI * 1.1f) * i / 20;
+                    const float a2 = -IM_PI * 0.55f + (IM_PI * 1.1f) * (i + 1) / 20;
+                    draw->AddLine(
+                        ImVec2(cx + cosf(a1) * waveR, cy + sinf(a1) * waveR),
+                        ImVec2(cx + cosf(a2) * waveR, cy + sinf(a2) * waveR),
+                        IM_COL32(30, 215, 96, 130 - wave * 35), 2.2f * sc);
+                }
+            }
+        }
+        draw->AddRectFilled(pos, p1, IM_COL32(8, 8, 11, 150), R);
+        draw->AddRect(pos, p1, IM_COL32(255, 255, 255, 18), R);
+
+        // ---- Title + artist (non-connected states show status as the title) ----
+        const int st = statusInt.load();
+        const bool playing = currentTrack.isPlaying;
+        const float infoW = W - pad * 2;
+        std::string title;
+        ImU32 titleCol = textMain;
+        if (st == 2)
+        {
+            title = currentTrack.title.empty() ? "Nothing playing" : currentTrack.title;
+        }
+        else if (st == 0) { title = "STARTING...";       titleCol = textTert; }
+        else if (st == 1) { title = "CONNECTING";        titleCol = warning; }
+        else if (st == 3) { title = "NO ACTIVE SESSION"; titleCol = warning; }
+        else              { title = "MEDIA UNAVAILABLE"; titleCol = warning; }
+
+        shadowText(fTitle, 18.0f * sc, ImVec2(pos.x + pad, pos.y + 16.0f * sc), titleCol,
+                   ellipsize(title, infoW, fTitle, 18.0f * sc));
+        if (st == 2 && !currentTrack.artist.empty())
+            shadowText(fSub, 12.5f * sc, ImVec2(pos.x + pad, pos.y + 43.0f * sc), textSecond,
+                       ellipsize(currentTrack.artist, infoW, fSub, 12.5f * sc));
+
+        // ---- Times + seek bar ----
+        static bool mpPbDragging = false;
+        static float mpPbDragFrac = 0.0f;
+        if (hovBar && ImGui::IsMouseClicked(0))
+        {
+            mpPbDragging = true;
+            mpPbDragFrac = ImClamp((ImGui::GetIO().MousePos.x - barMin.x) / barW, 0.0f, 1.0f);
+        }
+        if (mpPbDragging)
+        {
+            mpPbDragFrac = ImClamp((ImGui::GetIO().MousePos.x - barMin.x) / barW, 0.0f, 1.0f);
+            pendingSeek.store(mpPbDragFrac, std::memory_order_relaxed);
+            QueueControl(ControlCommand::Seek);
+            if (!ImGui::IsMouseDown(0))
+                mpPbDragging = false;
+        }
+        const float dispProg = mpPbDragging ? mpPbDragFrac : ImClamp(currentTrack.progress, 0.0f, 1.0f);
+
+        {
+            const float yTime = pos.y + 66.0f * sc;
+            const std::string curTime = formatTime(dispProg * currentTrack.duration);
+            const std::string totTime = formatTime(currentTrack.duration);
+            shadowText(fSub, 10.0f * sc, ImVec2(pos.x + pad, yTime), textTert, curTime);
+            const float totW = fSub->CalcTextSizeA(10.0f * sc, FLT_MAX, 0.0f, totTime.c_str()).x;
+            shadowText(fSub, 10.0f * sc, ImVec2(p1.x - pad - totW, yTime), textTert, totTime);
+        }
+
+        draw->AddRectFilled(barMin, barMax, trackFill, 2.0f * sc);
+        if (dispProg > 0.001f)
+        {
+            draw->AddRectFilledMultiColor(barMin, ImVec2(barMin.x + barW * dispProg, barMax.y),
+                IM_COL32(30, 215, 96, 255), IM_COL32(82, 240, 138, 255),
+                IM_COL32(82, 240, 138, 255), IM_COL32(30, 215, 96, 255));
+        }
+        if (hovBar || mpPbDragging)
+        {
+            draw->AddCircleFilled(ImVec2(barMin.x + barW * dispProg, barY + barH * 0.5f),
+                                  5.5f * sc, IM_COL32(255, 255, 255, 255), 16);
+        }
+
+        // ---- Transport deck ----
+        const ImVec2 deckMin(pos.x + 6.0f * sc, deckY);
+        const ImVec2 deckMax(p1.x - 6.0f * sc, p1.y - 6.0f * sc);
+        draw->AddRectFilled(deckMin, deckMax, IM_COL32(10, 10, 13, 150), 8.0f * sc);
+
+        auto skipBtn = [&](float x, float y, float s, int dir, bool hov) -> bool
+        {
+            if (hov)
+                draw->AddCircleFilled(ImVec2(x + s * 0.5f, y + s * 0.5f), s * 0.5f, IM_COL32(42, 43, 54, 220), 32);
+            const ImU32 col = hov ? textMain : textSecond;
+            const float cx = x + s * 0.5f;
+            const float cy = y + s * 0.5f;
+            const float k = s * 0.30f;
+            if (dir == 0) // previous
+            {
+                draw->AddRectFilled(ImVec2(cx - k * 0.7f, cy - k), ImVec2(cx - k * 0.3f, cy + k), col, 0.5f);
+                draw->AddTriangleFilled(ImVec2(cx - k * 0.1f, cy), ImVec2(cx + k * 0.45f, cy - k), ImVec2(cx + k * 0.45f, cy + k), col);
+            }
+            else // next
+            {
+                draw->AddRectFilled(ImVec2(cx + k * 0.3f, cy - k), ImVec2(cx + k * 0.7f, cy + k), col, 0.5f);
+                draw->AddTriangleFilled(ImVec2(cx + k * 0.1f, cy), ImVec2(cx - k * 0.45f, cy - k), ImVec2(cx - k * 0.45f, cy + k), col);
+            }
+            if (hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            return hov && ImGui::IsMouseClicked(0);
+        };
+
+        if (skipBtn(prevX, prevY, prevS, 0, hovPrev)) QueueControl(ControlCommand::Prev);
+
+        {
+            const ImVec2 c(playX + playS * 0.5f, rowY + playS * 0.5f);
+            if (hovPlay)
+            {
+                draw->AddCircleFilled(c, playS * 0.5f + 3.5f * sc, IM_COL32(30, 215, 96, 60), 32);
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            }
+            draw->AddCircleFilled(c, playS * 0.5f, hovPlay ? IM_COL32(52, 235, 118, 255) : accent, 32);
+            const ImU32 icon = IM_COL32(14, 18, 16, 255);
+            if (playing)
+            {
+                draw->AddRectFilled(ImVec2(c.x - 5.2f * sc, c.y - 6.5f * sc), ImVec2(c.x - 1.8f * sc, c.y + 6.5f * sc), icon, 1.0f * sc);
+                draw->AddRectFilled(ImVec2(c.x + 3.2f * sc, c.y - 6.5f * sc), ImVec2(c.x + 6.6f * sc, c.y + 6.5f * sc), icon, 1.0f * sc);
+            }
+            else
+            {
+                draw->AddTriangleFilled(ImVec2(c.x - 3.5f * sc, c.y - 7.0f * sc), ImVec2(c.x - 3.5f * sc, c.y + 7.0f * sc), ImVec2(c.x + 8.0f * sc, c.y), icon);
+            }
+            if (hovPlay && ImGui::IsMouseClicked(0)) QueueControl(ControlCommand::PlayPause);
+        }
+
+        if (skipBtn(nextX, prevY, prevS, 1, hovNext)) QueueControl(ControlCommand::Next);
+
+        // Publish the final rect for the click-through hotzone updater.
+        g_mpRectMin = pos;
+        g_mpRectMax = p1;
+        g_mpRectValid = true;
+    }
 }
 
 #ifdef _MSC_VER
@@ -1907,56 +2293,23 @@ gradient = Options::Misc::MenuGradient;
 }
 }
 
-// Rainbox/whatever: apply the theme accent colors to the in-game feature
-// colors so switching themes re-styles the whole overlay. Each feature keeps
-// its own picker afterwards, so a theme change is the only thing that rewrites
-// these — per-feature customization is still fully available.
+// Feature colors are no longer driven by the menu theme. A theme change only
+// restyles the menu chrome; the in-game visuals keep their own defaults and the
+// user's per-feature picks. Kept as a (no-op) hook so the theme-change call site
+// stays intact and the behavior is easy to restore if ever wanted.
 inline void ApplyFeatureColors(const float* accent, const float* accent2)
 {
-const float r = accent[0], g = accent[1], b = accent[2];
-const float r2 = accent2[0], g2 = accent2[1], b2 = accent2[2];
-
-// ESP primary visuals follow the theme accent.
-float* esp = &Options::ESP::Color[0];
-esp[0] = r; esp[1] = g; esp[2] = b;
-float* esp2 = &Options::ESP::BoxColor[0];
-esp2[0] = r; esp2[1] = g; esp2[2] = b;
-float* esp3 = &Options::ESP::CornerColor[0];
-esp3[0] = r; esp3[1] = g; esp3[2] = b;
-float* esp4 = &Options::ESP::SkeletonColor[0];
-esp4[0] = r; esp4[1] = g; esp4[2] = b;
-float* esp5 = &Options::ESP::ESP3DColor[0];
-esp5[0] = r; esp5[1] = g; esp5[2] = b;
-float* esp6 = &Options::ESP::HeadCircleColor[0];
-esp6[0] = r; esp6[1] = g; esp6[2] = b;
-
-// Accent2 goes to secondary / distance / tracer elements.
-float* esc = &Options::ESP::DistanceColor[0];
-esc[0] = r2; esc[1] = g2; esc[2] = b2;
-float* esc2 = &Options::ESP::TracerColor[0];
-esc2[0] = r2; esc2[1] = g2; esc2[2] = b2;
-float* esc3 = &Options::ESP::HeadDotColor[0];
-esc3[0] = r2; esc3[1] = g2; esc3[2] = b2;
-
-// Chams + aimbot also pick up the theme.
-float* cc = &Options::Chams::FillColor[0];
-cc[0] = r; cc[1] = g; cc[2] = b; cc[3] = 0.5f;
-float* cc2 = &Options::Chams::OutlineColor[0];
-cc2[0] = r2; cc2[1] = g2; cc2[2] = b2; cc2[3] = 1.0f;
-float* ac = &Options::Aimbot::FOVColor[0];
-ac[0] = r; ac[1] = g; ac[2] = b;
-float* ac2 = &Options::Aimbot::FOVFillColor[0];
-ac2[0] = r; ac2[1] = g; ac2[2] = b; ac2[3] = 0.1f;
-float* ac3 = &Options::Aimbot::TargetLineColor[0];
-ac3[0] = r2; ac3[1] = g2; ac3[2] = b2;
-
-// Crosshair + Desync visuals.
-float* cr = &Options::Crosshair::Color[0];
-cr[0] = r; cr[1] = g; cr[2] = b;
-float* dv = &Options::Desync::VisualColor[0];
-dv[0] = r; dv[1] = g; dv[2] = b;
-float* dv2 = &Options::Desync::LineColor[0];
-dv2[0] = r2; dv2[1] = g2; dv2[2] = b2;
+// Feature colors are intentionally decoupled from the menu theme.
+//
+// This used to copy the theme accent (blue by default) onto every ESP/combat
+// visual (Name, Box, Corner, Skeleton, Distance, Chams, FOV, ...). Because the
+// default accent is blue, that made features render blue "by default" and also
+// clobbered whatever the user had picked in the per-feature color pickers.
+//
+// Features now keep their own defaults (white) and stay under the user's
+// control; switching themes only restyles the menu chrome, not the visuals.
+(void)accent;
+(void)accent2;
 }
 }
 
@@ -2207,6 +2560,7 @@ void HideFromTaskbar(HWND hwnd);
 static volatile LONG g_OverlayWheelAccum = 0;
 static WNDPROC g_GameWndProc = nullptr;
 static HWND g_GameWnd = nullptr;
+static int g_OverlayAlpha = 255;
 
 static LRESULT CALLBACK GameWheelHookWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
@@ -2262,7 +2616,7 @@ static void UninstallWheelForwarder()
     g_GameWndProc = nullptr;
 }
 
-static void ApplyOverlayWindowStyle(HWND hwnd, bool clickThrough)
+static void ApplyOverlayWindowStyle(HWND hwnd, bool clickThrough, bool noActivate = false)
 {
 LONG exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
 
@@ -2270,11 +2624,17 @@ LONG exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
 exStyle |= WS_EX_LAYERED | WS_EX_TOPMOST;
 
 // Click-through (transparent to input) when in-game and the menu is closed;
-// clickable when the menu is open.
+// clickable when the menu is open. The miniplayer hotzone additionally sets
+// WS_EX_NOACTIVATE so clicking its buttons never takes focus from Roblox.
 if (clickThrough)
 exStyle |= WS_EX_TRANSPARENT;
 else
 exStyle &= ~WS_EX_TRANSPARENT;
+
+if (noActivate)
+exStyle |= WS_EX_NOACTIVATE;
+else
+exStyle &= ~WS_EX_NOACTIVATE;
 
 if (Options::Misc::HideFromTabs)
 {
@@ -2289,6 +2649,10 @@ exStyle &= ~WS_EX_TOOLWINDOW;
 SetWindowLong(hwnd, GWL_EXSTYLE, exStyle);
 SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 
+// SetWindowPos can drop the layered attributes, so restore the colour key +
+// uniform alpha every time the window style is touched.
+::SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), (BYTE)g_OverlayAlpha, LWA_COLORKEY | LWA_ALPHA);
+
 if (Options::Misc::HideFromTabs)
 HideFromTaskbar(hwnd);
 }
@@ -2296,6 +2660,41 @@ HideFromTaskbar(hwnd);
 void SetTransparency(HWND hwnd, bool clickThrough)
 {
 ApplyOverlayWindowStyle(hwnd, clickThrough);
+}
+
+// -----------------------------------------------------------------------------
+// Miniplayer input hotzone. With the menu closed the overlay window is
+// WS_EX_TRANSPARENT, so the floating player's controls would be dead. While
+// the cursor sits over the card (Roblox in the foreground, menu closed), flip
+// the overlay to clickable + WS_EX_NOACTIVATE so pressing play/pause never
+// takes focus away from the game. GetCursorPos is polled directly because a
+// transparent window receives no mouse messages and therefore cannot observe
+// the cursor entering the rect.
+static void UpdateMiniplayerClickThrough(HWND hwnd, bool menuOpen)
+{
+    using namespace SpotifyVisualizer;
+
+    static bool lastClickThrough = true;
+    static bool lastNoActivate = false;
+
+    bool hot = false;
+    if (!menuOpen && Options::Music::Miniplayer && g_mpRectValid && IsGameOnTop("Roblox"))
+    {
+        POINT pt;
+        if (::GetCursorPos(&pt))
+            hot = pt.x >= g_mpRectMin.x && pt.x < g_mpRectMax.x &&
+                  pt.y >= g_mpRectMin.y && pt.y < g_mpRectMax.y;
+    }
+    g_mpHotActive = hot;
+
+    const bool clickThrough = !menuOpen && !hot;
+    const bool noActivate = hot;
+    if (clickThrough != lastClickThrough || noActivate != lastNoActivate)
+    {
+        ApplyOverlayWindowStyle(hwnd, clickThrough, noActivate);
+        lastClickThrough = clickThrough;
+        lastNoActivate = noActivate;
+    }
 }
 
 void HideFromTaskbar(HWND hwnd)
@@ -2655,112 +3054,97 @@ void RenderKeybindList(ImDrawList* drawList)
 if (!Options::Misc::KeybindList)
 return;
 
-ImGuiIO& io = ImGui::GetIO();
-std::vector<std::pair<std::string, std::string>> activeBinds;
+// Every feature with a keybind state, in menu order. ToggleType convention:
+// 0 = Hold, 1 = Toggle, 2 = Always On.
+struct Bind { const char* name; const char* mode; };
+std::vector<Bind> activeBinds;
 
-// Check Aimbot
-if (Options::Aimbot::Aimbot && Options::Aimbot::AimbotKey != 0)
+auto push3 = [&activeBinds](const char* name, bool enabled, int toggleType, int key, bool toggled)
 {
-bool isActive = false;
-if (Options::Aimbot::ToggleType == 1) // Toggle
-isActive = Options::Aimbot::Toggled;
-else // Hold
-isActive = (GetAsyncKeyState(Options::Aimbot::AimbotKey) & 0x8000) != 0;
+    if (!enabled)
+        return;
+    bool active = (toggleType == 2)
+        || (toggleType == 1 ? toggled
+                            : (key != 0 && (GetAsyncKeyState(key) & 0x8000) != 0));
+    if (!active)
+        return;
+    activeBinds.push_back({ name, toggleType == 2 ? "ON" : toggleType == 1 ? "TOGGLE" : "HOLD" });
+};
 
-if (isActive)
-activeBinds.push_back({"Aimbot", Options::Aimbot::ToggleType == 1 ? "[Toggled]" : "[Hold]"});
-}
+push3("Aimbot", Options::Aimbot::Aimbot, Options::Aimbot::ToggleType, Options::Aimbot::AimbotKey, Options::Aimbot::Toggled);
+push3("Triggerbot", Options::Triggerbot::Enabled, Options::Triggerbot::ToggleType, Options::Triggerbot::TriggerbotKey, Options::Triggerbot::Toggled);
+push3("Fly", Options::Fly::Enabled, Options::Fly::ToggleType, Options::Fly::FlyKey, Options::Fly::Toggled);
+push3("WalkSpeed", Options::WalkSpeed::Enabled, Options::WalkSpeed::ToggleType, Options::WalkSpeed::WalkSpeedKey, Options::WalkSpeed::Toggled);
+push3("Noclip", Options::Noclip::Enabled, Options::Noclip::ToggleType, Options::Noclip::NoclipKey, Options::Noclip::Toggled);
+push3("Orbit", Options::Orbit::Enabled, Options::Orbit::ToggleType, Options::Orbit::OrbitKey, Options::Orbit::Toggled);
+push3("Desync", Options::Desync::Enabled, Options::Desync::ToggleType, Options::Desync::DesyncKey, Options::Desync::Toggled);
+push3("Ramp Fling", Options::RampFling::Enabled, Options::RampFling::ToggleType, Options::RampFling::FlingKey, Options::RampFling::Toggled);
+push3("VoidHide", Options::VoidHide::Enabled, Options::VoidHide::ToggleType, Options::VoidHide::VoidHideKey, Options::VoidHide::Toggled);
+push3("Bhop", Options::Bhop::Enabled, 0, Options::Bhop::BhopKey, false);
 
-// Check Triggerbot
-if (Options::Triggerbot::Enabled && Options::Triggerbot::TriggerbotKey != 0)
+// ESP uses its own convention (ToggleType 0 = Always).
+if (Options::ESP::Enabled)
 {
-bool isActive = false;
-if (Options::Triggerbot::ToggleType == 1) // Toggle
-isActive = Options::Triggerbot::Toggled;
-else // Hold
-isActive = (GetAsyncKeyState(Options::Triggerbot::TriggerbotKey) & 0x8000) != 0;
-
-if (isActive)
-activeBinds.push_back({"Triggerbot", Options::Triggerbot::ToggleType == 1 ? "[Toggled]" : "[Hold]"});
-}
-
-// Check Fly
-if (Options::Fly::Enabled && Options::Fly::FlyKey != 0)
-{
-bool isActive = false;
-if (Options::Fly::ToggleType == 1) // Toggle
-isActive = Options::Fly::Toggled;
-else // Hold
-isActive = (GetAsyncKeyState(Options::Fly::FlyKey) & 0x8000) != 0;
-
-if (isActive)
-activeBinds.push_back({"Fly", Options::Fly::ToggleType == 1 ? "[Toggled]" : "[Hold]"});
-}
-
-// Check WalkSpeed
-if (Options::WalkSpeed::Enabled && Options::WalkSpeed::WalkSpeedKey != 0)
-{
-bool isActive = false;
-if (Options::WalkSpeed::ToggleType == 1) // Toggle
-isActive = Options::WalkSpeed::Toggled;
-else // Hold
-isActive = (GetAsyncKeyState(Options::WalkSpeed::WalkSpeedKey) & 0x8000) != 0;
-
-if (isActive)
-activeBinds.push_back({"WalkSpeed", Options::WalkSpeed::ToggleType == 1 ? "[Toggled]" : "[Hold]"});
+    const bool active = (Options::ESP::ToggleType == 0)
+        || (Options::ESP::ToggleType == 1 && Options::ESP::Toggled);
+    if (active)
+        activeBinds.push_back({ "ESP", Options::ESP::ToggleType == 0 ? "ALWAYS" : "ON" });
 }
 
 if (activeBinds.empty())
-return;
+    return;
 
-// Calculate dimensions - much smaller and compact
-float padding = 8.0f;
-float lineHeight = 14.0f;
-float titleHeight = 20.0f;
-float minWidth = 150.0f; // Reduced minimum width
-float maxWidth = minWidth;
+// ── Layout: near-black panel, accent spine on the left, badge pills on the right.
+ImFont* font = ImGui::GetFont();
+const float fs = ImGui::GetFontSize();
+const float pad = 10.0f;
+const float row_h = fs + 7.0f;
+const float title_h = 24.0f;
+const float badge_w = 56.0f;
+const float badge_gap = 10.0f;
 
-for (const auto& bind : activeBinds)
+float name_w = 0.0f;
+for (const auto& b : activeBinds)
+    name_w = std::max(name_w, font->CalcTextSizeA(fs, FLT_MAX, 0.0f, b.name).x);
+
+const float box_w = pad + name_w + badge_gap + badge_w + pad;
+const float box_h = title_h + activeBinds.size() * row_h + 7.0f;
+const ImVec2 pos(Options::Misc::KeybindListX, Options::Misc::KeybindListY);
+const ImVec2 p1(pos.x + box_w, pos.y + box_h);
+
+const int ax = (int)(main_color.x * 255), ay = (int)(main_color.y * 255), az = (int)(main_color.z * 255);
+const ImU32 accent = IM_COL32(ax, ay, az, 255);
+
+drawList->AddRectFilled(pos, p1, IM_COL32(10, 10, 10, 238), 6.0f);
+drawList->AddRect(pos, p1, IM_COL32(34, 34, 34, 255), 6.0f, 0, 1.0f);
+drawList->AddRectFilled(ImVec2(pos.x + 1.0f, pos.y + 7.0f), ImVec2(pos.x + 3.5f, p1.y - 7.0f), accent, 1.5f);
+
+// Title row: accent dot + label, live count on the right, hairline separator.
+const float cy = pos.y + (title_h - fs) * 0.5f;
+drawList->AddCircleFilled(ImVec2(pos.x + pad + 3.0f, pos.y + title_h * 0.5f), 3.0f, accent, 12);
+drawList->AddText(font, fs, ImVec2(pos.x + pad + 12.0f, cy), IM_COL32(200, 200, 205, 255), "KEYBINDS");
+char cnt[12];
+std::snprintf(cnt, sizeof(cnt), "%d", (int)activeBinds.size());
+const ImVec2 cnt_sz = font->CalcTextSizeA(fs - 1.0f, FLT_MAX, 0.0f, cnt);
+drawList->AddText(font, fs - 1.0f, ImVec2(p1.x - pad - cnt_sz.x, cy + 1.0f), IM_COL32(120, 120, 128, 255), cnt);
+drawList->AddLine(ImVec2(pos.x, pos.y + title_h), ImVec2(p1.x, pos.y + title_h), IM_COL32(255, 255, 255, 14));
+
+// Rows: name left, accent-outlined mode pill right.
+float y = pos.y + title_h + 4.0f;
+for (const auto& b : activeBinds)
 {
-std::string fullText = bind.first + " " + bind.second;
-float textWidth = ImGui::CalcTextSize(fullText.c_str()).x;
-if (textWidth > maxWidth)
-maxWidth = textWidth;
-}
+    drawList->AddText(font, fs, ImVec2(pos.x + pad, y), IM_COL32(232, 232, 236, 255), b.name);
 
-float boxWidth = maxWidth + padding * 2;
-float boxHeight = titleHeight + (activeBinds.size() * lineHeight) + padding;
+    const ImVec2 msz = font->CalcTextSizeA(fs - 2.0f, FLT_MAX, 0.0f, b.mode);
+    const ImVec2 b0(p1.x - pad - badge_w, y - 2.0f);
+    const ImVec2 b1(p1.x - pad, y - 2.0f + fs + 4.0f);
+    drawList->AddRectFilled(b0, b1, IM_COL32(ax * 60 / 255 + 10, ay * 60 / 255 + 10, az * 60 / 255 + 10, 130), 3.0f);
+    drawList->AddRect(b0, b1, IM_COL32(ax * 160 / 255, ay * 160 / 255, az * 160 / 255, 130), 3.0f, 0, 1.0f);
+    drawList->AddText(font, fs - 2.0f,
+        ImVec2(b0.x + (badge_w - msz.x) * 0.5f, b0.y + ((b1.y - b0.y) - msz.y) * 0.5f),
+        accent, b.mode);
 
-// Use custom position from sliders
-ImVec2 pos = ImVec2(Options::Misc::KeybindListX, Options::Misc::KeybindListY);
-
-// Draw background - fully opaque (255 alpha instead of 200)
-drawList->AddRectFilled(pos, ImVec2(pos.x + boxWidth, pos.y + boxHeight), IM_COL32(8, 8, 8, 255), 4.0f);
-drawList->AddRect(pos, ImVec2(pos.x + boxWidth, pos.y + boxHeight), IM_COL32(27, 27, 27, 255), 4.0f);
-
-// Draw title - centered
-const char* title = "Keybinds";
-float titleWidth = ImGui::CalcTextSize(title).x;
-float titleX = pos.x + (boxWidth - titleWidth) / 2.0f;
-drawList->AddText(ImVec2(titleX, pos.y + 4), IM_COL32(255, 255, 255, 255), title);
-drawList->AddLine(ImVec2(pos.x, pos.y + titleHeight), ImVec2(pos.x + boxWidth, pos.y + titleHeight), IM_COL32(27, 27, 27, 255));
-
-// Draw active binds - centered
-float yOffset = pos.y + titleHeight + 3;
-for (const auto& bind : activeBinds)
-{
-std::string fullText = bind.first + " " + bind.second;
-float textWidth = ImGui::CalcTextSize(fullText.c_str()).x;
-float textX = pos.x + (boxWidth - textWidth) / 2.0f;
-
-// Draw the full text centered
-drawList->AddText(ImVec2(textX, yOffset), IM_COL32(255, 255, 255, 255), bind.first.c_str());
-
-// Draw status in accent color right after the name
-float nameWidth = ImGui::CalcTextSize(bind.first.c_str()).x;
-drawList->AddText(ImVec2(textX + nameWidth + 5, yOffset), IM_COL32(main_color.x * 255, main_color.y * 255, main_color.z * 255, 255), bind.second.c_str());
-
-yOffset += lineHeight;
+    y += row_h;
 }
 }
 
@@ -2811,7 +3195,7 @@ static void RenderPlayerListWindow(bool* open)
     constexpr float margin = 3.f;
 
     static ImVec2 playerListPos = ImVec2(-1, -1);
-    static ImVec2 playerListSize = ImVec2(340.f, 430.f);
+    static ImVec2 playerListSize = ImVec2(380.f, 470.f);
     static bool playerListPosInitialized = false;
 
     if (!playerListPosInitialized)
@@ -2844,6 +3228,17 @@ static void RenderPlayerListWindow(bool* open)
     playerListPos = wp;
     playerListSize = ws;
     ImDrawList* draw = ImGui::GetWindowDrawList();
+
+    // Snapshot of the live player cache (never read the shared vector unlocked).
+    // Taken before the title bar so the count badge can show it too.
+    std::vector<RobloxPlayer> players;
+    {
+        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
+        players = Globals::Caches::CachedPlayerObjects;
+    }
+    std::string localName = Globals::Roblox::LocalPlayer.address ? Globals::Roblox::LocalPlayer.Name() : std::string();
+    static std::string selected;
+
     draw->AddRectFilled(wp, ImVec2(wp.x + ws.x, wp.y + title_h), IM_COL32(20, 20, 20, 255));
     const char* title = "player list";
     ImVec2 title_ts = ImGui::CalcTextSize(title);
@@ -2852,6 +3247,20 @@ static void RenderPlayerListWindow(bool* open)
     // Close button
     ImVec2 xsz = ImGui::CalcTextSize("X");
     float x_w = xsz.x + 14.f;
+
+    // Player-count pill, sits left of the close button.
+    {
+        char cnt[16];
+        std::snprintf(cnt, sizeof(cnt), "%zu", players.size());
+        const ImVec2 csz = ImGui::CalcTextSize(cnt);
+        const float pill_w = csz.x + 12.f;
+        const ImVec2 p0(wp.x + ws.x - x_w - pill_w - 6.f, wp.y + (title_h - 14.f) * 0.5f);
+        draw->AddRectFilled(p0, ImVec2(p0.x + pill_w, p0.y + 14.f),
+            IM_COL32((int)(main_color.x * 60), (int)(main_color.y * 60), (int)(main_color.z * 60), 170), 7.f);
+        draw->AddText(ImVec2(p0.x + (pill_w - csz.x) * 0.5f, p0.y + (14.f - csz.y) * 0.5f),
+            IM_COL32(235, 235, 235, 255), cnt);
+    }
+
     float drag_w = ws.x - x_w - 6.f;
     ImGui::SetCursorScreenPos(ImVec2(wp.x, wp.y));
     ImGui::InvisibleButton("##playerlist_drag", ImVec2(drag_w, title_h));
@@ -2873,21 +3282,25 @@ static void RenderPlayerListWindow(bool* open)
     float body_top = title_h + margin;
     float body_h = ws.y - body_top - margin;
 
+    const bool hasSelection = !selected.empty();
+    const float panel_h = hasSelection ? 112.f : 0.f;
+    const float list_h = body_h - (hasSelection ? panel_h : 0.f);
+
     ImGui::SetCursorPos(ImVec2(margin, body_top));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.18f, 0.18f, 0.18f, 1.f));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.06f, 0.06f, 0.06f, 1.f));
-    ImGui::BeginChild("##playerlist_body", ImVec2(ws.x - margin * 2.f, body_h), true);
+    ImGui::BeginChild("##playerlist_body", ImVec2(ws.x - margin * 2.f, list_h), true);
 
-    // Snapshot of the live player cache (never read the shared vector unlocked).
-    std::vector<RobloxPlayer> players;
-    {
-        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
-        players = Globals::Caches::CachedPlayerObjects;
-    }
-    std::string localName = Globals::Roblox::LocalPlayer.address ? Globals::Roblox::LocalPlayer.Name() : std::string();
-
-    static std::string selected;
-    float avail = ImGui::GetContentRegionAvail().x;
+    // Row layout constants (the body child uses zero padding, so everything is
+    // positioned by hand against the draw list).
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const float row_h = 42.f;
+    const float gap = 4.f;
+    const float pad = 8.f;
+    const float av_d = 30.f;
+    ImFont* const font = ImGui::GetFont();
+    const float fs = ImGui::GetFontSize();
 
     for (size_t i = 0; i < players.size(); i++)
     {
@@ -2899,56 +3312,177 @@ static void RenderPlayerListWindow(bool* open)
         int mark = PlayerFilter::GetMark(p.Name);
         bool isFriendly = PlayerFilter::IsFriend(p.Name);
 
-        const char* tag = "  ";
-        ImU32 tagCol = IM_COL32(150, 150, 150, 255);
-        if (mark == Options::PlayerFilter::Focus) { tag = "F "; tagCol = IM_COL32(80, 200, 120, 255); }
-        else if (mark == Options::PlayerFilter::Exclude) { tag = "X "; tagCol = IM_COL32(220, 90, 90, 255); }
-        if (isFriendly) { tag = "+ "; tagCol = IM_COL32(110, 170, 230, 255); }
-
-        std::string row = std::string(tag) + (isLocal ? std::string("[YOU] ") : std::string());
-        row += p.Name;
-        if (!p.TeamName.empty()) row += "  (" + p.TeamName + ")";
-
-        char id[48];
+        char id[64];
         std::snprintf(id, sizeof(id), "##plrow_%zu", i);
-        bool itemSel = (selected == p.Name);
-        if (ImGui::Selectable((row.c_str() + std::string(id)).c_str(), itemSel))
+        const ImVec2 r0 = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton(id, ImVec2(avail, row_h - gap));
+        const bool hovered = ImGui::IsItemHovered();
+        const bool itemSel = (selected == p.Name);
+        if (ImGui::IsItemClicked())
             selected = p.Name;
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s\nhealth %.0f/%.0f", p.Name.c_str(), p.Health, p.MaxHealth);
+
+        const ImVec2 r1(r0.x + avail, r0.y + row_h - gap);
+
+        // Row background: accent-tinted when selected, subtle lift on hover.
+        if (itemSel)
+            draw->AddRectFilled(r0, r1, IM_COL32((int)(main_color.x * 70), (int)(main_color.y * 70), (int)(main_color.z * 70), 90), 5.0f);
+        else if (hovered)
+            draw->AddRectFilled(r0, r1, IM_COL32(255, 255, 255, 14), 5.0f);
+
+        // Avatar: circular headshot with a status dot for friend/focus/exclude.
+        const ImVec2 avC(r0.x + pad + av_d * 0.5f, r0.y + (row_h - gap) * 0.5f);
+        std::int64_t uid = Cheat::Features::PlayerAvatars::LookupUserId(p.Name);
+        ID3D11ShaderResourceView* av = uid != 0 ? Cheat::Features::PlayerAvatars::Get(uid) : nullptr;
+        const ImVec2 avMin(avC.x - av_d * 0.5f, avC.y - av_d * 0.5f);
+        const ImVec2 avMax(avC.x + av_d * 0.5f, avC.y + av_d * 0.5f);
+        if (av)
+        {
+            draw->AddImageRounded((ImTextureID)av, avMin, avMax, ImVec2(0, 0), ImVec2(1, 1),
+                IM_COL32(255, 255, 255, 255), av_d * 0.5f);
+        }
+        else
+        {
+            draw->AddCircleFilled(avC, av_d * 0.5f, IM_COL32(42, 42, 46, 255), 24);
+            char initial[2] = { p.Name.empty() ? '?' : (char)toupper((unsigned char)p.Name[0]), 0 };
+            const ImVec2 isz = font->CalcTextSizeA(fs, FLT_MAX, 0.f, initial);
+            draw->AddText(font, fs, ImVec2(avC.x - isz.x * 0.5f, avC.y - isz.y * 0.5f),
+                IM_COL32(150, 150, 158, 255), initial);
+        }
+        draw->AddCircle(avC, av_d * 0.5f + 1.0f, IM_COL32(255, 255, 255, itemSel ? 70 : 32), 24, 1.2f);
+        if (mark != Options::PlayerFilter::None || isFriendly)
+        {
+            ImU32 dcol = IM_COL32(150, 150, 150, 255);
+            if (mark == Options::PlayerFilter::Exclude) dcol = IM_COL32(235, 84, 84, 255);
+            else if (mark == Options::PlayerFilter::Focus) dcol = IM_COL32(80, 210, 120, 255);
+            else if (isFriendly) dcol = IM_COL32(96, 165, 250, 255);
+            const ImVec2 dotC(avMax.x - 2.f, avMax.y - 2.f);
+            draw->AddCircleFilled(dotC, 4.5f, IM_COL32(10, 10, 10, 255), 12);
+            draw->AddCircleFilled(dotC, 3.2f, dcol, 12);
+        }
+
+        // Text block (name + sub line + health bar), clipped to the row.
+        const float text_x = r0.x + pad + av_d + 10.f;
+        const float row_right = r0.x + avail - pad;
+        const float bar_x0 = text_x;
+        float bar_x1 = text_x + font->CalcTextSizeA(fs, FLT_MAX, 0.f, p.Name.c_str()).x;
+        if (bar_x1 < text_x + 60.f)
+            bar_x1 = text_x + 60.f;
+        if (bar_x1 > row_right)
+            bar_x1 = row_right;
+        draw->PushClipRect(ImVec2(text_x - 2.f, r0.y - 2.f), ImVec2(row_right + 2.f, r1.y + 8.f), true);
+
+        const ImU32 nameCol = isLocal ? IM_COL32(120, 220, 160, 255) : IM_COL32(235, 235, 238, 255);
+        draw->AddText(font, fs, ImVec2(text_x, r0.y + 3.f), nameCol, p.Name.c_str());
+        if (isLocal)
+        {
+            const float nw = font->CalcTextSizeA(fs, FLT_MAX, 0.f, p.Name.c_str()).x;
+            const ImVec2 c0(text_x + nw + 6.f, r0.y + 3.f);
+            const ImVec2 csz(font->CalcTextSizeA(fs - 1.f, FLT_MAX, 0.f, "YOU").x + 8.f, fs);
+            draw->AddRectFilled(c0, ImVec2(c0.x + csz.x, c0.y + csz.y),
+                IM_COL32((int)(main_color.x * 90), (int)(main_color.y * 90), (int)(main_color.z * 90), 170), 3.f);
+            draw->AddText(font, fs - 1.f, ImVec2(c0.x + 4.f, c0.y + 1.5f), IM_COL32(255, 255, 255, 235), "YOU");
+        }
+
+        // Sub line: level + rank + team + tool, behind the rank icon when art exists.
+        std::string sub;
+        if (p.LevelResolved && p.Level >= 0)
+        {
+            char b[24];
+            std::snprintf(b, sizeof(b), "Lv %lld", static_cast<long long>(p.Level));
+            sub = b;
+        }
+        if (p.RankResolved && p.Elo >= 0)
+        {
+            if (!sub.empty()) sub += "  ";
+            sub += RankFromElo(p.Elo);
+        }
+        if (!p.TeamName.empty())
+        {
+            if (!sub.empty()) sub += "  ";
+            sub += p.TeamName;
+        }
+        if (!p.ToolName.empty())
+        {
+            if (!sub.empty()) sub += "  ";
+            sub += p.ToolName;
+        }
+
+        const float sy = r0.y + 9.f + fs;
+        float sx = text_x;
+        if (p.RankResolved && !p.RankStem.empty())
+        {
+            ImTextureID rankTex = RankIcons::Get(p.RankStem);
+            if (rankTex)
+            {
+                const float rs = (fs + 1.f > 16.f) ? 16.f : fs + 1.f;
+                draw->AddImageRounded(rankTex, ImVec2(sx, sy - 1.f), ImVec2(sx + rs, sy - 1.f + rs),
+                    ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 255), 2.f);
+                sx += rs + 5.f;
+            }
+        }
+        if (!sub.empty())
+            draw->AddText(font, fs - 1.f, ImVec2(sx, sy), IM_COL32(150, 150, 158, 255), sub.c_str());
+        draw->PopClipRect();
+
+        // Horizontal health bar under the name.
+        const float barY = r0.y + 4.f + fs;
+        draw->AddRectFilled(ImVec2(bar_x0, barY), ImVec2(bar_x1, barY + 3.f),
+            IM_COL32(255, 255, 255, 20), 1.5f);
+        const float frac = (p.MaxHealth > 0.f) ? std::clamp(p.Health / p.MaxHealth, 0.f, 1.f) : 0.f;
+        const ImU32 hcol = frac > 0.5f ? IM_COL32(76, 205, 120, 255)
+            : frac > 0.25f ? IM_COL32(240, 190, 60, 255)
+            : IM_COL32(235, 70, 70, 255);
+        const float fillW = (bar_x1 - bar_x0) * frac;
+        if (fillW > 1.f)
+            draw->AddRectFilled(ImVec2(bar_x0, barY), ImVec2(bar_x0 + fillW, barY + 3.f), hcol, 1.5f);
+
+        if (hovered)
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("%s%s", p.Name.c_str(), isLocal ? "  (you)" : "");
+            if (!p.TeamName.empty()) ImGui::Text("team   %s", p.TeamName.c_str());
+            if (!p.ToolName.empty()) ImGui::Text("tool   %s", p.ToolName.c_str());
+            if (p.RankResolved && p.Elo >= 0) ImGui::Text("rank   %s", RankFromElo(p.Elo));
+            ImGui::Text("health %.0f / %.0f", p.Health, p.MaxHealth);
+            ImGui::EndTooltip();
+        }
     }
 
     if (players.empty())
     {
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.f), "no players in cache");
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10.f);
+        ImGui::TextDisabled("no players in cache");
     }
 
-    ImGui::Separator();
+    ImGui::EndChild();
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar();
 
-    // Edit panel for the selected player.
-    ImGui::TextColored(ImVec4(0.75f, 0.75f, 0.75f, 1.f), "Selected: %s", selected.empty() ? "(none)" : selected.c_str());
-    if (!selected.empty())
+    // ── Selected-player action panel ────────────────────────────────────────
+    if (hasSelection)
     {
+        const bool selectedIsLocal = (selected == localName);
+
+        ImGui::SetCursorPos(ImVec2(margin, body_top + list_h));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.f, 6.f));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.18f, 0.18f, 0.18f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.07f, 0.07f, 0.07f, 1.f));
+        ImGui::BeginChild("##playerlist_panel", ImVec2(ws.x - margin * 2.f, panel_h - margin), true);
+
         int mark = PlayerFilter::GetMark(selected);
         bool isFriendly = PlayerFilter::IsFriend(selected);
-        const char* markLabel =
-            mark == Options::PlayerFilter::Focus ? "Focus" :
-            mark == Options::PlayerFilter::Exclude ? "Exclude" : "Default";
 
-        ImGui::Text("Mark: %s", markLabel);
+        ImGui::TextUnformatted(selected.c_str());
 
-        if (mark != Options::PlayerFilter::Exclude)
-            if (ImGui::SmallButton("Exclude"))
-                PlayerFilter::SetMark(selected, Options::PlayerFilter::Exclude);
+        // Row 1: filter marks + friend toggle.
+        if (mark != Options::PlayerFilter::Exclude && ImGui::SmallButton("Exclude"))
+            PlayerFilter::SetMark(selected, Options::PlayerFilter::Exclude);
         ImGui::SameLine();
-        if (mark != Options::PlayerFilter::Focus)
-            if (ImGui::SmallButton("Focus"))
-                PlayerFilter::SetMark(selected, Options::PlayerFilter::Focus);
+        if (mark != Options::PlayerFilter::Focus && ImGui::SmallButton("Focus"))
+            PlayerFilter::SetMark(selected, Options::PlayerFilter::Focus);
         ImGui::SameLine();
-        if (mark != Options::PlayerFilter::None)
-            if (ImGui::SmallButton("Clear"))
-                PlayerFilter::SetMark(selected, Options::PlayerFilter::None);
-
+        if (mark != Options::PlayerFilter::None && ImGui::SmallButton("Clear"))
+            PlayerFilter::SetMark(selected, Options::PlayerFilter::None);
         ImGui::SameLine();
         if (isFriendly)
         {
@@ -2961,12 +3495,52 @@ static void RenderPlayerListWindow(bool* open)
                 PlayerFilter::AddFriend(selected);
         }
 
+        // Row 2: spectate (drives the existing AimView camera-follow loop) + fling.
+        if (!selectedIsLocal)
+        {
+            const bool spectating = Options::ESP::AimView && Options::ESP::AimViewTarget == selected;
+            if (spectating)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(main_color.x * 0.55f, main_color.y * 0.55f, main_color.z * 0.55f, 1.f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(main_color.x * 0.75f, main_color.y * 0.75f, main_color.z * 0.75f, 1.f));
+                if (ImGui::SmallButton("Stop Spectating"))
+                {
+                    Options::ESP::AimView = false;
+                    Options::ESP::AimViewTarget.clear();
+                }
+                ImGui::PopStyleColor(2);
+            }
+            else if (ImGui::SmallButton("Spectate"))
+            {
+                Options::ESP::AimViewTarget = selected;
+                Options::ESP::AimView = true;
+            }
+            ImGui::SameLine();
+            if (PlayerFling::Busy())
+            {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.16f, 0.18f, 1.f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.16f, 0.16f, 0.18f, 1.f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.16f, 0.16f, 0.18f, 1.f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.55f, 0.55f, 1.f));
+                ImGui::SmallButton("flinging...");
+                ImGui::PopStyleColor(4);
+            }
+            else if (ImGui::SmallButton("Fling"))
+            {
+                PlayerFling::Start(selected);
+            }
+        }
+
+        // Row 3: persistent filter options.
         ImGui::Checkbox("Exclude Friends", &Options::PlayerFilter::ExcludeFriends);
+        ImGui::SameLine();
         ImGui::Checkbox("Focus Only", &Options::PlayerFilter::FocusOnly);
+
+        ImGui::EndChild();
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar();
     }
 
-    ImGui::EndChild();
-    ImGui::PopStyleColor(2);
     ImGui::End();
 }
 
@@ -3032,7 +3606,7 @@ void ShowImgui()
     OutputDebugStringA("[S] ShowImgui: Window created\n");
     SeraphLog("[S] ShowImgui: Window created, hwnd=0x" + std::to_string((uintptr_t)hwnd));
 
-    ::SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), 0, LWA_COLORKEY);
+    ::SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), (BYTE)g_OverlayAlpha, LWA_COLORKEY | LWA_ALPHA);
 
     // Publish the overlay HWND so the file-dialog helpers (configs.h)
     // can present Import/Export as modal-to-owner dialogs. This is what
@@ -3176,8 +3750,13 @@ ImGui_ImplWin32_Init(hwnd);
 OutputDebugStringA("[S] ShowImgui: Entering render loop\n");
     SeraphLog("[S] ShowImgui: Entering render loop");
     int frameCount = 0;
+    LARGE_INTEGER qpcFreq;
+    ::QueryPerformanceFrequency(&qpcFreq);
+    LARGE_INTEGER frameStart;
+    ::timeBeginPeriod(1);
     while (!done && Globals::running && !Globals::overlayShouldShutdown)
     {
+        ::QueryPerformanceCounter(&frameStart);
         if (frameCount == 0) {
             OutputDebugStringA("[S] ShowImgui: First frame\n");
         }
@@ -3226,7 +3805,14 @@ Executor::Tick();
 // Update player avatars
 Cheat::Features::PlayerAvatars::Tick();
 
+Cheat::Features::ServerBrowser::SetPlaceId((std::int64_t)Globals::Roblox::lastPlaceID);
+Cheat::Features::ServerBrowser::Tick();
+
 Globals::Viewport::Update();
+
+Globals::FrameCache::Update();
+
+Visibility::BeginFrame();
 
 // Bootstrap from persistent Options on the first frame, and again
 // after a runtime LoadConfig (Configs tab) completes. The latter
@@ -3253,12 +3839,42 @@ Globals::Roblox::LocalPlayer = RobloxInstance(Memory->read<uintptr_t>(Globals::R
 }
 }
 
-    if (Options::Misc::MenuKey != 0 && (GetAsyncKeyState(Options::Misc::MenuKey) & 1))
+    // Edge-detect on the 0x8000 down-state, NOT on the low bit of
+    // GetAsyncKeyState. The low bit is a consumable "pressed since last call"
+    // flag, and ImGui::NewFrame() above (imgui.cpp:11702) polls every key with
+    // GetAsyncKeyState, clearing that bit before this line is reached - so the
+    // old `& 1` test silently dropped most presses and the menu needed several
+    // key hits to react. 0x8000 is a live state, not an event, so nothing else
+    // can consume it. Every other hotkey in this project already works this way.
     {
-        menu_open = !menu_open;
-        gMenuWasEverOpen = true;
-        // Menu open -> clickable; menu closed -> click-through ESP layer. Window stays shown.
-        ApplyOverlayWindowStyle(hwnd, !menu_open);
+        static bool menuKeyWasDown = false;
+
+        if (Options::Misc::MenuKey != 0)
+        {
+            const bool menuKeyDown = (GetAsyncKeyState(Options::Misc::MenuKey) & 0x8000) != 0;
+
+            if (menuKeyDown && !menuKeyWasDown)
+            {
+                menu_open = !menu_open;
+                gMenuWasEverOpen = true;
+                // The auxiliary windows are menu-only: closing the menu closes
+                // the explorer and player list too so nothing lingers over the
+                // game in click-through mode.
+                if (!menu_open)
+                {
+                    Options::Misc::ExplorerEnabled = false;
+                    Options::Misc::PlayerListEnabled = false;
+                }
+                // Menu open -> clickable; menu closed -> click-through ESP layer. Window stays shown.
+                ApplyOverlayWindowStyle(hwnd, !menu_open);
+            }
+
+            menuKeyWasDown = menuKeyDown;
+        }
+        else
+        {
+            menuKeyWasDown = false;
+        }
     }
 
     // Fade animation (ease-cubic-out time-based, ported from jew-dick-hack
@@ -3302,6 +3918,17 @@ else
 SetWindowDisplayAffinity(hwnd, 0x00000000); // WDA_NONE
 }
 lastStreamProofState = Options::Misc::StreamProof;
+}
+
+// While the menu is closed the overlay is composited over the game with a
+// uniform window alpha (LWA_ALPHA) so everything drawn in-game -- including
+// an FOV fill -- blends smoothly instead of needing a dither, because a
+// layered window's pure-black colour key can only key whole pixels out.
+const int wantOverlayAlpha = 255;
+if (wantOverlayAlpha != g_OverlayAlpha)
+{
+g_OverlayAlpha = wantOverlayAlpha;
+::SetLayeredWindowAttributes(hwnd, RGB(0, 0, 0), (BYTE)g_OverlayAlpha, LWA_COLORKEY | LWA_ALPHA);
 }
 
 // Update accent colors from options (with rainbow + gradient support)
@@ -3350,8 +3977,9 @@ const float* themeAccent = nullptr;
 const float* themeAccent2 = nullptr;
 bool themeGradient = false;
 MenuThemes::Resolve(themeBg, themePanel, themeAccent, themeAccent2, themeGradient);
-// Whenever the user switches themes, restyle in-game feature colors so the
-// overlay matches. Per-feature pickers stay available afterwards.
+// Kept as a theme-change hook: ApplyFeatureColors is now a no-op, so switching
+// themes no longer overwrites the in-game feature colors (they stay at their
+// own defaults and the user's picks).
 static int lastAppliedTheme = -1;
 if (Options::Misc::MenuTheme != lastAppliedTheme)
 {
@@ -3631,7 +4259,7 @@ ImFont* menuFont = (MenuFonts::Count > 0
             const Row g0[] = { {0,"9","Aim"}, {2,"0","Rage"} };
             const Row g1[] = { {1,"8","Visuals"} };
             const Row g2[] = { {3,"1","Misc"}, {4,"5","Movement"} };
-            const Row g3[] = { {5,"6","Configs"}, {6,"3","Game"}, {7,"2","Executor"}, {8,"\xE2\x99\xAA","Music"} };
+            const Row g3[] = { {5,"6","Configs"}, {6,"3","Game"}, {7,"2","Executor"}, {8,"\xE2\x99\xAC","Music"} };
             const Row* groups[4] = { g0, g1, g2, g3 };
             const int groupN[4] = { 2, 1, 2, 4 };
 
@@ -3753,8 +4381,9 @@ if (tab == 0)
                 UI::SliderFloat("FOV", &Options::Aimbot::FOV, 10.f, 360.f, "%.0f");
 
 UI::labelsection("SMOOTHING & FEEL");
-            static const char* aimingMethods[]{ "Camera", "Mouse", "Silent" };
+            static const char* aimingMethods[]{ "Camera", "Mouse", "Silent", "Usilent" };
             UI::Combo("Method", &Options::Aimbot::AimingType, aimingMethods, IM_ARRAYSIZE(aimingMethods), halfW);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Usilent = raycast silent aim. Pick one method; Camera, Mouse and Silent all write the camera directly and will fight each other if combined.");
 
             static const char* smoothnessCurves[]{ "Linear", "Ease In", "Ease Out", "Ease In-Out", "Custom" };
             UI::Combo("Curve", &Options::Aimbot::SmoothnessCurve, smoothnessCurves, IM_ARRAYSIZE(smoothnessCurves), halfW);
@@ -3926,39 +4555,42 @@ UI::labelsection("SMOOTHING & FEEL");
                 UI::labelsection("SWITCHING");
                 UI::SliderFloat("Switch Delay (ms)", &Options::Aimbot::TargetSwitchDelay, 0.f, 1000.f, "%.0f");
 
-                UI::labelsection("SILENT AIM");
-                UI::Checkbox("Silent Aim", &Options::Aimbot::SilentAim);
-
-                if (Options::Aimbot::SilentAim || Options::Aimbot::AimingType == 2)
+                // Shown for both silent methods. It used to live only inside the
+                // Usilent panel, which left "Silent" - the method most people
+                // actually use - with no way to reach this setting and silently
+                // stuck on the delivery that cannot hit.
+                if (Options::Aimbot::AimingType == 2 || Options::Aimbot::AimingType == 3)
                 {
-                    static const char* silentModes[]{ "Camera Only", "Camera + Mouse Spoof" };
-                    UI::Combo("Silent Mode", &Options::Aimbot::SilentAimMode, silentModes, IM_ARRAYSIZE(silentModes), cardW);
-                    UI::Checkbox("Real Cursor Snap (hits on Overkill)", &Options::Aimbot::SilentAimRealCursor);
-                    UI::Tooltip("Snaps your real cursor onto the target while firing so the shot lands. Visible flick on Overkill.");
-                    UI::Checkbox("Teleport (no crosshair move)", &Options::Aimbot::SilentAimTeleport);
-                    UI::Tooltip("Teleports your character next to the target so the shot registers without moving the crosshair.");
+                    static const char* saDelivery[]{ "Camera Rotation (recommended)", "Viewport Offset (cosmetic on Rivals)", "Both" };
+                    UI::Combo("Delivery", &Options::Aimbot::SilentAimDelivery, saDelivery, IM_ARRAYSIZE(saDelivery), cardW);
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Which camera field the aim is written to.\n\nCamera Rotation aims the camera matrix itself. The view visibly moves, and this is the only mode measured to land shots reliably on Rivals.\n\nViewport Offset shifts Camera::Viewport, which leaves the view completely still - but on Rivals it displaces the rendered image WITHOUT changing the direction the bullet travels. Shots then only connect when the target happens to be near the centre of the screen. The arithmetic is correct; the game just does not steer the shot with it.");
+
+                    UI::Checkbox("Fast Camera Hold", &Options::Aimbot::SilentAimFastHold);
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Re-asserts the aim from a 5ms background thread instead of once per rendered frame.\n\nRaises the hit rate, because Roblox blends the camera back toward your input every frame and a single write per frame only survives that race part of the time.\n\nOFF by default. Every re-assert is a driver write that opens and closes a process handle, and that competes with the UI thread - which showed up as the menu being slow to open. If the menu or ESP feel heavy, leave this off; if single-fire shots are landing but not every time, this is what fixes it.");
                 }
 
-                UI::labelsection("RAYCAST SILENT AIM");
-                UI::Checkbox("Enabled", &Options::Aimbot::SilentAimEnabled);
-                UI::Tooltip("Raycast-based silent aim. Uses workspace raycast for hit verification.");
-                UI::Bind("##sa_key", &Options::Aimbot::SilentAimKey, &Options::Aimbot::SilentAimToggleType);
-
-                static const char* saToggleTypes[]{ "Hold", "Toggle", "Always On" };
-                UI::Combo("Mode##sa", &Options::Aimbot::SilentAimToggleType, saToggleTypes, IM_ARRAYSIZE(saToggleTypes), cardW);
-
-                if (Options::Aimbot::SilentAimEnabled)
+                // This whole panel is the configuration for AimingType 3 ("Usilent"),
+                // selected in the AIMBOT "Method" dropdown above. Per the request
+                // to keep it out of its own always-visible section, it only
+                // appears once that method is actually chosen.
+                if (Options::Aimbot::AimingType == 3)
                 {
-                    UI::SliderFloat("FOV", &Options::Aimbot::SilentAimFOV, 10.f, 300.f, "%.0f");
-                    UI::SliderFloat("Smoothness", &Options::Aimbot::SilentAimSmoothness, 0.f, 50.f, "%.1f");
-                    UI::Tooltip("0 = instant snap. Higher = smoother camera movement.");
+                    UI::labelsection("RAYCAST SILENT AIM (USILENT)");
+                    UI::Checkbox("Enabled", &Options::Aimbot::SilentAimEnabled);
+                    UI::Tooltip("Raycast-based silent aim. Uses workspace raycast for hit verification.");
+                    UI::Bind("##sa_key", &Options::Aimbot::SilentAimKey, &Options::Aimbot::SilentAimToggleType);
 
-                    static const char* saModes[]{ "Camera Rotation", "Mouse Move", "Both" };
-                    UI::Combo("Method", reinterpret_cast<int*>(&Options::Aimbot::SilentAimMethod), saModes, IM_ARRAYSIZE(saModes), cardW);
+                    static const char* saToggleTypes[]{ "Hold", "Toggle", "Always On" };
+                    UI::Combo("Mode##sa", &Options::Aimbot::SilentAimToggleType, saToggleTypes, IM_ARRAYSIZE(saToggleTypes), cardW);
 
-                    static const char* saDelivery[]{ "Viewport Offset", "Camera Rotation", "Both" };
-                    UI::Combo("Delivery", &Options::Aimbot::SilentAimDelivery, saDelivery, IM_ARRAYSIZE(saDelivery), cardW);
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("How the shot is delivered.\nViewport Offset shifts the projection so the shot is cast through the target - this is what Rivals honours reliably.\nCamera Rotation writes the camera matrix, which Roblox recomputes every frame and is only sampled some frames.");
+                    if (Options::Aimbot::SilentAimEnabled)
+                    {
+                        UI::SliderFloat("FOV", &Options::Aimbot::SilentAimFOV, 10.f, 300.f, "%.0f");
+                        UI::SliderFloat("Smoothness", &Options::Aimbot::SilentAimSmoothness, 0.f, 50.f, "%.1f");
+                        UI::Tooltip("0 = instant snap. Higher = smoother camera movement.");
+
+                        static const char* saModes[]{ "Camera Rotation", "Mouse Move", "Both" };
+                        UI::Combo("Method", reinterpret_cast<int*>(&Options::Aimbot::SilentAimMethod), saModes, IM_ARRAYSIZE(saModes), cardW);
 
                     UI::labelsection("HIT PART");
                     static const char* saHitModes[]{ "Fixed Part", "Closest Part", "Adaptive" };
@@ -4014,6 +4646,10 @@ UI::labelsection("SMOOTHING & FEEL");
                         UI::SliderFloat("Hold After Fire (ms)", &Options::Aimbot::SilentAimHoldMs, 0.f, 300.f, "%.0f");
                         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Keeps the aim applied for this long after the trigger is released, so the last shot of a burst still lands.");
                     }
+
+                    UI::Checkbox("Hold LMB to Aim (PF)", &Options::Aimbot::SilentAimHoldLMB);
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("PF only: while left mouse button is held, rotate the camera onto the target and restore it on release.");
+                }
                 }
 
                 UI::labelsection("SILENT LOCK");
@@ -4026,9 +4662,9 @@ UI::labelsection("SMOOTHING & FEEL");
                     static const char* lockModes[]{ "Camera Rotation", "Viewport Offset" };
                     UI::Combo("Lock Mode", &Options::Aimbot::SilentLockMode, lockModes, IM_ARRAYSIZE(lockModes), cardW);
                     UI::Checkbox("Target Line", &Options::Aimbot::TargetLine);
-                }
+}
 
-                UI::labelsection("AIM INFO");
+		UI::labelsection("AIM INFO");
                 UI::Checkbox("Enable", &Options::Aimbot::AimInfo);
                 UI::Tooltip("Draws a HUD with the current target's info at the top-right corner.");
                 UI::Checkbox("Name", &Options::Aimbot::AimInfoName);
@@ -4063,6 +4699,8 @@ UI::labelsection("SMOOTHING & FEEL");
 
                 if (Options::Aimbot::Prediction)
                 {
+                    UI::SliderFloat("Projectile Speed", &Options::Aimbot::ProjectileSpeed, 0.f, 2000.f, "%.0f");
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Bullet speed in studs/second. The range to the target is divided by this to get the flight time, and the target is led by that much of its velocity.\n0 disables leading. Rough values: AR ~350, SMG ~250, shotgun ~200, sniper ~4000 (near instant).");
                     UI::SliderFloat("Prediction X", &Options::Aimbot::PredictionX, 0.01f, 10.0f, "%.2f");
                     UI::SliderFloat("Prediction Y", &Options::Aimbot::PredictionY, 0.01f, 10.0f, "%.2f");
                 }
@@ -4291,8 +4929,9 @@ UI::labelsection("SMOOTHING & FEEL");
                         ImGui::InputText("Weapon Name", prof.Name, sizeof(prof.Name));
                         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Matches the held weapon name (case-insensitive).");
 
-                        static const char* wpMethods[]{ "Camera", "Mouse", "Silent" };
+                        static const char* wpMethods[]{ "Camera", "Mouse", "Silent", "Usilent" };
                         UI::Combo("Method", &prof.AimingType, wpMethods, IM_ARRAYSIZE(wpMethods));
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Usilent requires the Silent Aim checkbox below.");
                         UI::Checkbox("Silent Aim", &prof.SilentAim);
                         if (prof.SilentAim)
                         {
@@ -4459,6 +5098,11 @@ UI::labelsection("PLAYER INFO");
 	UI::Checkbox("Corner ESP", &Options::ESP::CornerESP);
 	UI::Checkbox("Tracers", &Options::ESP::Tracers);
 	UI::Checkbox("Skeleton", &Options::ESP::Skeleton);
+	if (Options::ESP::Skeleton)
+	{
+		UI::Checkbox("Visibility Colors", &Options::ESP::SkeletonVisibilityColor);
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Opt-in per-bone visibility coloring for the skeleton.\nBones with line of sight use the Visible color, occluded bones use the Hidden color (see the Visibility section).\nOff keeps the skeleton a single Skeleton Color.");
+	}
 	UI::Checkbox("Head Circle", &Options::ESP::HeadCircle);
 	UI::Checkbox("Head Dot", &Options::ESP::HeadDot);
 	UI::Checkbox("Arrows", &Options::ESP::Arrows);
@@ -4474,26 +5118,113 @@ UI::labelsection("PLAYER INFO");
 	UI::Checkbox("Local Only", &Options::ESP::LocalOnly);
 	UI::Checkbox("Avatar Icon", &Options::ESP::AvatarIcon);
 
+	// ── Model Changer ────────────────────────────────────────────────────────
+	// Overlays a model from the Models folder on the local player's character.
+	// The real character still drives movement and animation; the model follows.
+	UI::labelsection("MODEL CHANGER");
+	UI::Checkbox("Model Changer##mc", &Options::ModelChanger::Enabled);
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Draws a custom model over YOUR character.\nThe character keeps moving and animating; the model follows it.\nModels are read from the Models folder (.glb preferred, .obj fallback).");
+	if (Options::ModelChanger::Enabled)
+	{
+		const auto& mcModels = ModelChanger::GetModelList();
+		if (mcModels.empty())
+		{
+			ImGui::TextWrapped("No .glb or .obj models found in the Models folder.");
+		}
+		else
+		{
+			std::vector<const char*> mcNames;
+			mcNames.reserve(mcModels.size());
+			for (const auto& m : mcModels) mcNames.push_back(m.display.c_str());
+			if (Options::ModelChanger::Model < 0 || Options::ModelChanger::Model >= (int)mcNames.size())
+				Options::ModelChanger::Model = 0;
+			UI::Combo("Model##mc", &Options::ModelChanger::Model, mcNames.data(), (int)mcNames.size());
+		}
+		UI::Checkbox("Follow Facing##mc", &Options::ModelChanger::FollowFacing);
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Turn the model with your character's look direction.");
+		UI::Checkbox("Mirror Player##mc", &Options::ModelChanger::Animate);
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Pose the model from YOUR character's real parts: it walks when you\nwalk, jumps and falls with you, sits when you sit, and copies any emote\nyou perform. Works on any rig. Overrides the emote selection below\n(turn off to use emotes instead).");
+		UI::Checkbox("Hide Character##mc", &Options::ModelChanger::HideCharacter);
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hide YOUR character's body so only the model shows.\nWrites the character parts' Transparency (client-side).");
+		UI::SliderFloat("Scale##mc", &Options::ModelChanger::Scale, 0.5f, 6.0f, "%.2f");
+		UI::SliderFloat("Yaw Offset##mc", &Options::ModelChanger::YawOffset, -180.0f, 180.0f, "%.0f");
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rotate the model to correct a wrong default facing (degrees).");
+		UI::SliderFloat("Pitch Offset##mc", &Options::ModelChanger::PitchOffset, -90.0f, 90.0f, "%.0f");
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tilt the model if it is lying down (wrong up axis).");
+
+		// ── Emotes (skeletal animation for rigged models) ────────────────────
+		UI::Checkbox("Emotes##mc", &Options::ModelChanger::EmoteEnabled);
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Animate the model's skeleton (emotes).\nOnly rigged models with skin data can animate,\ne.g. the built-in RobloxR15Rigged model.");
+		if (Options::ModelChanger::Animate)
+		{
+			ImGui::TextWrapped("Mirror Player is on, so the model follows your movement.\nTurn it off to play the emotes below.");
+		}
+		if (Options::ModelChanger::EmoteEnabled && !Options::ModelChanger::Animate)
+		{
+			auto& em = EmoteSystem::EmoteManager::Get();
+			em.Initialize();
+			std::vector<const char*> emNames;
+			emNames.reserve(em.Count() + 1);
+			emNames.push_back("None");
+			for (int i = 0; i < em.Count(); ++i) emNames.push_back(em.Name(i));
+			int sel = Options::ModelChanger::Emote + 1; // 0 == None
+			if (sel < 0 || sel >= (int)emNames.size()) sel = 0;
+			if (UI::Combo("Emote##mc", &sel, emNames.data(), (int)emNames.size()))
+				Options::ModelChanger::Emote = sel - 1;
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Pick an emote to play on the model.");
+			UI::SliderFloat("Emote Speed##mc", &Options::ModelChanger::EmoteSpeed, 0.25f, 3.0f, "%.2f");
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Playback speed of the selected emote.");
+		}
+	}
+
+	// Rivals rank / level. Rank draws the tier icon when one exists for it and
+	// falls back to text otherwise, since only division 3 of each tier has art.
+	UI::labelsection("RANK / LEVEL");
+	UI::Checkbox("Rank", &Options::ESP::Rank);
+	if (Options::ESP::Rank)
+	{
+		UI::SliderFloat("Rank Icon Size", &Options::ESP::RankIconSize, 8.0f, 48.0f, "%.0f");
+		UI::Checkbox("Rank Icon Background", &Options::ESP::RankIconBackground);
+	}
+	UI::Checkbox("Level", &Options::ESP::Level);
+
+	// Our own leaderboard panel, shown while the key is held. Separate from
+	// Roblox's real TAB list, which we do not touch.
+	UI::Checkbox("Tab List", &Options::ESP::TabList);
+	if (Options::ESP::TabList && (Options::ESP::Rank || Options::ESP::Level))
+	{
+		UI::Bind("##tab_list_key", &Options::ESP::TabListKey, &Options::ESP::TabListToggle);
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("While held, the overlay draws its own player list with level and rank icon, sorted by ELO.\n\nThis is our own panel, not Roblox's real TAB list. Writing into the real one needs a Roblox string allocated inside the game process, which is not safe to do from an external read.");
+	}
+	// Decoding happens here rather than mid-frame, so the first enemy on screen
+	// does not stall on a disk read plus texture upload.
+	RankIcons::Preload();
+
 	UI::labelsection("BOX FILL");
 	UI::Checkbox("Box", &Options::ESP::Box);
 	if (Options::ESP::Box)
 	{
 		static const char* boxTypes[]{ "None", "Normal Box", "3D Box" };
 		UI::Combo("Type", &Options::ESP::BoxType, boxTypes, IM_ARRAYSIZE(boxTypes));
-		UI::Checkbox("Gradient Fill", &Options::ESP::BoxFillGradient);
-		if (Options::ESP::BoxFillGradient)
+		UI::Checkbox("Fill", &Options::ESP::BoxFill);
+		if (Options::ESP::BoxFill)
 		{
-			static const char* fillTypes[]{ "Vertical", "Horizontal", "Four-Corner" };
-			UI::Combo("Fill Type", &Options::ESP::BoxFillType, fillTypes, IM_ARRAYSIZE(fillTypes));
-			UI::Checkbox("Rotate Gradient", &Options::ESP::BoxFillGradientRotate);
-			if (Options::ESP::BoxFillGradientRotate)
-				UI::SliderFloat("Fill Speed", &Options::ESP::BoxFillSpeed, 0.1f, 10.0f, "%.1f");
-			UI::ColorEdit4("Top Color", Options::ESP::BoxFillTopColor, ImGuiColorEditFlags_NoInputs);
-			UI::ColorEdit4("Bottom Color", Options::ESP::BoxFillBottomColor, ImGuiColorEditFlags_NoInputs);
-		}
-		else
-		{
-			UI::ColorEdit4("Fill Color", Options::ESP::BoxFillColor, ImGuiColorEditFlags_NoInputs);
+			UI::Checkbox("Gradient Fill", &Options::ESP::BoxFillGradient);
+			UI::SliderFloat("Fill Opacity", &Options::ESP::BoxFillOpacity, 0.0f, 1.0f, "%.2f");
+			if (Options::ESP::BoxFillGradient)
+			{
+				static const char* fillTypes[]{ "Vertical", "Horizontal", "Four-Corner" };
+				UI::Combo("Fill Type", &Options::ESP::BoxFillType, fillTypes, IM_ARRAYSIZE(fillTypes));
+				UI::Checkbox("Rotate Gradient", &Options::ESP::BoxFillGradientRotate);
+				if (Options::ESP::BoxFillGradientRotate)
+					UI::SliderFloat("Fill Speed", &Options::ESP::BoxFillSpeed, 0.1f, 10.0f, "%.1f");
+				UI::ColorEdit4("Top Color", Options::ESP::BoxFillTopColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoAlpha);
+				UI::ColorEdit4("Bottom Color", Options::ESP::BoxFillBottomColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoAlpha);
+			}
+			else
+			{
+				UI::ColorEdit4("Fill Color", Options::ESP::BoxFillColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoAlpha);
+			}
 		}
 	}
 
@@ -4633,7 +5364,7 @@ if (Options::Combat::HitSounds)
         if (ImGui::Button("Preview", ImVec2(-1, 20)))
         {
             std::string path = Globals::HitSounds::FolderPath + "\\" + soundFiles[Options::Combat::HitSoundType];
-            PlaySoundA(path.c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+            CombatFeedback::PlaySoundFile(path);
         }
     }
 }
@@ -4691,10 +5422,40 @@ if (UI::CollapsibleSection("WORLD", halfW))
 
             static const char* skyPresets[]{ "Default", "Blue", "Night", "Storm", "Sunset", "Grass", "Plastic", "Red", "Purple", "Pink", "Gold" };
             UI::Combo("Sky Preset", &Options::World::SkyboxPreset, skyPresets, IM_ARRAYSIZE(skyPresets));
-            UI::Checkbox("Rotate Skybox", &Options::World::RotateSkybox);
-            if (Options::World::RotateSkybox)
-                UI::SliderFloat("Rotate Speed", &Options::World::SkyboxRotateSpeed, 0.1f, 10.0f, "%.1f");
-            }
+UI::Checkbox("Rotate Skybox", &Options::World::RotateSkybox);
+	if (Options::World::RotateSkybox)
+		UI::SliderFloat("Rotate Speed", &Options::World::SkyboxRotateSpeed, 0.1f, 10.0f, "%.1f");
+
+	UI::labelsection("WEATHER");
+	UI::Checkbox("Enabled", &Options::World::Weather::Enabled);
+	if (Options::World::Weather::Enabled)
+	{
+		static const char* weatherTypes[]{ "Snow", "Rain" };
+		UI::Combo("Type", &Options::World::Weather::Type, weatherTypes, IM_ARRAYSIZE(weatherTypes));
+
+		UI::SliderFloat("Intensity", &Options::World::Weather::Intensity, 50.0f, 1500.0f, "%.0f");
+		UI::SliderFloat("Speed", &Options::World::Weather::Speed, 0.1f, 4.0f, "%.2f");
+		UI::SliderFloat("Wind", &Options::World::Weather::Wind, -25.0f, 25.0f, "%.1f");
+		UI::Checkbox("Distance Haze", &Options::World::Weather::Haze);
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Fades distant precipitation toward the sky haze colour.\n\nThis is the main depth cue. Without it, far particles keep full colour and the effect reads as a flat sheet of stickers instead of weather receding into the distance.");
+
+		if (Options::World::Weather::Type == 0)
+		{
+			UI::SliderFloat("Snow Size", &Options::World::Weather::SnowSize, 0.4f, 4.0f, "%.2f");
+			UI::ColorEdit3("Snow Colour", &Options::World::Weather::SnowColor[0]);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Near-white with only a trace of cool tint, which is what an ice crystal actually looks like. Defaults to 245,249,255.");
+		}
+		else
+		{
+			UI::SliderFloat("Rain Thickness", &Options::World::Weather::RainThickness, 0.5f, 4.0f, "%.2f");
+			UI::SliderFloat("Rain Streak", &Options::World::Weather::RainStreak, 0.005f, 0.15f, "%.3f");
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shutter time. The streak is drawn along the drop's real velocity vector, so raising this lengthens the motion blur and slants it further with wind.");
+			UI::ColorEdit3("Rain Colour", &Options::World::Weather::RainColor[0]);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("A raindrop is colourless water; what you see is scattered light, which reads as desaturated cool grey. Defaults to 148,156,168 - deliberately not blue.");
+			UI::ColorEdit3("Splash Colour", &Options::World::Weather::SplashColor[0]);
+		}
+	}
+}
             UI::CollapsibleEnd();
 
 ImGui::SetCursorPosY(panelY);
@@ -4758,9 +5519,9 @@ UI::ColorEdit3("Distance Color", Options::ESP::DistanceColor, ImGuiColorEditFlag
 	UI::ColorEdit3("Corner Color", Options::ESP::CornerColor, ImGuiColorEditFlags_NoInputs);
 
 	UI::labelsection("BOX FILL");
-	UI::ColorEdit4("Fill Color", Options::ESP::BoxFillColor, ImGuiColorEditFlags_NoInputs);
-	UI::ColorEdit4("Fill Top Color", Options::ESP::BoxFillTopColor, ImGuiColorEditFlags_NoInputs);
-	UI::ColorEdit4("Fill Bottom Color", Options::ESP::BoxFillBottomColor, ImGuiColorEditFlags_NoInputs);
+	UI::ColorEdit4("Fill Color", Options::ESP::BoxFillColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoAlpha);
+	UI::ColorEdit4("Fill Top Color", Options::ESP::BoxFillTopColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoAlpha);
+	UI::ColorEdit4("Fill Bottom Color", Options::ESP::BoxFillBottomColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoAlpha);
 
 	UI::labelsection("HEALTHBAR");
 	UI::ColorEdit4("Health Top", Options::ESP::HealthbarTopColor, ImGuiColorEditFlags_NoInputs);
@@ -4913,7 +5674,7 @@ if (UI::SliderInt("Particles", &Options::Misc::ExteriumBGParticleCount, 8, 48, "
 UI::Checkbox("Glow", &Options::Misc::ExteriumBGParticleGlow);
 
 UI::labelsection("FOV FILL");
-UI::ColorEdit4("FOV Fill Color", Options::Aimbot::FOVFillColor, ImGuiColorEditFlags_NoInputs);
+UI::ColorEdit4("FOV Fill Color", Options::Aimbot::FOVFillColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoAlpha);
 }
 UI::CollapsibleEnd();
 }
@@ -5006,7 +5767,8 @@ if (Options::Aimbot::FOVSpin)
 
 UI::labelsection("COLOURS");
 UI::ColorEdit3("FOV Color", Options::Aimbot::FOVColor, ImGuiColorEditFlags_NoInputs);
-UI::ColorEdit3("FOV Fill", Options::Aimbot::FOVFillColor, ImGuiColorEditFlags_NoInputs);
+UI::ColorEdit4("FOV Fill", Options::Aimbot::FOVFillColor, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoAlpha);
+UI::SliderFloat("Fill Opacity", &Options::Aimbot::FOVFillOpacity, 0.0f, 1.0f, "%.2f");
 }
 UI::CollapsibleEnd();
 }
@@ -5031,6 +5793,8 @@ UI::Checkbox("Crosshair",      &Options::Crosshair::Enabled);
 	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Opens the Roblox instance explorer (datamodel tree + properties / bytecode).");
 	UI::Checkbox("Player List",    &Options::Misc::PlayerListEnabled);
 	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Opens the player list window to select, exclude, focus or mark players as friends.");
+	UI::Checkbox("Server Browser", &Options::Misc::ServerBrowserEnabled);
+	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Browse all public servers of the current game: players, ping, region and one-click join.");
 	UI::Checkbox("Third Person",   &Options::Misc::ThirdPerson);
 	if (ImGui::IsItemHovered()) ImGui::SetTooltip("Unlocks third-person camera in games that force first-person.");
 
@@ -5230,11 +5994,6 @@ if (UI::CollapsibleSection("NOCLIP", halfW))
 UI::labelsection("MAIN");
 UI::Checkbox("Enabled", &Options::Noclip::Enabled);
 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lets you walk through walls and solid objects.");
-
-bool noclipActive = Options::Noclip::Enabled &&
-(Options::Noclip::ToggleType == 2 ||
-(Options::Noclip::NoclipKey != 0 && Options::Noclip::Toggled));
-UI::Status(noclipActive ? "ACTIVE" : "INACTIVE", noclipActive);
 }
 UI::CollapsibleEnd();
 
@@ -5249,15 +6008,6 @@ if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hold = while key held, Toggle = p
 
 if (Options::Noclip::ToggleType != 2)
 UI::Bind("##noclip_key", &Options::Noclip::NoclipKey, &Options::Noclip::ToggleType);
-
-if (Options::Noclip::ToggleType == 1 && Options::Noclip::NoclipKey != 0)
-{
-ImGui::PushStyleColor(ImGuiCol_Button, Options::Noclip::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.5f) : ImVec4(0.15f, 0.15f, 0.18f, 0.8f));
-ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Options::Noclip::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.6f) : ImVec4(0.20f, 0.20f, 0.24f, 0.9f));
-if (ImGui::Button(Options::Noclip::Toggled ? "ACTIVE" : "INACTIVE", ImVec2(-1, 24)))
-Options::Noclip::Toggled = !Options::Noclip::Toggled;
-ImGui::PopStyleColor(2);
-}
 }
 UI::CollapsibleEnd();
 }
@@ -5275,15 +6025,6 @@ UI::Combo("Mode##ramp", &Options::RampFling::ToggleType, rampModes, IM_ARRAYSIZE
 
 if (Options::RampFling::ToggleType != 2)
 UI::Bind("##ramp_key", &Options::RampFling::FlingKey, &Options::RampFling::ToggleType);
-
-if (Options::RampFling::ToggleType == 1 && Options::RampFling::FlingKey != 0)
-{
-ImGui::PushStyleColor(ImGuiCol_Button, Options::RampFling::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.5f) : ImVec4(0.15f, 0.15f, 0.18f, 0.8f));
-ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Options::RampFling::Toggled ? ImVec4(main_color.x, main_color.y, main_color.z, 0.6f) : ImVec4(0.20f, 0.20f, 0.24f, 0.9f));
-if (ImGui::Button(Options::RampFling::Toggled ? "ACTIVE" : "INACTIVE", ImVec2(-1, 24)))
-Options::RampFling::Toggled = !Options::RampFling::Toggled;
-ImGui::PopStyleColor(2);
-}
 }
 UI::CollapsibleEnd();
 
@@ -5448,6 +6189,35 @@ UI::Checkbox("Infinite Ammo", &Options::ArsenalGunmods::InfiniteAmmo);
 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows the current curse name on the HUD. Enabled automatically with Infinite Ammo.");
 }
 UI::CollapsibleEnd();
+
+UI::labelsection("DIAGNOSTICS");
+if (UI::CollapsibleSection("GAME DIAGNOSTICS", fullW, true))
+{
+    ImGui::Text("Game compatibility diagnostics");
+    ImGui::Separator();
+
+    if (ImGui::Button("Run Full Diagnostics"))
+    {
+        Diagnostics::DumpAssetIdsManual();
+        Diagnostics::DumpEnvironmentManual();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Dump Asset IDs"))
+        Diagnostics::DumpAssetIdsManual();
+
+    ImGui::SameLine();
+    if (ImGui::Button("Dump Environment"))
+        Diagnostics::DumpEnvironmentManual();
+
+    ImGui::Separator();
+    ImGui::Text("Auto-diagnostics runs in background on game join.");
+    ImGui::Text("Files include PlaceId in name (e.g. seraph_assetids_123456.txt)");
+    ImGui::BulletText("seraph_assetids_<PlaceId>.txt");
+    ImGui::BulletText("seraph_env_<PlaceId>.txt");
+}
+UI::CollapsibleEnd();
+
 }
 else if (tab == 7)
 {
@@ -5579,7 +6349,7 @@ else if (tab == 7)
             UI::ContentHeader("SPOTIFY VISUALIZER");
             
             // Main visualizer area
-            float visHeight = std::max(0.0f, (s.y - 58.0f * sc - 8.0f * sc) - 60.0f * sc);
+            float visHeight = std::max(0.0f, (s.y - 58.0f * sc - 8.0f * sc) - 140.0f * sc);
             ImVec2 visPos = ImGui::GetCursorScreenPos();
             ImVec2 visSize(fullW, visHeight);
             
@@ -5588,6 +6358,38 @@ else if (tab == 7)
             
             // Reserve space for the visualizer
             ImGui::Dummy(visSize);
+            
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            UI::ContentHeader("MINIPLAYER");
+            UI::Checkbox("Enable Miniplayer", &Options::Music::Miniplayer);
+            UI::Tooltip("Compact floating player over the game: album art background,\nprev / play / next, seek bar, title and artist.\nDrag it while the menu is open to reposition it;\nin-game, hover it to use the controls.");
+            if (Options::Music::Miniplayer)
+            {
+                const ImVec2 disp = ImGui::GetIO().DisplaySize;
+                UI::SliderFloat("Position X", &Options::Music::MiniplayerX, 0.0f, disp.x, "%.0f");
+                UI::SliderFloat("Position Y", &Options::Music::MiniplayerY, 0.0f, disp.y, "%.0f");
+                UI::SliderFloat("Size", &Options::Music::MiniplayerSize, 0.7f, 1.6f, "%.2fx");
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            
+            // Media keybinds
+            UI::ContentHeader("MEDIA KEYBINDS");
+            UI::Bind("Play / Pause", &Options::Misc::MediaPlayPauseKey, &Options::Misc::MediaToggleType);
+            ImGui::SameLine(0, 16.0f * sc);
+            UI::Bind("Next Track", &Options::Misc::MediaNextKey, &Options::Misc::MediaToggleType);
+            ImGui::Spacing();
+            UI::Bind("Previous Track", &Options::Misc::MediaPrevKey, &Options::Misc::MediaToggleType);
+            ImGui::SameLine(0, 16.0f * sc);
+            UI::Bind("Stop", &Options::Misc::MediaStopKey, &Options::Misc::MediaToggleType);
+            
+            ImGui::Spacing();
+            UI::Tooltip("Global keybinds work system-wide via Windows Media Session API.\nDefaults: Play/Pause = Media Play/Pause key, Next = Media Next, Prev = Media Prev, Stop = Media Stop.");
         }
         ImGui::EndChild();
     }
@@ -5618,145 +6420,36 @@ if (tab == 1 && tab2 == 0 && Options::ESP::Enabled && menuAlpha > 0.0f && menuPo
     RenderESPPreview(dl, previewPos, previewSize);
 }
 
-// Active binds list
-if (Options::Misc::KeybindList)
-{
-    struct BindEntry { const char* name; const char* mode; };
-    static std::vector<BindEntry> activeBinds;
-    activeBinds.clear();
+// ---- MINIPLAYER: floating now-playing card, drawn above everything ----
+if (Options::Music::Miniplayer)
+    SpotifyVisualizer::RenderMiniplayer(ImGui::GetForegroundDrawList(), menu_open);
+UpdateMiniplayerClickThrough(hwnd, menu_open);
 
-if (Options::Fly::Enabled)
-{
-bool isActive = false;
-if (Options::Fly::ToggleType == 2) isActive = true;
-else if (Options::Fly::ToggleType == 1) isActive = Options::Fly::Toggled;
-else if (Options::Fly::FlyKey != 0) isActive = (GetAsyncKeyState(Options::Fly::FlyKey) & 0x8000) != 0;
-const char* modeLabel = Options::Fly::ToggleType == 2 ? "[On]" :
-Options::Fly::ToggleType == 1 ? "[Toggled]" : "[Hold]";
-if (isActive) activeBinds.push_back({"Fly", modeLabel});
-}
+// Published unconditionally. It used to sit inside the IsGameOnTop("Roblox")
+    // block below, which meant the flag was never updated on the one frame that
+    // mattered: opening the menu takes focus away from Roblox, so IsGameOnTop
+    // went false, the write was skipped, and the delivery worker kept driving
+    // the camera while the user was in the menu. That is what turned a single
+    // toggle into twenty clicks - the game window was being fought underneath
+    // the UI the whole time.
+    SilentAim::s_MenuVisible = menu_open;
 
-if (Options::WalkSpeed::Enabled)
-{
-bool isActive = false;
-if (Options::WalkSpeed::ToggleType == 2) isActive = true;
-else if (Options::WalkSpeed::ToggleType == 1) isActive = Options::WalkSpeed::Toggled;
-else if (Options::WalkSpeed::WalkSpeedKey != 0) isActive = (GetAsyncKeyState(Options::WalkSpeed::WalkSpeedKey) & 0x8000) != 0;
-const char* modeLabel = Options::WalkSpeed::ToggleType == 2 ? "[On]" :
-Options::WalkSpeed::ToggleType == 1 ? "[Toggled]" : "[Hold]";
-if (isActive) activeBinds.push_back({"WalkSpeed", modeLabel});
-}
+    FovFillWindow::Active = false;
+    FovFillWindow::ExcludeFromCapture = Options::Misc::StreamProof;
+    FovFillWindow::OverlayHwnd = hwnd;
 
-if (Options::Noclip::Enabled)
-{
-bool isActive = false;
-if (Options::Noclip::ToggleType == 2) isActive = true;
-else if (Options::Noclip::ToggleType == 1) isActive = Options::Noclip::Toggled;
-else if (Options::Noclip::NoclipKey != 0) isActive = (GetAsyncKeyState(Options::Noclip::NoclipKey) & 0x8000) != 0;
-const char* modeLabel = Options::Noclip::ToggleType == 2 ? "[On]" :
-Options::Noclip::ToggleType == 1 ? "[Toggled]" : "[Hold]";
-if (isActive) activeBinds.push_back({"Noclip", modeLabel});
-}
+    BoxFillWindow::Active = true;
+    BoxFillWindow::ExcludeFromCapture = Options::Misc::StreamProof;
+    BoxFillWindow::OverlayHwnd = hwnd;
+    BoxFillWindow::Begin();
 
-if (Options::Orbit::Enabled)
-{
-bool isActive = false;
-if (Options::Orbit::ToggleType == 2) isActive = true;
-else if (Options::Orbit::ToggleType == 1) isActive = Options::Orbit::Toggled;
-else if (Options::Orbit::OrbitKey != 0) isActive = (GetAsyncKeyState(Options::Orbit::OrbitKey) & 0x8000) != 0;
-const char* modeLabel = Options::Orbit::ToggleType == 2 ? "[On]" :
-Options::Orbit::ToggleType == 1 ? "[Toggled]" : "[Hold]";
-if (isActive) activeBinds.push_back({"Orbit", modeLabel});
-}
-
-if (Options::Desync::Enabled)
-{
-bool isActive = false;
-if (Options::Desync::ToggleType == 2) isActive = true;
-else if (Options::Desync::ToggleType == 1) isActive = Options::Desync::Toggled;
-else if (Options::Desync::DesyncKey != 0) isActive = (GetAsyncKeyState(Options::Desync::DesyncKey) & 0x8000) != 0;
-const char* modeLabel = Options::Desync::ToggleType == 2 ? "[On]" :
-Options::Desync::ToggleType == 1 ? "[Toggled]" : "[Hold]";
-if (isActive) activeBinds.push_back({"Desync", modeLabel});
-}
-
-if (Options::RampFling::Enabled)
-{
-bool isActive = false;
-if (Options::RampFling::ToggleType == 2) isActive = true;
-else if (Options::RampFling::ToggleType == 1) isActive = Options::RampFling::Toggled;
-else if (Options::RampFling::FlingKey != 0) isActive = (GetAsyncKeyState(Options::RampFling::FlingKey) & 0x8000) != 0;
-const char* modeLabel = Options::RampFling::ToggleType == 2 ? "[On]" :
-Options::RampFling::ToggleType == 1 ? "[Toggled]" : "[Hold]";
-if (isActive) activeBinds.push_back({"Ramp Fling", modeLabel});
-}
-
-if (Options::VoidHide::Enabled)
-{
-bool isActive = false;
-if (Options::VoidHide::ToggleType == 2) isActive = true;
-else if (Options::VoidHide::ToggleType == 1) isActive = Options::VoidHide::Toggled;
-else if (Options::VoidHide::VoidHideKey != 0) isActive = (GetAsyncKeyState(Options::VoidHide::VoidHideKey) & 0x8000) != 0;
-const char* modeLabel = Options::VoidHide::ToggleType == 2 ? "[On]" :
-Options::VoidHide::ToggleType == 1 ? "[Toggled]" : "[Hold]";
-if (isActive) activeBinds.push_back({"VoidHide", modeLabel});
-}
-
-if (Options::Bhop::Enabled && Options::Bhop::BhopKey != 0 &&
-(GetAsyncKeyState(Options::Bhop::BhopKey) & 0x8000) != 0)
-{
-activeBinds.push_back({"Bhop", "[Hold]"});
-}
-
-if (Options::ESP::Enabled)
-{
-bool isActive = false;
-if (Options::ESP::ToggleType == 0) isActive = true;
-else if (Options::ESP::ToggleType == 1) isActive = Options::ESP::Toggled;
-const char* modeLabel = Options::ESP::ToggleType == 0 ? "[Always]" : Options::ESP::Toggled ? "[On]" : "[Off]";
-if (isActive) activeBinds.push_back({"ESP", modeLabel});
-}
-
-if (!activeBinds.empty())
-{
-auto* drawList = ImGui::GetBackgroundDrawList();
-float yOffset = Options::Misc::KeybindListY;
-float maxWidth = 0;
-
-for (auto& b : activeBinds)
-{
-std::string line = std::string(b.name) + " " + b.mode;
-float w = ImGui::CalcTextSize(line.c_str()).x;
-if (w > maxWidth) maxWidth = w;
-}
-
-float boxW = maxWidth + 20.0f;
-float lineH = ImGui::GetTextLineHeight() + 4.0f;
-float boxH = activeBinds.size() * lineH + 10.0f;
-
-drawList->AddRectFilled(
-ImVec2(Options::Misc::KeybindListX - 5, yOffset - 5),
-ImVec2(Options::Misc::KeybindListX + boxW, yOffset + boxH),
-IM_COL32(20, 20, 20, 255));
-
-for (size_t i = 0; i < activeBinds.size(); i++)
-{
-std::string line = std::string(activeBinds[i].name) + " " + activeBinds[i].mode;
-drawList->AddText(
-ImVec2(Options::Misc::KeybindListX, yOffset + i * lineH),
-IM_COL32(255, 255, 255, 255),
-line.c_str());
-}
-}
-}
-
-if (IsGameOnTop("Roblox"))
-{
-	AntiKatanaFiringBlocked();
-	CombatFeedback::Update();
-	if (!menu_open)
-	{
-		RunAimCore(ImGui::GetBackgroundDrawList());
+    if (IsGameOnTop("Roblox"))
+    {
+        AntiKatanaFiringBlocked();
+        CombatFeedback::Update();
+        if (!menu_open)
+        {
+            RunAimCore(ImGui::GetBackgroundDrawList());
 		RunMacro();
 	}
 	RunTriggerbot();
@@ -5769,6 +6462,15 @@ if (IsGameOnTop("Roblox"))
 		RenderKatanaAlert(ImGui::GetBackgroundDrawList());
 	CombatFeedback::Render(ImGui::GetBackgroundDrawList());
 	RenderESP(ImGui::GetBackgroundDrawList());
+
+	// Mode Changer sits on top of the world pass: it overlays a model on the local
+	// player's character and is independent of whether any ESP feature is enabled.
+	ModelChanger::RenderModeChanger(ImGui::GetBackgroundDrawList());
+
+	// Precipitation draws after the world/player pass so droplets and flakes
+	// composite over the scene rather than being hidden behind ESP geometry.
+	if ( Options::World::Weather::Enabled )
+		WorldWeather::Render( ImGui::GetBackgroundDrawList() );
 
 	if (Options::ESP::LodLine || (Options::ESP::AimView && !Options::ESP::AimViewTarget.empty()))
 		LodLineVisual::Render(ImGui::GetBackgroundDrawList());
@@ -5793,11 +6495,17 @@ MenuWeather::Render(ImGui::GetBackgroundDrawList(), ImVec2(0.0f, 0.0f), displayS
 RenderKeybindList(ImGui::GetBackgroundDrawList());
 }
 
+FovFillWindow::Present();
+BoxFillWindow::Present();
+
 if (Options::Misc::ExplorerEnabled)
     gui::render_explorer_window(&Options::Misc::ExplorerEnabled);
 
 if (Options::Misc::PlayerListEnabled)
     RenderPlayerListWindow(&Options::Misc::PlayerListEnabled);
+
+if (Options::Misc::ServerBrowserEnabled)
+    Cheat::Features::ServerBrowser::RenderWindow(&Options::Misc::ServerBrowserEnabled);
 
 // Render draw.* items produced by running scripts (before the final commit).
 Executor::RenderOverlay(ImGui::GetBackgroundDrawList());
@@ -5808,9 +6516,24 @@ g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
 g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear_color_with_alpha);
 ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-HRESULT hr = g_pSwapChain->Present(1, 0);
+HRESULT hr = g_pSwapChain->Present(0, 0);
 g_SwapChainOccluded = (hr == DXGI_STATUS_OCCLUDED);
+
+const double frameBudget = 1.0 / 240.0;
+for (;;)
+{
+    LARGE_INTEGER now;
+    ::QueryPerformanceCounter(&now);
+    const double elapsed = (double)(now.QuadPart - frameStart.QuadPart) / (double)qpcFreq.QuadPart;
+    const double remaining = frameBudget - elapsed;
+    if (remaining <= 0.0)
+        break;
+    if (remaining >= 0.0015)
+        ::Sleep((DWORD)((remaining - 0.0005) * 1000.0));
 }
+}
+
+::timeEndPeriod(1);
 
 SpotifyVisualizer::Shutdown();
 

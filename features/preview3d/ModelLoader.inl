@@ -395,6 +395,46 @@ bool GLBReadVec2(const unsigned char* base, int byteOffset,
     return false;
 }
 
+// Reads a 4-component float attribute (WEIGHTS_0).
+void GLBReadVec4(const unsigned char* base, int stride, int index, float out[4])
+{
+    memcpy(out, base + index * stride, 16);
+}
+
+// Reads a 4-component integer attribute (JOINTS_0), any integer component type.
+void GLBReadJoints(const unsigned char* base, int componentType, int stride,
+                   int index, unsigned int out[4])
+{
+    const unsigned char* p = base + index * stride;
+    for (int k = 0; k < 4; ++k) {
+        if (componentType == 5121) out[k] = p[k];
+        else if (componentType == 5123) { unsigned short v; memcpy(&v, p + k * 2, 2); out[k] = v; }
+        else if (componentType == 5125) { memcpy(&out[k], p + k * 4, 4); }
+        else out[k] = 0;
+    }
+}
+
+// Reads a glTF MAT4. glTF stores matrices column-major; copying the flat
+// 16-float run straight into a row-major matrix already gives the row-vector
+// (D3D) form the renderer uses, so no extra transpose is applied.
+void GLBReadMat4(const unsigned char* base, int stride, int index, float out[16])
+{
+    memcpy(out, base + index * stride, 64);
+}
+
+// Composes T * R * S (glTF convention) into a row-major matrix for D3D math.
+void GLBComposeTRS(const float t[3], const float q[4], const float s[3], float out[16])
+{
+    const float x = q[0], y = q[1], z = q[2], w = q[3];
+    const float r00 = 1 - 2 * (y * y + z * z); const float r01 = 2 * (x * y + w * z); const float r02 = 2 * (x * z - w * y);
+    const float r10 = 2 * (x * y - w * z);     const float r11 = 1 - 2 * (x * x + z * z); const float r12 = 2 * (y * z + w * x);
+    const float r20 = 2 * (x * z + w * y);     const float r21 = 2 * (y * z - w * x);     const float r22 = 1 - 2 * (x * x + y * y);
+    out[0] = r00 * s[0]; out[1] = r01 * s[1]; out[2] = r02 * s[2]; out[3] = 0;
+    out[4] = r10 * s[0]; out[5] = r11 * s[1]; out[6] = r12 * s[2]; out[7] = 0;
+    out[8] = r20 * s[0]; out[9] = r21 * s[1]; out[10] = r22 * s[2]; out[11] = 0;
+    out[12] = t[0]; out[13] = t[1]; out[14] = t[2]; out[15] = 1;
+}
+
 bool ParseGLB(const std::vector<unsigned char>& fileData,
               LoadedModel& out, GLBTexture* embedded_tex)
 {
@@ -470,12 +510,81 @@ bool ParseGLB(const std::vector<unsigned char>& fileData,
             int s = bufferViews[acc.bufferView].byteStride;
             if (s > 0) return s;
         }
-        if (acc.type == "SCALAR") return 4;
-        if (acc.type == "VEC2") return 8;
-        if (acc.type == "VEC3") return 12;
-        if (acc.type == "VEC4") return 16;
-        return 0;
+        // Component type sizes (only needed when the buffer view is tightly packed).
+        int cs = 4;
+        if (acc.componentType == 5120 || acc.componentType == 5121) cs = 1;
+        else if (acc.componentType == 5122 || acc.componentType == 5123) cs = 2;
+        int comps = 1;
+        if (acc.type == "VEC2") comps = 2;
+        else if (acc.type == "VEC3") comps = 3;
+        else if (acc.type == "VEC4") comps = 4;
+        else if (acc.type == "MAT4") comps = 16;
+        return comps * cs;
     };
+
+    // ── Skeleton nodes + skin (glTF skeletal animation) ──────────────────────
+    if (root.contains("nodes")) {
+        int firstMesh = -1, skinnedMesh = -1;
+        for (auto& n : root["nodes"]) {
+            ModelNode mn;
+            mn.name = n.value("name", std::string());
+            if (n.contains("matrix") && n["matrix"].is_array() && n["matrix"].size() == 16) {
+                // glTF MAT4 arrays are column-major; reading them straight into
+                // a row-major matrix yields the row-vector form used downstream.
+                for (int i = 0; i < 16; ++i) mn.local[i] = n["matrix"][i].get<float>();
+            } else {
+                float t[3] = { 0,0,0 }, q[4] = { 0,0,0,1 }, s[3] = { 1,1,1 };
+                if (n.contains("translation")) { auto& a = n["translation"]; for (int i = 0; i < 3; ++i) t[i] = a[i].get<float>(); }
+                if (n.contains("rotation"))    { auto& a = n["rotation"];    for (int i = 0; i < 4; ++i) q[i] = a[i].get<float>(); }
+                if (n.contains("scale"))       { auto& a = n["scale"];       for (int i = 0; i < 3; ++i) s[i] = a[i].get<float>(); }
+                GLBComposeTRS(t, q, s, mn.local);
+            }
+            if (n.contains("mesh")) {
+                const int ni = (int)out.nodes.size();
+                if (firstMesh < 0) firstMesh = ni;
+                if (skinnedMesh < 0 && n.contains("skin")) skinnedMesh = ni;
+            }
+            out.nodes.push_back(mn);
+        }
+        // Vertices live in this node's local space; the renderer drops node
+        // transforms, so skinning must be expressed in this node's frame.
+        out.meshNode = skinnedMesh >= 0 ? skinnedMesh : firstMesh;
+        for (int i = 0; i < (int)root["nodes"].size(); ++i) {
+            auto& n = root["nodes"][i];
+            if (!n.contains("children")) continue;
+            for (auto& ch : n["children"]) {
+                int ci = ch.get<int>();
+                if (ci >= 0 && ci < (int)out.nodes.size())
+                    out.nodes[ci].parent = i;
+            }
+        }
+    }
+
+    if (root.contains("skins") && !root["skins"].empty()) {
+        auto& sk = root["skins"][0];
+        if (sk.contains("joints")) {
+            for (auto& j : sk["joints"])
+                out.skinJoints.push_back(j.get<int>());
+        }
+        int ibmIdx = sk.value("inverseBindMatrices", -1);
+        if (ibmIdx >= 0 && ibmIdx < (int)accessors.size()) {
+            auto& acc = accessors[ibmIdx];
+            const unsigned char* d = getBufferData(acc);
+            int stride = getStride(acc);
+            if (stride <= 0) stride = 64;
+            if (d && acc.componentType == 5126 && acc.type == "MAT4") {
+                out.invBind.resize(out.skinJoints.size() * 16);
+                for (int i = 0; i < (int)out.skinJoints.size(); ++i)
+                    GLBReadMat4(d, stride, i, &out.invBind[i * 16]);
+            }
+        }
+        for (int s = 0; s < (int)out.skinJoints.size(); ++s) {
+            int ni = out.skinJoints[s];
+            if (ni >= 0 && ni < (int)out.nodes.size())
+                out.nodes[ni].jointSlot = s;
+        }
+        out.hasSkin = !out.skinJoints.empty();
+    }
 
     std::vector<ModelPartAABB> groupParts;
 
@@ -543,6 +652,8 @@ bool ParseGLB(const std::vector<unsigned char>& fileData,
             int normIdx = attrs.value("NORMAL", -1);
             int uvIdx = attrs.value("TEXCOORD_0", -1);
             int idxIdx = prim.value("indices", -1);
+            int jointIdx = attrs.value("JOINTS_0", -1);
+            int weightIdx = attrs.value("WEIGHTS_0", -1);
 
             if (posIdx < 0 || posIdx >= (int)accessors.size()) continue;
 
@@ -563,6 +674,23 @@ bool ParseGLB(const std::vector<unsigned char>& fileData,
             if (uvIdx >= 0 && uvIdx < (int)accessors.size()) {
                 uvData = getBufferData(accessors[uvIdx]);
                 uvStride = getStride(accessors[uvIdx]);
+            }
+
+            const unsigned char* jointData = nullptr;
+            int jointStride = 0, jointCt = 0;
+            if (jointIdx >= 0 && jointIdx < (int)accessors.size()) {
+                auto& a = accessors[jointIdx];
+                jointData = getBufferData(a);
+                jointStride = getStride(a);
+                jointCt = a.componentType;
+            }
+            const unsigned char* weightData = nullptr;
+            int weightStride = 0, weightCt = 0;
+            if (weightIdx >= 0 && weightIdx < (int)accessors.size()) {
+                auto& a = accessors[weightIdx];
+                weightData = getBufferData(a);
+                weightStride = getStride(a);
+                weightCt = a.componentType;
             }
 
             ModelPartAABB partAABB{};
@@ -600,6 +728,17 @@ bool ParseGLB(const std::vector<unsigned char>& fileData,
                                 GLBReadVec2(uvData, 0, accessors[uvIdx].componentType, uvStride, vi, uv);
                                 mv.u = uv[0]; mv.v = uv[1];
                             }
+                            if (jointData && jointCt) {
+                                unsigned int ji[4] = { 0,0,0,0 };
+                                GLBReadJoints(jointData, jointCt, jointStride, vi, ji);
+                                float jw[4] = { 0,0,0,0 };
+                                if (weightData && weightCt == 5126)
+                                    GLBReadVec4(weightData, weightStride, vi, jw);
+                                for (int k = 0; k < 4; ++k) {
+                                    mv.boneIndices[k] = (uint8_t)(ji[k] < 255 ? ji[k] : 0);
+                                    mv.boneWeights[k] = jw[k];
+                                }
+                            }
                             out.vertices.push_back(mv);
                             out.positions.push_back(mv.x);
                             out.positions.push_back(mv.y);
@@ -630,6 +769,17 @@ bool ParseGLB(const std::vector<unsigned char>& fileData,
                         float uv[2];
                         GLBReadVec2(uvData, 0, accessors[uvIdx].componentType, uvStride, i, uv);
                         mv.u = uv[0]; mv.v = uv[1];
+                    }
+                    if (jointData && jointCt) {
+                        unsigned int ji[4] = { 0,0,0,0 };
+                        GLBReadJoints(jointData, jointCt, jointStride, i, ji);
+                        float jw[4] = { 0,0,0,0 };
+                        if (weightData && weightCt == 5126)
+                            GLBReadVec4(weightData, weightStride, i, jw);
+                        for (int k = 0; k < 4; ++k) {
+                            mv.boneIndices[k] = (uint8_t)(ji[k] < 255 ? ji[k] : 0);
+                            mv.boneWeights[k] = jw[k];
+                        }
                     }
                     out.vertices.push_back(mv);
                     out.positions.push_back(mv.x);

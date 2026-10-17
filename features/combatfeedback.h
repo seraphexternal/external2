@@ -247,6 +247,55 @@ namespace CombatFeedback
         return t;
     }
 
+    inline float& LastFireTime()
+    {
+        static float t = -1.0f;
+        return t;
+    }
+
+    inline bool RecentlyFired()
+    {
+        if (LastFireTime() < 0.f)
+            return false;
+        return (ImGui::GetTime() - LastFireTime()) <= 0.35f;
+    }
+
+    inline bool IsMp3File(const std::string& path)
+    {
+        if (path.size() < 4)
+            return false;
+        std::string ext = path.substr(path.size() - 4);
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        return ext == ".mp3";
+    }
+
+    inline void PlayMciSound(const std::string& path)
+    {
+        static const char* alias = "seraph_hitsound";
+        static std::string openPath;
+
+        if (openPath != path)
+        {
+            mciSendStringA((std::string("close ") + alias).c_str(), nullptr, 0, nullptr);
+            if (mciSendStringA((std::string("open \"") + path + "\" alias " + alias).c_str(), nullptr, 0, nullptr) != 0)
+            {
+                openPath.clear();
+                return;
+            }
+            openPath = path;
+        }
+
+        mciSendStringA((std::string("play ") + alias + " from 0").c_str(), nullptr, 0, nullptr);
+    }
+
+    inline void PlaySoundFile(const std::string& path)
+    {
+        if (IsMp3File(path))
+            PlayMciSound(path);
+        else
+            PlaySoundA(path.c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+    }
+
     inline void PlayHitSound()
     {
         if (!Options::Combat::HitSounds)
@@ -267,7 +316,7 @@ namespace CombatFeedback
             idx = 0;
 
         std::string path = Globals::HitSounds::FolderPath + "\\" + files[idx];
-        PlaySoundA(path.c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+        PlaySoundFile(path);
     }
 
     inline float ReadLiveHealth(const RobloxPlayer& player)
@@ -453,6 +502,9 @@ namespace CombatFeedback
     {
         const float dt = ImGui::GetIO().DeltaTime;
 
+        if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0)
+            LastFireTime() = ImGui::GetTime();
+
         // Keep wall occluders fresh so bullet tracers and hitsounds can respect
         // line of sight even when ESP visibility is disabled.
         Visibility::RefreshOccludersIfNeeded();
@@ -573,23 +625,20 @@ namespace CombatFeedback
 
             seen[player.address] = true;
 
-            if (player.Health <= 0.f)
-            {
-                lastHealth[player.address] = 0.f;
-                continue;
-            }
-
             const float currentHealth = ReadLiveHealth(player);
             const auto it = lastHealth.find(player.address);
 
             if (it != lastHealth.end())
             {
                 const float delta = it->second - currentHealth;
-                if (delta >= Options::Combat::MinDamage && currentHealth >= 0.0f)
+                if (delta >= Options::Combat::MinDamage && RecentlyFired())
                     RegisterHit(player, delta);
             }
 
             lastHealth[player.address] = currentHealth;
+
+            if (currentHealth <= 0.f)
+                continue;
 
             if (Options::SoundVisualizer::Enabled && player.HumanoidRootPart.address)
             {
@@ -611,6 +660,7 @@ namespace CombatFeedback
                 }
                 lastPlayerPos[player.address] = currPos;
             }
+        }
 
         for (auto it = lastHealth.begin(); it != lastHealth.end();)
         {
@@ -626,7 +676,6 @@ namespace CombatFeedback
                 it = lastPlayerPos.erase(it);
             else
                 ++it;
-        }
         }
     }
 

@@ -279,39 +279,36 @@ namespace Visibility
         return false;
     }
 
-    inline bool IsPointVisible(const Vectors::Vector3& target, uintptr_t ignoreModelAddress)
-    {
-        if ((!Options::ESP::VisibilityCheck && !Options::ESP::VisibilityChams && !Options::Chams::Enabled) || !Globals::Roblox::Camera.address)
-            return true;
+inline bool IsPointVisible(const Vectors::Vector3& target, uintptr_t ignoreModelAddress)
+{
+    if ((!Options::ESP::VisibilityCheck && !Options::ESP::VisibilityChams && !Options::Chams::Enabled) || !Globals::Roblox::Camera.address)
+        return true;
 
-        Vectors::Vector3 origin;
-        try
-        {
-            origin = Memory->read<Vectors::Vector3>(
-                Globals::Roblox::Camera.address + Offsets::Camera::Position);
-        }
-        catch (...) { return true; }
+    // Use global frame cache for camera position
+    Vectors::Vector3 origin = Globals::FrameCache::CameraValid ? Globals::FrameCache::CameraPos :
+        Memory->read<Vectors::Vector3>(
+            Globals::Roblox::Camera.address + Offsets::Camera::Position);
 
-        Vectors::Vector3 delta = {
-            target.x - origin.x,
-            target.y - origin.y,
-            target.z - origin.z
-        };
+    Vectors::Vector3 delta = {
+        target.x - origin.x,
+        target.y - origin.y,
+        target.z - origin.z
+    };
 
-        const float distance = delta.Magnitude();
-        if (distance < 1.5f)
-            return true;
+    const float distance = delta.Magnitude();
+    if (distance < 1.5f)
+        return true;
 
-        delta.x /= distance;
-        delta.y /= distance;
-        delta.z /= distance;
+    delta.x /= distance;
+    delta.y /= distance;
+    delta.z /= distance;
 
-        const float maxDistance = distance - 0.75f;
-        if (maxDistance <= 0.5f)
-            return true;
+    const float maxDistance = distance - 0.75f;
+    if (maxDistance <= 0.5f)
+        return true;
 
-        return !IsMapBlocking(origin, delta, distance, ignoreModelAddress);
-    }
+    return !IsMapBlocking(origin, delta, distance, ignoreModelAddress);
+}
 
     inline bool IsPointVisibleCached(uintptr_t cacheKey, const Vectors::Vector3& target, uintptr_t ignoreModelAddress)
     {
@@ -332,91 +329,90 @@ namespace Visibility
         return visible;
     }
 
-    // Forced line-of-sight test that ignores the ESP visibility toggles, so
-    // bullet tracers and hitsounds can respect walls even when ESP is off.
-    inline bool IsPointVisibleForced(const Vectors::Vector3& target, uintptr_t ignoreModelAddress)
+// Forced line-of-sight test that ignores the ESP visibility toggles, so
+// bullet tracers and hitsounds can respect walls even when ESP is off.
+inline bool IsPointVisibleForced(const Vectors::Vector3& target, uintptr_t ignoreModelAddress)
+{
+    if (!Globals::Roblox::Camera.address)
+        return true;
+
+    // Use global frame cache for camera position
+    Vectors::Vector3 origin = Globals::FrameCache::CameraValid ? Globals::FrameCache::CameraPos :
+        Memory->read<Vectors::Vector3>(
+            Globals::Roblox::Camera.address + Offsets::Camera::Position);
+
+    Vectors::Vector3 delta = {
+        target.x - origin.x,
+        target.y - origin.y,
+        target.z - origin.z
+    };
+
+    const float distance = delta.Magnitude();
+    if (distance < 1.5f)
+        return true;
+
+    delta.x /= distance;
+    delta.y /= distance;
+    delta.z /= distance;
+
+    const float maxDistance = distance - 0.75f;
+    if (maxDistance <= 0.5f)
+        return true;
+
+    return !IsMapBlocking(origin, delta, distance, ignoreModelAddress);
+}
+
+inline bool IsPlayerVisibleImpl(const RobloxPlayer& player)
+{
+    const uintptr_t ignoreModel = player.Character.address;
+
+    // Early exit: check head first (most likely to be visible)
+    if (player.Head.address && IsPointVisible(player.Head.Position(), ignoreModel))
+        return true;
+    // Check torso parts (most central mass)
+    if (player.HumanoidRootPart.address && IsPointVisible(player.HumanoidRootPart.Position(), ignoreModel))
+        return true;
+    if (player.Upper_Torso.address && IsPointVisible(player.Upper_Torso.Position(), ignoreModel))
+        return true;
+    if (player.Lower_Torso.address && IsPointVisible(player.Lower_Torso.Position(), ignoreModel))
+        return true;
+    if (player.Torso.address && IsPointVisible(player.Torso.Position(), ignoreModel))
+        return true;
+    // Limbs - check arms first (more likely visible in combat)
+    if (player.Upper_Torso.address)
     {
-        if (!Globals::Roblox::Camera.address)
-            return true;
-
-        Vectors::Vector3 origin;
-        try
-        {
-            origin = Memory->read<Vectors::Vector3>(
-                Globals::Roblox::Camera.address + Offsets::Camera::Position);
-        }
-        catch (...) { return true; }
-
-        Vectors::Vector3 delta = {
-            target.x - origin.x,
-            target.y - origin.y,
-            target.z - origin.z
-        };
-
-        const float distance = delta.Magnitude();
-        if (distance < 1.5f)
-            return true;
-
-        delta.x /= distance;
-        delta.y /= distance;
-        delta.z /= distance;
-
-        const float maxDistance = distance - 0.75f;
-        if (maxDistance <= 0.5f)
-            return true;
-
-        return !IsMapBlocking(origin, delta, distance, ignoreModelAddress);
-    }
-
-    inline bool IsPlayerVisibleImpl(const RobloxPlayer& player)
-    {
-        const uintptr_t ignoreModel = player.Character.address;
-
-        if (player.Head.address && IsPointVisible(player.Head.Position(), ignoreModel))
-            return true;
-        if (player.HumanoidRootPart.address && IsPointVisible(player.HumanoidRootPart.Position(), ignoreModel))
-            return true;
-        if (player.Upper_Torso.address && IsPointVisible(player.Upper_Torso.Position(), ignoreModel))
-            return true;
-        if (player.Lower_Torso.address && IsPointVisible(player.Lower_Torso.Position(), ignoreModel))
-            return true;
-        if (player.Torso.address && IsPointVisible(player.Torso.Position(), ignoreModel))
-            return true;
         if (player.Left_Upper_Arm.address && IsPointVisible(player.Left_Upper_Arm.Position(), ignoreModel))
-            return true;
-        if (player.Left_Lower_Arm.address && IsPointVisible(player.Left_Lower_Arm.Position(), ignoreModel))
-            return true;
-        if (player.Left_Hand.address && IsPointVisible(player.Left_Hand.Position(), ignoreModel))
-            return true;
-        if (player.Left_Arm.address && IsPointVisible(player.Left_Arm.Position(), ignoreModel))
             return true;
         if (player.Right_Upper_Arm.address && IsPointVisible(player.Right_Upper_Arm.Position(), ignoreModel))
             return true;
-        if (player.Right_Lower_Arm.address && IsPointVisible(player.Right_Lower_Arm.Position(), ignoreModel))
-            return true;
-        if (player.Right_Hand.address && IsPointVisible(player.Right_Hand.Position(), ignoreModel))
-            return true;
-        if (player.Right_Arm.address && IsPointVisible(player.Right_Arm.Position(), ignoreModel))
-            return true;
+    }
+    if (player.Left_Lower_Arm.address && IsPointVisible(player.Left_Lower_Arm.Position(), ignoreModel))
+        return true;
+    if (player.Right_Lower_Arm.address && IsPointVisible(player.Right_Lower_Arm.Position(), ignoreModel))
+        return true;
+    if (player.Left_Hand.address && IsPointVisible(player.Left_Hand.Position(), ignoreModel))
+        return true;
+    if (player.Right_Hand.address && IsPointVisible(player.Right_Hand.Position(), ignoreModel))
+        return true;
+    // Legs (less critical for visibility)
+    if (player.Lower_Torso.address)
+    {
         if (player.Left_Upper_Leg.address && IsPointVisible(player.Left_Upper_Leg.Position(), ignoreModel))
-            return true;
-        if (player.Left_Lower_Leg.address && IsPointVisible(player.Left_Lower_Leg.Position(), ignoreModel))
-            return true;
-        if (player.Left_Foot.address && IsPointVisible(player.Left_Foot.Position(), ignoreModel))
-            return true;
-        if (player.Left_Leg.address && IsPointVisible(player.Left_Leg.Position(), ignoreModel))
             return true;
         if (player.Right_Upper_Leg.address && IsPointVisible(player.Right_Upper_Leg.Position(), ignoreModel))
             return true;
-        if (player.Right_Lower_Leg.address && IsPointVisible(player.Right_Lower_Leg.Position(), ignoreModel))
-            return true;
-        if (player.Right_Foot.address && IsPointVisible(player.Right_Foot.Position(), ignoreModel))
-            return true;
-        if (player.Right_Leg.address && IsPointVisible(player.Right_Leg.Position(), ignoreModel))
-            return true;
-
-        return false;
     }
+    if (player.Left_Lower_Leg.address && IsPointVisible(player.Left_Lower_Leg.Position(), ignoreModel))
+        return true;
+    if (player.Right_Lower_Leg.address && IsPointVisible(player.Right_Lower_Leg.Position(), ignoreModel))
+        return true;
+    if (player.Left_Foot.address && IsPointVisible(player.Left_Foot.Position(), ignoreModel))
+        return true;
+    if (player.Right_Foot.address && IsPointVisible(player.Right_Foot.Position(), ignoreModel))
+        return true;
+
+    return false;
+}
 
     inline bool IsPlayerVisible(const RobloxPlayer& player)
     {

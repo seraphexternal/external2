@@ -9,6 +9,9 @@ struct ModelVertex {
     float x, y, z;
     float nx, ny, nz;
     float u, v;
+    // Skinning (optional, filled by PreviewRenderer when loading):
+    uint8_t boneIndices[4] = {0, 0, 0, 0};
+    float   boneWeights[4] = {0.f, 0.f, 0.f, 0.f};
 };
 
 struct ModelTri {
@@ -29,6 +32,15 @@ struct LoadedSubMesh {
     std::vector<unsigned char> texture; // raw PNG/JPEG bytes for this slice
 };
 
+// One glTF node (skeleton bone or mesh holder). Matrix is row-major (D3D
+// convention, row-vector math: p' = p * M) matching the renderer's XMMATRIX.
+struct ModelNode {
+    std::string name;
+    int parent = -1;
+    float local[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
+    int jointSlot = -1;   // index into LoadedModel::skinJoints, or -1
+};
+
 struct LoadedModel {
     std::vector<ModelVertex>   vertices;
     std::vector<ModelVertex>   wing_vertices;
@@ -40,6 +52,12 @@ struct LoadedModel {
     std::vector<ModelPartAABB> body_parts;
     std::vector<ModelPartAABB> box_parts;
     std::vector<LoadedSubMesh> submeshes;
+    // Skeletal animation (glTF skins). Filled only for rigged models.
+    std::vector<ModelNode> nodes;        // full node hierarchy (bind pose)
+    std::vector<int>       skinJoints;   // node index per joint slot
+    std::vector<float>     invBind;      // 16 floats per slot, row-major
+    int meshNode = -1;       // index of the node holding the (skinned) mesh
+    bool hasSkin = false;
     float scale = 1.0f;
     float center[3] = {};
     float raw_min[3] = {};

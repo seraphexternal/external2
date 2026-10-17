@@ -1033,13 +1033,29 @@ namespace UI
         // icon
         if (icon_big_font && icon_glyph && icon_glyph[0])
         {
-            ImGui::PushFont(icon_big_font);
-            ImVec2 isz = CalcText(icon_big_font, 23.0f * Sc, icon_glyph);
-            dl->AddText(icon_big_font, 23.0f * Sc,
-                ImVec2(tab_min.x + 10.0f * Sc, tab_min.y + (tabH - isz.y) * 0.5f),
-                active ? U(main) : U(text_color[2]),
-                icon_glyph);
-            ImGui::PopFont();
+            if ((unsigned char)icon_glyph[0] == 0xE2)
+            {
+                const ImU32 col = active ? U(main) : U(text_color[2]);
+                const float u = Sc;
+                const float x0 = tab_min.x + 10.0f * Sc;
+                const float y0 = tab_min.y + (tabH - 18.0f * Sc) * 0.5f;
+                dl->AddCircleFilled(ImVec2(x0 + 3.4f * u, y0 + 13.8f * u), 3.1f * u, col, 20);
+                dl->AddCircleFilled(ImVec2(x0 + 13.4f * u, y0 + 12.0f * u), 3.1f * u, col, 20);
+                dl->AddRectFilled(ImVec2(x0 + 5.9f * u, y0 + 1.8f * u), ImVec2(x0 + 7.4f * u, y0 + 14.2f * u), col);
+                dl->AddRectFilled(ImVec2(x0 + 15.9f * u, y0 + 0.2f * u), ImVec2(x0 + 17.4f * u, y0 + 12.4f * u), col);
+                dl->AddQuadFilled(ImVec2(x0 + 5.9f * u, y0 + 1.8f * u), ImVec2(x0 + 17.4f * u, y0 + 0.2f * u),
+                                  ImVec2(x0 + 17.4f * u, y0 + 3.0f * u), ImVec2(x0 + 5.9f * u, y0 + 4.6f * u), col);
+            }
+            else
+            {
+                ImGui::PushFont(icon_big_font);
+                ImVec2 isz = CalcText(icon_big_font, 23.0f * Sc, icon_glyph);
+                dl->AddText(icon_big_font, 23.0f * Sc,
+                    ImVec2(tab_min.x + 10.0f * Sc, tab_min.y + (tabH - isz.y) * 0.5f),
+                    active ? U(main) : U(text_color[2]),
+                    icon_glyph);
+                ImGui::PopFont();
+            }
         }
 
         // label

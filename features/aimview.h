@@ -35,22 +35,23 @@ inline void AimViewLoop()
             && Globals::Roblox::Camera.address
             && Globals::Roblox::Workspace.address;
 
-        uintptr_t targetHRP = 0;
+        RobloxInstance targetPart(0);
         if (active)
         {
             const std::string targetName = Options::ESP::AimViewTarget;
+            std::lock_guard<std::mutex> pl(Globals::Caches::CachedPlayerObjectsMutex);
             for (const auto& player : Globals::Caches::CachedPlayerObjects)
             {
                 if (player.Name == targetName && player.HumanoidRootPart.address)
                 {
                     if (player.address == Globals::Roblox::LocalPlayer.address)
                         break;
-                    targetHRP = player.HumanoidRootPart.address;
+                    targetPart = player.HumanoidRootPart;
                     break;
                 }
             }
 
-            if (!targetHRP)
+            if (!targetPart.address)
                 active = false;
         }
 
@@ -66,41 +67,54 @@ inline void AimViewLoop()
 
             wasActive = true;
 
-            Vectors::Vector3 hrpPos = Memory->read<Vectors::Vector3>(targetHRP + Offsets::Misc::Value);
+            uintptr_t hrpPrim = Memory->read<uintptr_t>(targetPart.address + Offsets::BasePart::Primitive);
+            if (!hrpPrim)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
 
-            const Vectors::Vector3 presetOffset{ 0.f, 0.5f, 0.f };
-            const float lookHeight = 2.5f; // look slightly above the HRP (head)
+            const Vectors::Vector3 hrpPos = Memory->read<Vectors::Vector3>(hrpPrim + Offsets::Primitive::Position);
+            const Matrixes::Matrix3x3 hrpRot = Memory->read<Matrixes::Matrix3x3>(hrpPrim + Offsets::Primitive::Rotation);
 
-            Vectors::Vector3 pos{
-                hrpPos.x + presetOffset.x,
-                hrpPos.y + presetOffset.y,
-                hrpPos.z + presetOffset.z
+            float fwdX = -hrpRot.r02;
+            float fwdZ = -hrpRot.r22;
+            float fwdLen = sqrtf(fwdX * fwdX + fwdZ * fwdZ);
+            if (fwdLen < 0.001f)
+            {
+                fwdX = 0.f;
+                fwdZ = 1.f;
+                fwdLen = 1.f;
+            }
+            fwdX /= fwdLen;
+            fwdZ /= fwdLen;
+
+            Vectors::Vector3 yawForward{ fwdX, 0.f, fwdZ };
+            Vectors::Vector3 yawRight{ fwdZ, 0.f, -fwdX };
+
+            Vectors::Vector3 pos = hrpPos - yawForward * 14.f + Vectors::Vector3{ 0.f, 4.f, 0.f };
+            Vectors::Vector3 lookAtPos{ hrpPos.x, hrpPos.y + 2.f, hrpPos.z };
+
+            const float lookDy = lookAtPos.y - pos.y;
+            const float dx = pos.x - lookAtPos.x;
+            const float dz = pos.z - lookAtPos.z;
+            float horiz = sqrtf(dx * dx + dz * dz);
+            if (horiz < 0.001f) horiz = 0.001f;
+            float pitchLen = sqrtf(horiz * horiz + lookDy * lookDy);
+            if (pitchLen < 0.001f) pitchLen = 0.001f;
+
+            Vectors::Vector3 fwdV{
+                yawForward.x * (horiz / pitchLen),
+                lookDy / pitchLen,
+                yawForward.z * (horiz / pitchLen)
             };
-            Vectors::Vector3 lookAtPos = { hrpPos.x, hrpPos.y + lookHeight, hrpPos.z };
+            Vectors::Vector3 rV = yawRight;
+            Vectors::Vector3 uV = fwdV.cross(rV);
 
-            Vectors::Vector3 fwd = { lookAtPos.x - pos.x, lookAtPos.y - pos.y, lookAtPos.z - pos.z };
-            float mag = fwd.Magnitude();
-            if (mag > 0.001f)
-                fwd = { fwd.x / mag, fwd.y / mag, fwd.z / mag };
-            else
-                fwd = { 0.f, 0.f, 1.f };
-
-            Vectors::Vector3 yawF{ fwd.x, 0.f, fwd.z };
-            float yLen = yawF.Magnitude();
-            if (yLen > 0.001f) yawF = { yawF.x / yLen, 0.f, yawF.z / yLen };
-            else yawF = { 0.f, 0.f, 1.f };
-
-            Vectors::Vector3 rV = Vectors::Vector3{0.f, 1.f, 0.f}.cross(yawF);
-            float rMag = rV.Magnitude();
-            if (rMag > 0.001f) rV = { rV.x / rMag, rV.y / rMag, rV.z / rMag };
-            else rV = { 1.f, 0.f, 0.f };
-
-            Vectors::Vector3 uV = yawF.cross(rV);
-            Matrixes::Matrix3x3 rot{
-                -rV.x,  uV.x, -yawF.x,
-                -rV.y,  uV.y, -yawF.y,
-                -rV.z,  uV.z, -yawF.z
-            };
+            Matrixes::Matrix3x3 rot;
+            rot.r00 = -rV.x;  rot.r01 = uV.x;  rot.r02 = -fwdV.x;
+            rot.r10 =  rV.y;  rot.r11 = uV.y;  rot.r12 = -fwdV.y;
+            rot.r20 = -rV.z;  rot.r21 = uV.z;  rot.r22 = -fwdV.z;
 
             // Hammer continuously (~14ms) like the third-person loop to hold
             // the camera without flicker across the inter-frame gap.

@@ -1,7 +1,42 @@
 #pragma once
+#include <unordered_map>
+#include <unordered_set>
+#include <cstdint>
+
+// Last successfully read progression per player instance, keyed by address.
+// CustomLeaderstats is not reliably resident, so a frame that fails to read it
+// reuses the previous value instead of blanking the ESP.
+struct ProgressionCacheEntry
+{
+    std::int64_t Level = -1;
+    std::int64_t Elo = -1;
+    bool LevelResolved = false;
+    bool RankResolved = false;
+};
+
+inline std::unordered_map<uintptr_t, ProgressionCacheEntry>& ProgressionCache()
+{
+    static std::unordered_map<uintptr_t, ProgressionCacheEntry> cache;
+    return cache;
+}
+
+inline void PruneProgressionCache(const std::unordered_set<uintptr_t>& live)
+{
+    auto& cache = ProgressionCache();
+    for (auto it = cache.begin(); it != cache.end();)
+    {
+        if (live.count(it->first) == 0)
+            it = cache.erase(it);
+        else
+            ++it;
+    }
+}
 #include <thread>
+#include <functional>
+#include <cmath>
 #include "../globals/options.h"
 #include "../../rbx/globals/globals.h"
+#include "../../features/pf_diag.h"
 
 inline void CachePlayerObjects()
 {
@@ -20,6 +55,425 @@ inline void CachePlayerObjects()
 					break;
 				std::this_thread::sleep_for(std::chrono::milliseconds(100));
 			}
+			continue;
+		}
+
+		if (Globals::Roblox::isPhantomForces)
+		{
+			RobloxInstance wsRoots(0), wsPlayers(0);
+			for (auto& c : Globals::Roblox::Workspace.GetChildren())
+			{
+				std::string cn = c.Name();
+				if (cn == "Roots") wsRoots = c;
+				else if (cn == "Players") wsPlayers = c;
+			}
+
+			// Phantom Forces runs on Chickynoid: Player.ModelInstance is unlinked, so
+			// the replicated characters instead live under
+			// Workspace.Players/<teamFolder>/<Model> (each a 6-part hitbox rig with the
+			// held weapon). Workspace.Roots holds one bare anchor part per spawned
+			// player; its Sound children are named "enemy_*"/"friendly_*" relative to
+			// us, which is the only team signal the client exposes.
+			struct PFModel
+			{
+				std::string fold;
+				Vectors::Vector3 center = { 0.f, 0.f, 0.f };
+				std::vector<RobloxInstance> parts;
+			};
+			std::vector<PFModel> models;
+			std::vector<std::string> foldNames;
+			if (wsPlayers.address)
+			{
+				for (auto& fold : wsPlayers.GetChildren())
+				{
+					std::string foldName = fold.Name();
+					foldNames.push_back(foldName);
+					for (auto& mm : fold.GetChildren())
+					{
+						if (mm.Class() != "Model") continue;
+						PFModel m;
+						m.fold = foldName;
+						Vectors::Vector3 acc = { 0.f, 0.f, 0.f };
+						int pc = 0;
+						for (auto& sc : mm.GetChildren())
+						{
+							std::string cl = sc.Class();
+							if (cl != "Part" && cl != "MeshPart") continue;
+							Vectors::Vector3 pp = sc.Position();
+							acc.x += pp.x; acc.y += pp.y; acc.z += pp.z;
+							m.parts.push_back(sc);
+							++pc;
+						}
+						if (!pc) continue;
+						m.center.x = acc.x / pc;
+						m.center.y = acc.y / pc;
+						m.center.z = acc.z / pc;
+						models.push_back(std::move(m));
+					}
+				}
+			}
+
+			// Team resolution is driven by the footstep sounds attached to each
+			// root ("enemy_*"/"friendly_*"), which are relative to us and reliable.
+			// Scores decay every pass so a mapping learned on one team or round
+			// cannot survive a swap and invert (which drew enemies as teammates).
+			// The folder with the higher score is that team; with exactly two
+			// folders the other one is inferred.
+			static std::unordered_map<std::string, float> foldEnScore;
+			static std::unordered_map<std::string, float> foldFrScore;
+			static std::unordered_map<std::string, int> foldTeam;
+			static std::unordered_map<uintptr_t, int> rootTeam;
+			static std::string foldSig;
+			static bool lastFrameHadSound = false;
+
+			// Fade stale votes. Aggressive only while sounds are actually heard, so
+			// the mapping self-heals during a live swap but survives a quiet camp
+			// instead of collapsing back to the default.
+			const float decay = lastFrameHadSound ? 0.97f : 0.995f;
+			for (auto& kv : foldEnScore) kv.second *= decay;
+			for (auto& kv : foldFrScore) kv.second *= decay;
+			lastFrameHadSound = false;
+
+			// Joining a different server replaces the local Player object. Folder
+			// names and the local TeamColor can both look identical across servers,
+			// which previously let the enemy/friendly mapping carry over and invert
+			// (enemies drawn as teammates). A new local player always means a new
+			// session, so throw every team vote and per-root cache away.
+			static uintptr_t lastLocalPlayerAddr = 0;
+			uintptr_t curLocalAddr = Globals::Roblox::LocalPlayer.address;
+			if (curLocalAddr != lastLocalPlayerAddr)
+			{
+				if (lastLocalPlayerAddr != 0)
+					PFDiag::Write("[PFRESET] localaddr old=" + PFDiag::Hex(lastLocalPlayerAddr) +
+						" new=" + PFDiag::Hex(curLocalAddr));
+				lastLocalPlayerAddr = curLocalAddr;
+				foldSig.clear();
+			}
+
+			std::string sig;
+			for (auto& fn : foldNames) sig += fn + "|";
+			if (sig != foldSig)
+			{
+				if (!foldSig.empty())
+					PFDiag::Write("[PFRESET] foldsig old=[" + foldSig + "] new=[" + sig + "]");
+				foldSig = sig; foldEnScore.clear(); foldFrScore.clear(); foldTeam.clear(); rootTeam.clear();
+			}
+
+			// The folder->team mapping is resolved once (with a clear margin) and
+			// then LOCKED until a reset. Legitimate team/session changes always
+			// trip one of the resets above, so a locked mapping cannot go stale,
+			// while a transient burst of mislabelled sounds can no longer flip it
+			// and invert the ESP (which showed teammates as enemies and back).
+			{
+				bool resolved = false;
+				for (auto& fn : foldNames)
+				{
+					if (foldTeam.count(fn)) continue;
+					float ev = foldEnScore.count(fn) ? foldEnScore[fn] : 0.f;
+					float fr = foldFrScore.count(fn) ? foldFrScore[fn] : 0.f;
+					if (ev - fr >= 3.f) { foldTeam[fn] = -1; resolved = true; }
+					else if (fr - ev >= 3.f) { foldTeam[fn] = 1; resolved = true; }
+				}
+				// Two teams, two folders: resolve the other from whichever is known.
+				if (resolved && foldNames.size() == 2)
+				{
+					std::string enemyFold, friendFold;
+					for (auto& fn : foldNames)
+					{
+						auto it = foldTeam.find(fn);
+						if (it == foldTeam.end()) continue;
+						if (it->second == -1) enemyFold = fn;
+						else if (it->second == 1) friendFold = fn;
+					}
+					if (!enemyFold.empty() && friendFold.empty())
+					{
+						for (auto& fn : foldNames)
+							if (fn != enemyFold) foldTeam[fn] = 1;
+					}
+					else if (enemyFold.empty() && !friendFold.empty())
+					{
+						for (auto& fn : foldNames)
+							if (fn != friendFold) foldTeam[fn] = -1;
+					}
+				}
+			}
+
+			auto nearestModel = [&](const Vectors::Vector3& p, float& outD, float& outD2) -> int
+			{
+				int best = -1;
+				float bd = 1e18f;
+				float bd2 = 1e18f;
+				for (size_t i = 0; i < models.size(); ++i)
+				{
+					float dx = models[i].center.x - p.x;
+					float dy = models[i].center.y - p.y;
+					float dz = models[i].center.z - p.z;
+					float d = dx * dx + dy * dy + dz * dz;
+					if (d < bd) { bd2 = bd; bd = d; best = (int)i; }
+					else if (d < bd2) { bd2 = d; }
+				}
+				outD = sqrtf(bd);
+				outD2 = (bd2 < 1e17f) ? sqrtf(bd2) : 1e9f;
+				return best;
+			};
+
+			int localTC = 0;
+			if (Globals::Roblox::LocalPlayer.address)
+				localTC = Memory->read<int>(Globals::Roblox::LocalPlayer.address + Offsets::Player::TeamColor) & 0xFFFF;
+			int enemyTC = (localTC == 23) ? 106 : 23;
+
+			// Auto-balance can move us to the other team mid-round; the footstep
+			// labels (and therefore the folder mapping) invert at that point, so the
+			// accumulated votes must be thrown away.
+			static int lastLocalTC = -1;
+			if (localTC != 0 && localTC != lastLocalTC)
+			{
+				if (lastLocalTC != -1)
+					PFDiag::Write("[PFRESET] localtc old=" + std::to_string(lastLocalTC) +
+						" new=" + std::to_string(localTC));
+				lastLocalTC = localTC;
+				// foldFrVotes removed
+				foldEnScore.clear();
+				foldFrScore.clear();
+				foldTeam.clear();
+				rootTeam.clear();
+			}
+
+			int svcPlayersSeen = 0, rootsSeen = 0, friendlySeen = 0, enemySeen = 0, limbsSeen = 0;
+			int soundEnRoots = 0, soundFrRoots = 0;
+			std::string sndInfo;
+			std::string rootInfo;
+			std::unordered_set<uintptr_t> liveRootAddrs;
+			Vectors::Vector3 camPos = { 0.f, 0.f, 0.f };
+			if (Globals::Roblox::Camera.address)
+				camPos = Memory->read<Vectors::Vector3>(Globals::Roblox::Camera.address + Offsets::Camera::Position);
+
+			for (auto& pl : Globals::Roblox::Players.GetChildren())
+				if (pl.address) ++svcPlayersSeen;
+
+			if (wsRoots.address)
+			{
+				for (auto& rr : wsRoots.GetChildren())
+				{
+					if (!rr.address) continue;
+					liveRootAddrs.insert(rr.address);
+
+					// Only a clean, one-sided footstep label counts as a team signal;
+					// a root that emitted both is pooled/stale and is ignored.
+					int en = 0, fr = 0;
+					for (auto& sc : rr.GetChildren())
+					{
+						std::string nm = sc.Name();
+						if (nm.rfind("enemy_", 0) == 0) ++en;
+						else if (nm.rfind("friendly_", 0) == 0) ++fr;
+					}
+					int soundSign = (fr > 0 && en == 0) ? 1 : ((en > 0 && fr == 0) ? -1 : 0);
+					if (soundSign > 0) ++soundFrRoots; else if (soundSign < 0) ++soundEnRoots;
+					if (soundSign != 0) lastFrameHadSound = true;
+
+					Vectors::Vector3 rp = rr.Position();
+
+					float d = 0.f;
+					float d2 = 0.f;
+					int mi = nearestModel(rp, d, d2);
+
+					int modelSign = 0;
+					if (mi >= 0 && d < 1.5f)
+					{
+						const std::string& fn = models[mi].fold;
+						auto it = foldTeam.find(fn);
+						if (it != foldTeam.end()) modelSign = it->second;
+
+						// Only an unambiguous match (nearest model clearly closer
+						// than the runner-up) may cast a team vote, so two players
+						// standing together cannot pollute the folder mapping.
+						if (d2 - d > 0.5f)
+						{
+							if (soundSign < 0) { foldEnScore[fn] += 1.f; if (foldEnScore[fn] > 8.f) foldEnScore[fn] = 8.f; }
+							else if (soundSign > 0) { foldFrScore[fn] += 1.f; if (foldFrScore[fn] > 8.f) foldFrScore[fn] = 8.f; }
+						}
+					}
+
+					// Priority: direct enemy sound > folder inference > per-root
+					// cache. A lone friendly label is deliberately NOT trusted to
+					// hide a root: a stray/pooled "friendly_*" child on an enemy
+					// root was occluding enemies, and friendly labels already feed
+					// the folder mapping. Anything unresolved stays visible.
+					int sign = 0;
+					if (soundSign < 0)
+					{
+						sign = -1;
+					}
+					else if (modelSign != 0)
+					{
+						sign = modelSign;
+					}
+					else
+					{
+						auto rt = rootTeam.find(rr.address);
+						if (rt != rootTeam.end()) sign = rt->second;
+					}
+					if (sign != 0) rootTeam[rr.address] = sign;
+					if (sign == 0)
+					{
+						// No signal at all: show as enemy. A teammate with no
+						// streamed model and no footstep sound cannot be told apart
+						// from an enemy, and hiding it also hides nearby enemies.
+						sign = -1;
+					}
+
+					if (rootInfo.size() < 1400)
+					{
+						float cdx = rp.x - camPos.x, cdy = rp.y - camPos.y, cdz = rp.z - camPos.z;
+						float cd = sqrtf(cdx * cdx + cdy * cdy + cdz * cdz);
+						std::string rn = rr.Name();
+						if (rn.size() > 14) rn.resize(14);
+						rootInfo += rn + "|cd" + std::to_string((int)cd) +
+							"|s" + std::to_string(soundSign) +
+							"|m" + std::to_string(modelSign) +
+							"|f" + std::to_string(sign) +
+							"|d" + std::to_string((int)d) + "  ";
+					}
+
+					if (soundSign != 0 && sndInfo.size() < 500)
+					{
+						std::string fn = (mi >= 0 && d < 3.f) ? models[mi].fold : std::string("?");
+						sndInfo += std::string(soundSign > 0 ? "F" : "E") + ":" + fn +
+							"@" + std::to_string((int)(d * 10)) + " ";
+					}
+
+					RobloxPlayer p;
+					p.address = rr.address;
+					p.Name = "";
+					p.Team = RobloxInstance(0);
+					p.Character = rr;
+					p.HumanoidRootPart = rr;
+					p.Head = rr;
+					p.UseAnchor = true;
+					p.AnchorPos = rp;
+					p.Health = 100.f;
+					p.MaxHealth = 100.f;
+					p.TeamColor = (sign > 0) ? localTC : enemyTC;
+					p.TeamBrickColor = 0;
+					p.TeamName = "";
+
+					// Build a drawable skeleton from the matched 6-part rig: highest
+					// part is the head, the two lowest are the legs, the two widest are
+					// the arms, the remainder is the torso.
+					if (mi >= 0 && d < 4.f && models[mi].parts.size() >= 5)
+					{
+						auto& parts = models[mi].parts;
+						const size_t ps = parts.size();
+						if (ps < 5) continue;
+						Vectors::Vector3 c = models[mi].center;
+
+						// Pre-compute positions to avoid any reference/iterator invalidation
+						// during sort, and to guard against stale RobloxInstance addresses.
+						std::vector<Vectors::Vector3> pos(ps);
+						for (size_t i = 0; i < ps; ++i)
+							pos[i] = parts[i].Position();
+
+						int headI = 0;
+						for (size_t i = 1; i < ps; ++i)
+							if (pos[i].y > pos[headI].y) headI = (int)i;
+
+						std::vector<int> rest;
+						for (int i = 0; i < (int)ps; ++i)
+							if (i != headI) rest.push_back(i);
+						std::sort(rest.begin(), rest.end(), [&](int a, int b) {
+							if (a < 0 || a >= (int)ps || b < 0 || b >= (int)ps) return false;
+							return pos[a].y < pos[b].y;
+						});
+						if (rest.size() < 4) continue;
+						int legA = rest[0], legB = rest[1];
+
+						// Remaining parts: torso + 2 arms. Arms are the two widest from center.
+						std::vector<int> mid;
+						for (size_t i = 2; i < rest.size(); ++i) mid.push_back(rest[i]);
+						std::sort(mid.begin(), mid.end(), [&](int a, int b) {
+							if (a < 0 || a >= (int)ps || b < 0 || b >= (int)ps) return false;
+							return fabsf(pos[a].x - c.x) > fabsf(pos[b].x - c.x);
+						});
+						if (mid.size() < 3) continue;
+						int armA = mid[0], armB = mid[1];
+						int torsoI = mid[2];
+
+						// Left/Right by X
+						bool leftIsMin = pos[armA].x <= pos[armB].x;
+						int lArm = leftIsMin ? armA : armB, rArm = leftIsMin ? armB : armA;
+						leftIsMin = pos[legA].x <= pos[legB].x;
+						int lLeg = leftIsMin ? legA : legB, rLeg = leftIsMin ? legB : legA;
+
+						RobloxInstance torso = parts[torsoI];
+						p.Head = parts[headI];
+						p.Upper_Torso = torso;
+						p.Lower_Torso = torso;
+						p.Left_Upper_Arm = parts[lArm]; p.Left_Lower_Arm = parts[lArm]; p.Left_Hand = parts[lArm];
+						p.Right_Upper_Arm = parts[rArm]; p.Right_Lower_Arm = parts[rArm]; p.Right_Hand = parts[rArm];
+						p.Left_Upper_Leg = parts[lLeg]; p.Left_Lower_Leg = parts[lLeg]; p.Left_Foot = parts[lLeg];
+						p.Right_Upper_Leg = parts[rLeg]; p.Right_Lower_Leg = parts[rLeg]; p.Right_Foot = parts[rLeg];
+						++limbsSeen;
+					}
+
+					if (sign > 0) ++friendlySeen; else ++enemySeen;
+					tempList.push_back(p);
+					++rootsSeen;
+				}
+			}
+
+			// Drop cache entries for roots that no longer exist so a recycled
+			// address cannot inherit a previous player's (or previous round's) team.
+			for (auto it = rootTeam.begin(); it != rootTeam.end();)
+			{
+				if (liveRootAddrs.count(it->first) == 0) it = rootTeam.erase(it);
+				else ++it;
+			}
+
+			if (Globals::Roblox::LocalPlayer.address)
+			{
+				Globals::Roblox::LocalPlayerTeam = RobloxInstance(0);
+				Globals::Roblox::LocalPlayerTeamName = "";
+				Globals::Roblox::LocalPlayerTeamColor = localTC;
+			}
+
+			std::string foldInfo;
+			for (auto& fn : foldNames)
+			{
+				int fs = 0; auto it = foldTeam.find(fn); if (it != foldTeam.end()) fs = it->second;
+				int cnt = 0; for (auto& m : models) if (m.fold == fn) ++cnt;
+				float ev = foldEnScore.count(fn) ? foldEnScore[fn] : 0.f;
+				float frv = foldFrScore.count(fn) ? foldFrScore[fn] : 0.f;
+				foldInfo += fn + ":" + std::to_string(fs) + "(" + std::to_string(cnt) + ")e" +
+					std::to_string((int)ev) + "f" + std::to_string((int)frv) + " ";
+			}
+
+			PFDiag::Write("[PFDIAG] pf svcPlayers=" + std::to_string(svcPlayersSeen) +
+				" roots=" + std::to_string(rootsSeen) +
+				" friendly=" + std::to_string(friendlySeen) +
+				" enemy=" + std::to_string(enemySeen) +
+				" models=" + std::to_string(models.size()) +
+				" limbs=" + std::to_string(limbsSeen) +
+				" soundEn=" + std::to_string(soundEnRoots) +
+				" soundFr=" + std::to_string(soundFrRoots) +
+				" localTC=" + std::to_string(localTC) +
+				" folds=[" + foldInfo + "]" +
+				" snd=[" + sndInfo + "]");
+
+			{
+				static int pfRootTick = 0;
+				if (++pfRootTick >= 10)
+				{
+					pfRootTick = 0;
+					PFDiag::Write("[PFROOT] tc=" + std::to_string(localTC) + " " + rootInfo);
+				}
+			}
+
+			{
+				std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
+				Globals::Caches::CachedPlayerObjects = std::move(tempList);
+			}
+
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
 			continue;
 		}
 
@@ -91,6 +545,85 @@ else
 					continue;
 				p.Health = player.Health();
 				p.MaxHealth = player.MaxHealth();
+
+				// ── Rivals progression ──
+				// CustomLeaderstats, NOT "leaderstats". Rank is not a name either:
+				// it is an ELO number under "Current ELO", and the tier comes from
+				// a threshold ladder. Both values are int64 at Misc::Value.
+				//
+				// Gated on the toggles: this is a per-player scan on top of an
+				// already busy cache rebuild, and there is no reason to pay for it
+				// when neither Rank nor Level is switched on. Reads are cached per
+				// player and reused when a read misses, because CustomLeaderstats
+				// is not reliably resident and level would otherwise flicker.
+				p.Level = -1;
+				p.Elo = -1;
+				p.LevelResolved = false;
+				p.RankResolved = false;
+				p.RankStem.clear();
+
+				if (Options::ESP::Rank || Options::ESP::Level)
+				{
+					// Two bulk scans total: the Player's children to locate
+					// CustomLeaderstats, then that folder's children picking up
+					// both Level and Current ELO in a single pass.
+					const auto siblings = player.GetChildrenBulk();
+					const RobloxInstance stats = player.FindInChildren(siblings, "CustomLeaderstats");
+
+					if (stats.address)
+					{
+						const auto stats_children = stats.GetChildrenBulk();
+
+						if (const RobloxInstance lvl = stats.FindInChildren(stats_children, "Level"))
+						{
+							std::int64_t v = 0;
+							if (lvl.ProgressionValue(v) && v >= 0)
+							{
+								p.Level = v;
+								p.LevelResolved = true;
+							}
+						}
+
+						if (const RobloxInstance elo = stats.FindInChildren(stats_children, "Current ELO"))
+						{
+							std::int64_t v = -1;
+							if (elo.ProgressionValue(v))
+							{
+								p.Elo = v;
+								p.RankResolved = true;
+							}
+						}
+					}
+
+					if (p.RankResolved)
+						p.RankStem = RankIconStem(RankFromElo(p.Elo));
+
+					const uintptr_t id = player.address;
+					auto& cached = ProgressionCache()[id];
+
+					if (!p.LevelResolved && cached.LevelResolved)
+					{
+						p.Level = cached.Level;
+						p.LevelResolved = true;
+					}
+					if (!p.RankResolved && cached.RankResolved)
+					{
+						p.Elo = cached.Elo;
+						p.RankResolved = true;
+						p.RankStem = RankIconStem(RankFromElo(p.Elo));
+					}
+
+					if (p.LevelResolved)
+					{
+						cached.Level = p.Level;
+						cached.LevelResolved = true;
+					}
+					if (p.RankResolved)
+					{
+						cached.Elo = p.Elo;
+						cached.RankResolved = true;
+					}
+				}
 			}
 
 			p.RigType = p.Humanoid.RigType();

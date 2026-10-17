@@ -192,7 +192,7 @@ void* PreviewRenderer::GetTextureID() const { return (void*)m_SRV; }
 void PreviewRenderer::Shutdown()
 {
     auto rel = [](auto*& p) { if (p) { p->Release(); p = nullptr; } };
-    rel(m_VB); rel(m_CB); rel(m_IL); rel(m_VS); rel(m_PS);
+    rel(m_VB); rel(m_CB); rel(m_BoneCB); rel(m_IL); rel(m_VS); rel(m_PS);
     rel(m_TexSRV); rel(m_TexRes); rel(m_Sampler);
     for (int i = 0; i < MaxSubMeshes; ++i) rel(m_SubMeshes[i].srv);
     m_SubMeshCount = 0;
