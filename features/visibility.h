@@ -257,7 +257,7 @@ namespace Visibility
         float distance,
         uintptr_t ignoreModelAddress)
     {
-        const float maxDistance = distance - 0.35f;
+        const float maxDistance = distance - 0.25f;
 
         if (MapParser::IsCacheReady())
         {
@@ -311,7 +311,7 @@ inline bool IsPointVisible(const Vectors::Vector3& target, uintptr_t ignoreModel
     delta.y /= distance;
     delta.z /= distance;
 
-    const float maxDistance = distance - 0.75f;
+    const float maxDistance = distance - 0.25f;
     if (maxDistance <= 0.5f)
         return true;
 
@@ -363,7 +363,7 @@ inline bool IsPointVisibleForced(const Vectors::Vector3& target, uintptr_t ignor
     delta.y /= distance;
     delta.z /= distance;
 
-    const float maxDistance = distance - 0.75f;
+    const float maxDistance = distance - 0.25f;
     if (maxDistance <= 0.5f)
         return true;
 
@@ -486,7 +486,7 @@ inline bool IsPlayerVisibleImpl(const RobloxPlayer& player)
                 delta.y /= distance;
                 delta.z /= distance;
 
-                const float maxDistance = distance - 0.75f;
+                const float maxDistance = distance - 0.25f;
                 if (maxDistance <= 0.5f)
                     return false;
 
