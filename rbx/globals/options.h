@@ -472,6 +472,15 @@ namespace Options
 		inline float PredictionX = 1.0f;
 		inline float PredictionY = 1.0f;
 		
+		// 0 = FOV circle (legacy), 1 = Hitbox (part-based). Hitbox fires when
+		// the crosshair is over the target's real projected hitbox, no Range
+		// cap; FOV is the legacy radius check with its own settings.
+		inline int Method = 1;
+		// Hitbox method target: 0 = Head, 1 = Torso, 2 = HumanoidRootPart,
+		// 3 = Closest Part.
+		inline int TargetPart = 3;
+		inline float PartMargin = 2.f; // px of forgiveness around hitboxes
+		
 		inline bool AdvancedFOV = false;
 		inline bool ShowAdvancedFOV = false;
 		inline bool DynamicFOV = false;

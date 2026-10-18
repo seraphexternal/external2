@@ -534,6 +534,9 @@ inline json BuildConfigJson()
         { "Radius", Options::Triggerbot::Radius },
         { "Range", Options::Triggerbot::Range },
         { "Delay", Options::Triggerbot::Delay },
+        { "Method", Options::Triggerbot::Method },
+        { "Target Part", Options::Triggerbot::TargetPart },
+        { "Hitbox Margin", Options::Triggerbot::PartMargin },
         { "Advanced FOV", Options::Triggerbot::AdvancedFOV },
         { "Show Advanced FOV", Options::Triggerbot::ShowAdvancedFOV },
         { "Dynamic FOV", Options::Triggerbot::DynamicFOV },
@@ -1330,6 +1333,9 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(tb, "Radius", Options::Triggerbot::Radius);
         LoadVal(tb, "Range", Options::Triggerbot::Range);
         LoadVal(tb, "Delay", Options::Triggerbot::Delay);
+        LoadVal(tb, "Method", Options::Triggerbot::Method);
+        LoadVal(tb, "Target Part", Options::Triggerbot::TargetPart);
+        LoadVal(tb, "Hitbox Margin", Options::Triggerbot::PartMargin);
         LoadVal(tb, "Advanced FOV", Options::Triggerbot::AdvancedFOV);
         LoadVal(tb, "Show Advanced FOV", Options::Triggerbot::ShowAdvancedFOV);
         LoadVal(tb, "Dynamic FOV", Options::Triggerbot::DynamicFOV);

@@ -4723,9 +4723,23 @@ UI::labelsection("SMOOTHING & FEEL");
                 UI::Checkbox("Wall Check", &Options::Triggerbot::WallCheck);
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Don't trigger on enemies hidden behind walls/geometry.");
                 UI::Checkbox("Prediction", &Options::Triggerbot::Prediction);
-                UI::Checkbox("Advanced FOV", &Options::Triggerbot::AdvancedFOV);
-                if (Options::Triggerbot::AdvancedFOV)
-                    UI::Checkbox("Show FOV", &Options::Triggerbot::ShowAdvancedFOV);
+
+                static const char* tbMethods[]{ "FOV", "Hitbox" };
+                UI::Combo("Triggerbot Method", &Options::Triggerbot::Method, tbMethods, IM_ARRAYSIZE(tbMethods), cardW);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hitbox = fires whenever the crosshair is over the target's actual hitbox, at any distance.\nFOV = legacy radius check around the crosshair.");
+
+                if (Options::Triggerbot::Method == 1)
+                {
+                    static const char* tbTargetParts[]{ "Head", "Torso", "HumanoidRootPart", "Closest Part" };
+                    UI::Combo("Target Part", &Options::Triggerbot::TargetPart, tbTargetParts, IM_ARRAYSIZE(tbTargetParts), cardW);
+                    UI::Checkbox("Show Hitboxes", &Options::Triggerbot::ShowAdvancedFOV);
+                }
+                else
+                {
+                    UI::Checkbox("Advanced FOV", &Options::Triggerbot::AdvancedFOV);
+                    if (Options::Triggerbot::AdvancedFOV)
+                        UI::Checkbox("Show FOV", &Options::Triggerbot::ShowAdvancedFOV);
+                }
 
                 UI::labelsection("KEYBIND");
                 UI::Bind("##triggerbot_key", &Options::Triggerbot::TriggerbotKey);
@@ -4738,19 +4752,30 @@ UI::labelsection("SMOOTHING & FEEL");
             if (UI::CollapsibleSection("SETTINGS", cardW))
             {
                 UI::labelsection("BASIC");
-                if (!Options::Triggerbot::AdvancedFOV)
-                    UI::SliderFloat("Radius", &Options::Triggerbot::Radius, 0.1f, 50.f, "%.1f");
-                UI::SliderFloat("Range", &Options::Triggerbot::Range, 0.1f, 1000.f, "%.1f");
+                if (Options::Triggerbot::Method == 0)
+                {
+                    if (!Options::Triggerbot::AdvancedFOV)
+                        UI::SliderFloat("Radius", &Options::Triggerbot::Radius, 0.1f, 50.f, "%.1f");
+                    UI::SliderFloat("Range", &Options::Triggerbot::Range, 0.1f, 1000.f, "%.1f");
+                }
+                else
+                {
+                    UI::SliderFloat("Hitbox Margin", &Options::Triggerbot::PartMargin, 0.f, 50.f, "%.1f");
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Extra pixels around each part's projected hitbox that still count as the crosshair being on it.");
+                }
                 UI::SliderInt("Delay (ms)", &Options::Triggerbot::Delay, 0, 500);
 
-                UI::labelsection("DYNAMIC FOV");
-                UI::Checkbox("Dynamic FOV", &Options::Triggerbot::DynamicFOV);
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scales the hit zone by distance so enemies close AND far are equally easy to hit.");
-                if (Options::Triggerbot::DynamicFOV)
+                if (Options::Triggerbot::Method == 0)
                 {
-                    UI::SliderFloat("FOV Scale", &Options::Triggerbot::DynamicFOVScale, 0.1f, 5.0f, "%.2f");
-                    UI::SliderFloat("Reference Dist", &Options::Triggerbot::DynamicFOVBaseDist, 5.f, 200.f, "%.0f");
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Distance (studs) at which the FOV equals the base Radius/FOV. Closer enemies keep full size; farther enemies grow.");
+                    UI::labelsection("DYNAMIC FOV");
+                    UI::Checkbox("Dynamic FOV", &Options::Triggerbot::DynamicFOV);
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scales the hit zone by distance so enemies close AND far are equally easy to hit.");
+                    if (Options::Triggerbot::DynamicFOV)
+                    {
+                        UI::SliderFloat("FOV Scale", &Options::Triggerbot::DynamicFOVScale, 0.1f, 5.0f, "%.2f");
+                        UI::SliderFloat("Reference Dist", &Options::Triggerbot::DynamicFOVBaseDist, 5.f, 200.f, "%.0f");
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Distance (studs) at which the FOV equals the base Radius/FOV. Closer enemies keep full size; farther enemies grow.");
+                    }
                 }
 
                 if (Options::Triggerbot::Prediction)
@@ -4760,8 +4785,8 @@ UI::labelsection("SMOOTHING & FEEL");
                     UI::SliderFloat("Prediction Y", &Options::Triggerbot::PredictionY, 0.0f, 10.0f, "%.2f");
                 }
 
-                // Advanced FOV sliders
-                if (Options::Triggerbot::AdvancedFOV)
+                // Advanced FOV sliders (FOV method only)
+                if (Options::Triggerbot::AdvancedFOV && Options::Triggerbot::Method == 0)
                 {
                     UI::labelsection("ADVANCED FOV (PER BONE)");
                     ImGui::Text(" HEAD");
