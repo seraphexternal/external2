@@ -9,6 +9,7 @@
 #include <string>
 #include <cctype>
 #include <mutex>
+#include <chrono>
 
 #include "../../Memory/MemoryManager.h"
 #include "../SDK/sdk.h"
@@ -284,9 +285,10 @@ namespace FrameCache
         {
             if (Roblox::Camera.address)
             {
+                // Position is needed twice below — read it once.
                 CameraPos = Memory->read<Vectors::Vector3>(Roblox::Camera.address + Offsets::Camera::Position);
                 Matrixes::Matrix3x3 rot = Memory->read<Matrixes::Matrix3x3>(Roblox::Camera.address + Offsets::Camera::Rotation);
-                Vectors::Vector3 pos = Memory->read<Vectors::Vector3>(Roblox::Camera.address + Offsets::Camera::Position);
+                const Vectors::Vector3& pos = CameraPos;
                 // Construct sCFrame manually (aggregate struct)
 CameraCFrame = sCFrame{};
 CameraCFrame.r00 = rot.r00; CameraCFrame.r01 = rot.r01; CameraCFrame.r02 = rot.r02;
@@ -303,12 +305,25 @@ CameraCFrame.x = pos.x; CameraCFrame.y = pos.y; CameraCFrame.z = pos.z;
             if (Roblox::LocalPlayer.address)
             {
                 auto localChar = Roblox::LocalPlayer.Character();
-                auto localHRP = localChar.FindFirstChild("HumanoidRootPart");
-                if (!localHRP.address) localHRP = localChar.FindFirstChild("Torso");
-                if (!localHRP.address) localHRP = localChar.FindFirstChild("UpperTorso");
-                if (localHRP.address)
+                // Resolving the local rig costs up to 3 FindFirstChild child
+                // scans (~100 driver reads) and this ran every frame; the parts
+                // only change on respawn, so re-resolve when the character
+                // address changes instead.
+                static uintptr_t s_fcCharAddr = 0;
+                static RobloxInstance s_fcHRP;
+                static std::chrono::steady_clock::time_point s_fcRescanAt = std::chrono::steady_clock::now();
+                if (localChar.address != s_fcCharAddr ||
+                    std::chrono::steady_clock::now() - s_fcRescanAt > std::chrono::seconds(2))
                 {
-                    LocalHRPPos = localHRP.Position();
+                    s_fcCharAddr = localChar.address;
+                    s_fcRescanAt = std::chrono::steady_clock::now();
+                    s_fcHRP = localChar.FindFirstChild("HumanoidRootPart");
+                    if (!s_fcHRP.address) s_fcHRP = localChar.FindFirstChild("Torso");
+                    if (!s_fcHRP.address) s_fcHRP = localChar.FindFirstChild("UpperTorso");
+                }
+                if (s_fcHRP.address)
+                {
+                    LocalHRPPos = s_fcHRP.Position();
                     LocalHRPValid = true;
                 }
                 else
@@ -345,6 +360,37 @@ CameraCFrame.x = pos.x; CameraCFrame.y = pos.y; CameraCFrame.z = pos.z;
         {
             std::lock_guard<std::mutex> lock(CachedPlayerObjectsMutex);
             return CachedPlayerObjects;
+        }
+
+        // One deep copy of the player list per render frame, shared by every
+        // draw/aim pass.  Each RobloxPlayer owns 4 std::strings, so the old
+        // pattern of taking a fresh locked copy at each call site (ESP, arrows,
+        // radar, aimbot x3, triggerbot x2, player list) cost ~10 vector copies
+        // per frame - hundreds of heap allocations before any drawing happened.
+        //
+        // The render thread bumps the sequence once per frame; callers on other
+        // threads still get a correct (their own) copy, and the 250ms fallback
+        // refresh guarantees the list can never go stale even if the bump is
+        // missed on some code path.
+        inline std::atomic<uint64_t> PlayersFrameSeq{ 0 };
+        inline void NextPlayersFrame() { PlayersFrameSeq.fetch_add(1, std::memory_order_relaxed); }
+
+        inline const std::vector<RobloxPlayer>& FramePlayers()
+        {
+            static thread_local std::vector<RobloxPlayer> cache;
+            static thread_local uint64_t cacheSeq = UINT64_MAX;
+            static thread_local std::chrono::steady_clock::time_point lastRefresh{};
+
+            const uint64_t seq = PlayersFrameSeq.load(std::memory_order_relaxed);
+            if (cacheSeq != seq ||
+                std::chrono::steady_clock::now() - lastRefresh > std::chrono::milliseconds(250))
+            {
+                std::lock_guard<std::mutex> lock(CachedPlayerObjectsMutex);
+                cache = CachedPlayerObjects;
+                cacheSeq = seq;
+                lastRefresh = std::chrono::steady_clock::now();
+            }
+            return cache;
         }
         inline bool forceRefresh = false;
         inline bool playerCacheNeedsRefresh = false;
@@ -459,7 +505,42 @@ CameraCFrame.x = pos.x; CameraCFrame.y = pos.y; CameraCFrame.z = pos.z;
     }
 }
 
+// Uncached team check; use IsTeammate() (below), which memoizes per frame.
+inline bool IsTeammateRaw(const RobloxPlayer& player);
+
+// A player's team signal cannot change within one frame, but every consumer
+// asks for itself: ESP twice per player, plus aimbot, triggerbot, chams,
+// ragebot and silent aim. The Blox Strike branch of the check answers by
+// walking the character's children and reading a class per child, so repeating
+// it per consumer was tens of thousands of driver reads/sec on its own.
+// Results are memoized per player for the current render frame, per thread.
 inline bool IsTeammate(const RobloxPlayer& player)
+{
+    if (Globals::Roblox::LocalPlayer.address == 0 || player.address == 0)
+        return false;
+
+    if (player.address == Globals::Roblox::LocalPlayer.address)
+        return true;
+
+    static thread_local uint64_t memoSeq = UINT64_MAX;
+    static thread_local std::unordered_map<uintptr_t, bool> memo;
+    const uint64_t seq = Globals::Caches::PlayersFrameSeq.load(std::memory_order_relaxed);
+    if (memoSeq != seq)
+    {
+        memo.clear();
+        memoSeq = seq;
+    }
+
+    auto it = memo.find(player.address);
+    if (it != memo.end())
+        return it->second;
+
+    const bool result = IsTeammateRaw(player);
+    memo.emplace(player.address, result);
+    return result;
+}
+
+inline bool IsTeammateRaw(const RobloxPlayer& player)
 {
     if (Globals::Roblox::LocalPlayer.address == 0 || player.address == 0)
         return false;
@@ -830,24 +911,38 @@ inline std::string FindToolName(const RobloxInstance& inst, int depth)
     if (inst.address == 0 || depth > 7)
         return "";
 
-    for (auto& child : inst.GetChildren())
+    // Fetch the child list once and derive each child's class once: the old
+    // copy called GetChildren() twice and Class() up to twice per child, and
+    // this walks every player's character/backpack on every cache rebuild.
+    auto children = inst.GetChildren();
+    if (children.empty())
+        return "";
+
+    std::vector<std::string> classes;
+    classes.reserve(children.size());
+    for (auto& child : children)
+        classes.push_back(child.Class());
+
+    for (size_t i = 0; i < children.size(); ++i)
     {
-        if (child.Class() == "Tool" || child.Class() == "HopperBin")
-            return child.Name();
+        if (classes[i] == "Tool" || classes[i] == "HopperBin")
+            return children[i].Name();
     }
 
     // Recurse to find weapon-like containers (weapons in Rivals are Models,
     // often nested deeper inside Backpack folders/slots). Descend every child
     // class (not just folders/models) since the search is rooted at the
     // Character/Backpack subtrees, which stay small; the depth cap bounds it.
-    for (auto& child : inst.GetChildren())
+    // Pass order is unchanged: any direct Tool still wins over weapon-like
+    // models and over anything found in a nested folder.
+    for (size_t i = 0; i < children.size(); ++i)
     {
-        auto c = child.Class();
+        const std::string& c = classes[i];
         if (c == "Tool" || c == "HopperBin")
             continue;
-        if (c == "Model" && IsWeaponLikeName(child.Name()))
-            return child.Name();
-        auto inner = FindToolName(child, depth + 1);
+        if (c == "Model" && IsWeaponLikeName(children[i].Name()))
+            return children[i].Name();
+        auto inner = FindToolName(children[i], depth + 1);
         if (!inner.empty())
             return inner;
     }
@@ -882,7 +977,7 @@ inline std::string GetLocalPlayerWeapon()
     // 3) Last resort: the cached player objects.
     if (found.empty())
     {
-        for (auto& player : Globals::Caches::CachedPlayerObjects)
+        for (const auto& player : Globals::Caches::FramePlayers())
         {
             if (player.address == Globals::Roblox::LocalPlayer.address)
             {
@@ -912,7 +1007,7 @@ inline bool CaseInsensitiveFind(const std::string& hay, const char* needle)
 // self-kill. Iterates the same cached objects the ESP/aim systems use.
 inline bool AnyRivalsKatanaUser()
 {
-    for (const auto& player : Globals::Caches::CachedPlayerObjects)
+    for (const auto& player : Globals::Caches::FramePlayers())
     {
         if (!player.address || player.address == Globals::Roblox::LocalPlayer.address)
             continue;

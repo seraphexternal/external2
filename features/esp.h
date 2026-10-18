@@ -296,25 +296,40 @@ inline void RenderESP(ImDrawList* drawList)
         return;
 
 
-    // Snapshot the player list under the cache mutex.  CachePlayerObjects()
-    // replaces this vector (`CachedPlayerObjects = std::move(tempList)`) on its
-    // own thread, so iterating the live vector here could walk the freed heap
-    // and crash inside RenderESP.
-    std::vector<RobloxPlayer> players;
-    {
-        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
-        players = Globals::Caches::CachedPlayerObjects;
-    }
+    // Snapshot the player list once per frame (shared with arrows/radar/
+    // aimbot/triggerbot via FramePlayers).  CachePlayerObjects() replaces the
+    // live vector (`CachedPlayerObjects = std::move(tempList)`) on its own
+    // thread, so iterating it directly could walk the freed heap and crash.
+    const std::vector<RobloxPlayer>& players = Globals::Caches::FramePlayers();
     if (players.empty())
         return;
 
     const auto localCharacter = Globals::Roblox::LocalPlayer.Character();
-    auto localHRP = localCharacter.FindFirstChild("HumanoidRootPart");
-    if (!localHRP.address) localHRP = localCharacter.FindFirstChild("Torso");
-    if (!localHRP.address) localHRP = localCharacter.FindFirstChild("UpperTorso");
 
-    auto localHead = localCharacter.FindFirstChild("Head");
-    if (!localHead.address) localHead = localHRP;
+    // Resolving the local rig costs up to4 FindFirstChild scans (a child-list
+    // walk reading a name per child) — doing that every frame was ~100 driver
+    // reads/frame for a value that only changes on respawn. Re-resolve when
+    // the character address changes, with a 5s safety rescan.
+    static uintptr_t s_localCharAddr = 0;
+    static double s_localRigRescanAt = -10.0;
+    static RobloxInstance s_localHRP;
+    static RobloxInstance s_localHead;
+    const double rigNow = ImGui::GetTime();
+    if (localCharacter.address != s_localCharAddr || rigNow - s_localRigRescanAt > 5.0)
+    {
+        s_localCharAddr = localCharacter.address;
+        s_localRigRescanAt = rigNow;
+
+        s_localHRP = localCharacter.FindFirstChild("HumanoidRootPart");
+        if (!s_localHRP.address) s_localHRP = localCharacter.FindFirstChild("Torso");
+        if (!s_localHRP.address) s_localHRP = localCharacter.FindFirstChild("UpperTorso");
+
+        s_localHead = localCharacter.FindFirstChild("Head");
+        if (!s_localHead.address) s_localHead = s_localHRP;
+    }
+
+    auto localHRP = s_localHRP;
+    auto localHead = s_localHead;
 
     Vectors::Vector3 localPos = {0,0,0};
     if (localHRP.address) localPos = localHRP.Position();
@@ -425,7 +440,7 @@ inline void RenderESP(ImDrawList* drawList)
         return true;
     };
 
-    for (const auto& player : Globals::Caches::SnapshotCachedPlayerObjects())
+    for (const auto& player : Globals::Caches::FramePlayers())
     {
         if (!player.address || player.address == Globals::Roblox::LocalPlayer.address)
             continue;
@@ -2844,7 +2859,7 @@ inline void RenderArrows(ImDrawList* drawList)
     auto camRight = camCFrame.GetRightVector();
     auto camPos = camCFrame.Position();
 
-    for (const auto& player : Globals::Caches::SnapshotCachedPlayerObjects())
+    for (const auto& player : Globals::Caches::FramePlayers())
     {
         if (!player.address || player.address == Globals::Roblox::LocalPlayer.address)
             continue;
@@ -3017,7 +3032,7 @@ inline void RenderRadar(ImDrawList* drawList)
     auto camRight = camCFrame.GetRightVector();
     auto camPos = camCFrame.Position();
 
-    for (const auto& player : Globals::Caches::SnapshotCachedPlayerObjects())
+    for (const auto& player : Globals::Caches::FramePlayers())
     {
         if (!player.address || player.address == Globals::Roblox::LocalPlayer.address)
             continue;

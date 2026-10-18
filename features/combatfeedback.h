@@ -425,13 +425,13 @@ namespace CombatFeedback
             !Options::Combat::HitNotifications && !Options::Combat::HitChams)
             return;
 
-        if (Globals::Caches::CachedPlayerObjects.empty())
+        if (Globals::Caches::FramePlayers().empty())
             return;
 
         RobloxPlayer best;
         float bestDist = 1e9f;
 
-        for (const auto& player : Globals::Caches::CachedPlayerObjects)
+        for (const auto& player : Globals::Caches::FramePlayers())
         {
             if (player.address == 0)
                 continue;
@@ -610,7 +610,7 @@ namespace CombatFeedback
             footsteps.end());
 
         std::unordered_map<uintptr_t, bool> seen;
-        for (const auto& player : Globals::Caches::CachedPlayerObjects)
+        for (const auto& player : Globals::Caches::FramePlayers())
         {
             if (player.address == 0)
                 continue;

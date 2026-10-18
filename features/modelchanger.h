@@ -297,12 +297,29 @@ namespace ModelChanger
             "HumanoidRootPart"
         };
 
-        for (const char* name : partNames)
+        // 21 FindFirstChild calls per frame is ~1700 driver reads/frame (each
+        // one re-reads the whole child list plus a name per child). The parts
+        // only change on respawn, so resolve once per character address and
+        // re-apply the transparency writes (which the game can reset) each
+        // frame from the cached list.
+        static uintptr_t s_hiddenCharAddr = 0;
+        static std::vector<RobloxInstance> s_hiddenParts;
+        static ULONGLONG s_hiddenRescanTick = 0;
+        if (character.address != s_hiddenCharAddr || GetTickCount64() - s_hiddenRescanTick > 2000)
         {
-            auto part = character.FindFirstChild(name);
-            if (part.address)
-                Memory->write<float>(part.address + Offsets::BasePart::Transparency, 1.0f);
+            s_hiddenCharAddr = character.address;
+            s_hiddenRescanTick = GetTickCount64();
+            s_hiddenParts.clear();
+            for (const char* name : partNames)
+            {
+                auto part = character.FindFirstChild(name);
+                if (part.address)
+                    s_hiddenParts.push_back(part);
+            }
         }
+
+        for (const auto& part : s_hiddenParts)
+            Memory->write<float>(part.address + Offsets::BasePart::Transparency, 1.0f);
     }
 
     inline void RenderModeChanger(ImDrawList* dl)

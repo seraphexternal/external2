@@ -135,11 +135,16 @@ inline void ClickTPLoop()
                     continue;
             }
 
-            for (int i = 0; i < 10000; ++i)
+            // ~40ms of writes at 1ms spacing, not 10000 back-to-back: same
+            // race-winning coverage over the game's physics steps, ~500x fewer
+            // driver writes on the shared IO mutex.
+            const auto tpEnd = std::chrono::steady_clock::now() + std::chrono::milliseconds(40);
+            do
             {
                 Memory->write<Vectors::Vector3>(prim + Offsets::Primitive::Position, target);
                 Memory->write<Vectors::Vector3>(prim + Offsets::Primitive::AssemblyLinearVelocity, { 0.f, 0.f, 0.f });
-            }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } while (Globals::running && std::chrono::steady_clock::now() < tpEnd);
         }
         catch (...)
         {
@@ -189,10 +194,13 @@ inline void PFAimLoop()
         if (!cam)
             continue;
 
+        // ~14ms coverage, 1ms between batches: beats the once-per-frame camera
+        // script without hammering the shared IO mutex at full speed.
         auto writeStart = std::chrono::high_resolution_clock::now();
         do {
             Memory->write<int>(cam + Offsets::Camera::CameraType, 7);
             Memory->write<Matrixes::Matrix3x3>(cam + Offsets::Camera::Rotation, rot);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         } while (std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::high_resolution_clock::now() - writeStart).count() < 14000);
 
@@ -432,11 +440,14 @@ inline void FreeCamLoop()
         }
 
         // ── Hammer the camera transform (~14ms burst) so nothing can override ─
+        // Batches are spaced 1ms apart: one write per ms still lands after the
+        // game's once-per-frame camera write, without ~1M IOCTLs/sec.
         auto writeStart = std::chrono::high_resolution_clock::now();
         do {
             Memory->write<int>(cam.address + Offsets::Camera::CameraType, 7);
             Memory->write<Vectors::Vector3>(cam.address + Offsets::Camera::Position, savedPos);
             Memory->write<Matrixes::Matrix3x3>(cam.address + Offsets::Camera::Rotation, rot);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         } while (std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::high_resolution_clock::now() - writeStart).count() < 14000);
 

@@ -3761,6 +3761,8 @@ OutputDebugStringA("[S] ShowImgui: Entering render loop\n");
             OutputDebugStringA("[S] ShowImgui: First frame\n");
         }
         frameCount++;
+        // Share one player-list snapshot across every pass in this frame.
+        Globals::Caches::NextPlayersFrame();
         MSG msg;
         while (::PeekMessage(&msg, nullptr, 0U, 0U, PM_REMOVE))
         {
@@ -6519,7 +6521,13 @@ ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 HRESULT hr = g_pSwapChain->Present(0, 0);
 g_SwapChainOccluded = (hr == DXGI_STATUS_OCCLUDED);
 
-const double frameBudget = 1.0 / 240.0;
+// Cap the overlay at 60fps. ESP draws straight from kernel reads every frame
+// with no internal throttle, so running the loop at 240 did all of that work
+// (and every ImGui pass) 4x more often than the 60hz ESP people actually see.
+// This keeps ESP at exactly 60hz while returning the CPU/IO the game would
+// otherwise lose to the overlay. Raise this only if you need menu smoothness
+// on a high-refresh display.
+const double frameBudget = 1.0 / 60.0;
 for (;;)
 {
     LARGE_INTEGER now;
@@ -6528,8 +6536,12 @@ for (;;)
     const double remaining = frameBudget - elapsed;
     if (remaining <= 0.0)
         break;
-    if (remaining >= 0.0015)
-        ::Sleep((DWORD)((remaining - 0.0005) * 1000.0));
+    // Sleep down to ~0.8ms of slack instead of spinning through the last
+    // 1.5ms of every frame; the spin was burning ~1/3 of a core at 240fps.
+    if (remaining >= 0.0008)
+        ::Sleep((DWORD)((remaining - 0.0002) * 1000.0));
+    else
+        ::Sleep(0);
 }
 }
 

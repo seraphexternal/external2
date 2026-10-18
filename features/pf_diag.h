@@ -121,7 +121,11 @@ namespace PFDiag
         static auto lastRun = std::chrono::steady_clock::now();
         static int tickCount = 0;
         const auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRun).count() < 2000)
+        // 15s, not 2s: each pass walks Workspace/FindAllCharactersInWorkspace
+        // and re-opens the log file per line, so at 2s it was a steady IO burst
+        // (hundreds of driver reads + a dozen file opens) in every game, all
+        // year round. Still frequent enough to diagnose from.
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRun).count() < 15000)
             return;
         lastRun = now;
         ++tickCount;
@@ -174,7 +178,7 @@ namespace PFDiag
 
             int printed = 0;
             int printed2 = 0;
-            for (const auto& p : Globals::Caches::CachedPlayerObjects)
+            for (const auto& p : Globals::Caches::FramePlayers())
             {
                 if (printed >= 8) break;
                 const auto hpPos = p.HumanoidRootPart.Position();
@@ -267,7 +271,7 @@ namespace PFDiag
             // teammate and an enemy can be told apart by their signatures.
             {
                 int sig = 0;
-                for (const auto& p : Globals::Caches::CachedPlayerObjects)
+                for (const auto& p : Globals::Caches::FramePlayers())
                 {
                     if (printed2 >= 8) break;
                     ++printed2;
@@ -685,7 +689,7 @@ namespace PFDiag
                         }
 
                         // (c) non-part descendants of each cached character (GUI / values / Highlight)
-                        for (const auto& p : Globals::Caches::CachedPlayerObjects)
+                        for (const auto& p : Globals::Caches::FramePlayers())
                         {
                             if (!p.Character.address || p.Name.empty()) continue;
                             std::vector<std::pair<RobloxInstance, int>> stk2;
@@ -725,7 +729,7 @@ namespace PFDiag
                 if (Globals::Roblox::isRivals && GetTickCount64() - lastTld > 8000)
                 {
                     lastTld = GetTickCount64();
-                    for (const auto& p : Globals::Caches::CachedPlayerObjects)
+                    for (const auto& p : Globals::Caches::FramePlayers())
                     {
                         if (p.Name.empty()) continue;
                         std::string owner = "none";
@@ -778,7 +782,7 @@ namespace PFDiag
                     }
 
                     // Dump character attribute stores
-                    for (const auto& p : Globals::Caches::CachedPlayerObjects)
+                    for (const auto& p : Globals::Caches::FramePlayers())
                     {
                         if (!p.Character.address) continue;
                         const uintptr_t attrStore = Memory->read<uintptr_t>(p.Character.address + 0x40);

@@ -706,6 +706,18 @@ namespace {
 void Tick()
 {
 	UploadReady();
+
+	// EnqueueWanted rebuilds the whole wanted-name list every call: a driver
+	// read of the local player's name, a locked walk of the entire player
+	// cache, and a string vector allocation. Players only change when the
+	// cache rebuilds (500ms), so rescanning every rendered frame was pure
+	// waste; the actual avatar downloads are kicked from the same list.
+	static float last_enqueue = -1e9f;
+	const float now = (float)ImGui::GetTime();
+	if (now - last_enqueue < 0.5f)
+		return;
+	last_enqueue = now;
+
 	EnqueueWanted();
 }
 

@@ -100,7 +100,8 @@ namespace Visibility
         return true;
     }
 
-    inline void TryAddOccluder(const RobloxInstance& part, const Vectors::Vector3& cameraPos, float maxDistance)
+    inline void TryAddOccluder(const RobloxInstance& part, const Vectors::Vector3& cameraPos,
+                               float maxDistance, std::vector<Occluder>& out)
     {
         if (!CanPartOcclude(part, cameraPos, maxDistance))
             return;
@@ -118,9 +119,10 @@ namespace Visibility
         entry.radius = radius;
         entry.modelAddress = GetModelAncestor(part.address);
 
-        std::lock_guard<std::mutex> lock(occluderMutex);
-        if (occluders.size() < 450)
-            occluders.push_back(entry);
+        // Each scan owns its own `out` vector, so no lock is needed here; the
+        // finished list is swapped in atomically under occluderMutex.
+        if (out.size() < 450)
+            out.push_back(entry);
     }
 
     inline void ScanTree(
@@ -128,7 +130,8 @@ namespace Visibility
         int depth,
         const Vectors::Vector3& cameraPos,
         float maxDistance,
-        uintptr_t skipCharacterModel)
+        uintptr_t skipCharacterModel,
+        std::vector<Occluder>& out)
     {
         if (!node.address || depth > 4)
             return;
@@ -141,13 +144,13 @@ namespace Visibility
 
         const std::string className = node.Class();
         if (IsPartClass(className))
-            TryAddOccluder(node, cameraPos, maxDistance);
+            TryAddOccluder(node, cameraPos, maxDistance, out);
 
         if (depth >= 4)
             return;
 
         for (const auto& child : node.GetChildren())
-            ScanTree(child, depth + 1, cameraPos, maxDistance, skipCharacterModel);
+            ScanTree(child, depth + 1, cameraPos, maxDistance, skipCharacterModel, out);
     }
 
     inline void RunOccluderScan()
@@ -160,6 +163,11 @@ namespace Visibility
         const float maxDistance = Options::ESP::VisibilityMaxDistance;
         const uintptr_t localCharacter = Globals::Roblox::LocalPlayer.Character().address;
 
+        // NOTE: the scan used to fill the *global* occluders vector and then
+        // overwrite it with this never-filled `collected`, so every finished
+        // scan threw its results away and the visibility test always ran
+        // against an empty list. ScanTree now collects into this vector, which
+        // is swapped in whole below.
         std::vector<Occluder> collected;
         collected.reserve(450);
 
@@ -167,7 +175,7 @@ namespace Visibility
         {
             const std::string cls = child.Class();
             if (cls == "Folder" || cls == "Model" || cls == "Terrain" || IsPartClass(cls))
-                ScanTree(child, 0, cameraPos, maxDistance, localCharacter);
+                ScanTree(child, 0, cameraPos, maxDistance, localCharacter, collected);
         }
 
         std::lock_guard<std::mutex> lock(occluderMutex);

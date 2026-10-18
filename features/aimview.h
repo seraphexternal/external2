@@ -39,8 +39,7 @@ inline void AimViewLoop()
         if (active)
         {
             const std::string targetName = Options::ESP::AimViewTarget;
-            std::lock_guard<std::mutex> pl(Globals::Caches::CachedPlayerObjectsMutex);
-            for (const auto& player : Globals::Caches::CachedPlayerObjects)
+            for (const auto& player : Globals::Caches::FramePlayers())
             {
                 if (player.Name == targetName && player.HumanoidRootPart.address)
                 {
@@ -118,11 +117,15 @@ inline void AimViewLoop()
 
             // Hammer continuously (~14ms) like the third-person loop to hold
             // the camera without flicker across the inter-frame gap.
+            // Same ~14ms coverage window, but batches back off 1ms instead of
+            // spinning the driver — the camera script only writes once per
+            // frame, so a 1ms re-assert beats it without ~1M IOCTLs/sec.
             auto writeStart = std::chrono::high_resolution_clock::now();
             do {
                 Memory->write<int>(cachedCam + Offsets::Camera::CameraType, 7);
                 Memory->write<Vectors::Vector3>(cachedCam + Offsets::Camera::Position, pos);
                 Memory->write<Matrixes::Matrix3x3>(cachedCam + Offsets::Camera::Rotation, rot);
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             } while (std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::high_resolution_clock::now() - writeStart).count() < 14000);
         }

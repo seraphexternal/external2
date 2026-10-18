@@ -128,7 +128,7 @@ inline std::vector<RagebotTarget> GetRagebotTargets()
     const int hitboxes[] = { 0, 1, 2, 3 };
     const int hitboxCount = 4;
 
-    for (auto& player : Globals::Caches::CachedPlayerObjects)
+    for (const auto& player : Globals::Caches::FramePlayers())
     {
         auto HRP = player.HumanoidRootPart;
         if (!HRP.address)
@@ -424,7 +424,7 @@ inline RobloxPlayer GetRageKillTarget()
     auto localHRP = localChar.FindFirstChild("HumanoidRootPart");
     POINT p; GetCursorPos(&p);
 
-    for (auto& player : Globals::Caches::CachedPlayerObjects)
+    for (const auto& player : Globals::Caches::FramePlayers())
     {
         if (player.address == Globals::Roblox::LocalPlayer.address) continue;
         if (Globals::Roblox::isOverkill && !player.Name.empty() &&

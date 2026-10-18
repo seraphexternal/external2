@@ -26,6 +26,12 @@ inline void ThirdPersonLoop()
     Vectors::Vector3 smoothLookPos{ 0.f, 0.f, 0.f };
     bool smoothInit = false;
 
+    // Last known-good track CFrame. Parts can transiently read back an all-zero
+    // matrix (respawn, streaming in/out) — reusing the last good one keeps the
+    // camera from snapping to a garbage position in between.
+    sCFrame lastGoodCF{};
+    bool lastGoodValid = false;
+
     auto lastTick = std::chrono::high_resolution_clock::now();
 
     while (Globals::running)
@@ -61,8 +67,11 @@ inline void ThirdPersonLoop()
 
         if (active)
         {
-            if (!cachedCam)
-                cachedCam = Globals::Roblox::Camera.address;
+            // Re-read the camera instance every tick. Games replace the Camera
+            // object on respawn/teleport, and a latched pointer means every
+            // subsequent write goes nowhere — third person then silently does
+            // nothing until it is toggled off and on again.
+            cachedCam = Globals::Roblox::Camera.address;
             if (!cachedCam)
             {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -70,7 +79,19 @@ inline void ThirdPersonLoop()
             }
 
             auto character = Globals::Roblox::LocalPlayer.Character();
-            auto hrp = character.FindFirstChild("HumanoidRootPart");
+
+            // Not every game names its root part "HumanoidRootPart", and some
+            // unlink the local character entirely. Try the usual candidates and
+            // then fall back to any part of the character that still has a live
+            // physics primitive, so non-standard rigs keep working.
+            RobloxInstance hrp(0);
+            if (character.address)
+            {
+                hrp = character.FindFirstChild("HumanoidRootPart");
+                if (!hrp.address) hrp = character.FindFirstChild("Torso");
+                if (!hrp.address) hrp = character.FindFirstChild("UpperTorso");
+                if (!hrp.address) hrp = character.FindFirstChildWhichIsA("BasePart");
+            }
             if (!hrp.address)
             {
                 if (wasActive)
@@ -86,6 +107,25 @@ inline void ThirdPersonLoop()
 
             // ── Cinematic Mode: track head/neck instead of HRP ──────────────
             sCFrame trackCF = hrp.CFrame();
+
+            // An all-zero matrix means the primitive could not be read (it can
+            // vanish mid-respawn). Feeding that into the yaw extraction yields a
+            // 0/0 forward vector and a degenerate camera, so hold the last good
+            // orientation until the part is readable again.
+            if (trackCF.r00 == 0.f && trackCF.r01 == 0.f && trackCF.r02 == 0.f &&
+                trackCF.r10 == 0.f && trackCF.r11 == 0.f && trackCF.r12 == 0.f &&
+                trackCF.r20 == 0.f && trackCF.r21 == 0.f && trackCF.r22 == 0.f)
+            {
+                if (lastGoodValid)
+                    trackCF = lastGoodCF;
+                else
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    continue;
+                }
+            }
+            lastGoodValid = true;
+            lastGoodCF = trackCF;
             Vectors::Vector3 trackPos = trackCF.Position();
             if (Options::ThirdPerson::CinematicMode && Options::ThirdPerson::UseHeadTracking)
             {
@@ -205,11 +245,18 @@ inline void ThirdPersonLoop()
             // Hammer continuously for ~14ms — identical to FreeCam's inner
             // loop. Prevents the game's camera script from winning the race
             // during the inter-frame gap, eliminating flicker entirely.
+            // The window still spans ~14ms so it covers the inter-frame gap,
+            // but each batch now backs off 1ms instead of firing as fast as
+            // the driver accepts. The camera script only writes once per
+            // frame, so re-asserting every 1ms already lands after it every
+            // time — the old tight loop burned ~1M IOCTLs/sec on the shared
+            // IO mutex for as long as the feature stayed on.
             auto writeStart = std::chrono::high_resolution_clock::now();
             do {
                 Memory->write<int>(cachedCam + Offsets::Camera::CameraType, 7);
                 Memory->write<Vectors::Vector3>(cachedCam + Offsets::Camera::Position, camPos);
                 Memory->write<Matrixes::Matrix3x3>(cachedCam + Offsets::Camera::Rotation, rot);
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             } while (std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::high_resolution_clock::now() - writeStart).count() < 14000);
         }

@@ -26,7 +26,7 @@ inline bool Orbit_IsAlive(const RobloxPlayer& p)
 // Find a cached player object by its address.
 inline RobloxPlayer Orbit_FindCached(uintptr_t addr)
 {
-    for (auto& p : Globals::Caches::CachedPlayerObjects)
+    for (const auto& p : Globals::Caches::FramePlayers())
         if (p.address == addr) return p;
     return RobloxPlayer();
 }
@@ -38,7 +38,7 @@ inline RobloxPlayer Orbit_ResolveByName()
     if (name.empty()) return RobloxPlayer();
     RobloxInstance pl = FindPlayerByName(name);
     if (!pl.address) return RobloxPlayer();
-    for (auto& p : Globals::Caches::CachedPlayerObjects)
+    for (const auto& p : Globals::Caches::FramePlayers())
         if (p.address == pl.address) return p;
     return RobloxPlayer();
 }
@@ -53,7 +53,7 @@ inline RobloxPlayer Orbit_AcquireTarget()
     POINT p;
     GetCursorPos(&p);
 
-    for (auto& player : Globals::Caches::CachedPlayerObjects)
+    for (const auto& player : Globals::Caches::FramePlayers())
     {
         if (player.address == Globals::Roblox::LocalPlayer.address)
             continue;

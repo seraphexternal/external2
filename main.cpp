@@ -527,7 +527,12 @@ int main()
 
         // Clear all caches and reset global state
         Globals::Caches::CachedPlayers.clear();
-        Globals::Caches::CachedPlayerObjects.clear();
+        {
+            // The detached cache/TP threads can still be winding down; clearing
+            // the live vector without the mutex let them walk freed memory.
+            std::lock_guard<std::mutex> plk(Globals::Caches::CachedPlayerObjectsMutex);
+            Globals::Caches::CachedPlayerObjects.clear();
+        }
         Globals::Caches::CharacterFallbackCache.clear();
         Globals::DynamicOffsets::PlayerTeam = 0;
         Globals::Roblox::isPhantomForces = false;
@@ -549,7 +554,12 @@ int main()
         Globals::Viewport::RobloxHWND = nullptr;
         Globals::Viewport::ViewMatrix = Matrixes::Matrix4{};
         Globals::Caches::CachedPlayers.clear();
-        Globals::Caches::CachedPlayerObjects.clear();
+        {
+            // The detached cache/TP threads can still be winding down; clearing
+            // the live vector without the mutex let them walk freed memory.
+            std::lock_guard<std::mutex> plk(Globals::Caches::CachedPlayerObjectsMutex);
+            Globals::Caches::CachedPlayerObjects.clear();
+        }
         Globals::Caches::CharacterFallbackCache.clear();
         Globals::DynamicOffsets::PlayerTeam = 0;
         Globals::Roblox::isPhantomForces = false;

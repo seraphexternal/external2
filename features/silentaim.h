@@ -899,7 +899,7 @@ inline Vectors::Vector3 PartVelocity(const RobloxInstance& part)
         // ── Reuse the current lock while it stays legal ────────────────────
         if (lockedTarget != 0)
         {
-            for (const auto& player : Globals::Caches::CachedPlayerObjects)
+            for (const auto& player : Globals::Caches::FramePlayers())
             {
                 if (player.address != lockedTarget)
                     continue;
@@ -964,7 +964,7 @@ inline Vectors::Vector3 PartVelocity(const RobloxInstance& part)
         Vectors::Vector3 bestPos = { 0.f, 0.f, 0.f };
         float bestScore = FLT_MAX;
 
-        for (const auto& player : Globals::Caches::CachedPlayerObjects)
+        for (const auto& player : Globals::Caches::FramePlayers())
         {
             if (!IsValidCandidate(player, localAddress))
                 continue;
@@ -1067,7 +1067,7 @@ inline Vectors::Vector3 PartVelocity(const RobloxInstance& part)
                 targetPos = live;
         }
 
-        for (const auto& player : Globals::Caches::CachedPlayerObjects)
+        for (const auto& player : Globals::Caches::FramePlayers())
         {
             if (player.address == s_TargetAddress)
             {

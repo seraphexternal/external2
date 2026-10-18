@@ -78,7 +78,7 @@ namespace PlayerFling
 				bool found = false;
 				{
 					std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
-					for (const auto& p : Globals::Caches::CachedPlayerObjects)
+					for (const auto& p : Globals::Caches::FramePlayers())
 					{
 						if (p.Name == targetName)
 						{

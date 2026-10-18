@@ -18,7 +18,7 @@ namespace LodLineVisual
         if (!drawList)
             return;
 
-        if (Globals::Caches::CachedPlayerObjects.empty())
+        if (Globals::Caches::FramePlayers().empty())
             return;
 
         // Aimview: when an aimview target is selected, restrict the LOD line to
@@ -39,7 +39,7 @@ namespace LodLineVisual
             "MousePos", "mousePos", "AimTarget", "LookDirection", "AimPoint", "TargetPosition"
         };
 
-        for (const auto& player : Globals::Caches::CachedPlayerObjects)
+        for (const auto& player : Globals::Caches::FramePlayers())
         {
             if (!player.Head.address || !player.HumanoidRootPart.address)
                 continue;

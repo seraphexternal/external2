@@ -59,13 +59,9 @@ inline void RenderAdvancedFOV(ImDrawList* drawList)
     auto localTeam = Globals::Roblox::LocalPlayer.Team();
     auto localHRP = Globals::Roblox::LocalPlayer.Character().FindFirstChild("HumanoidRootPart");
 
-    std::vector<RobloxPlayer> cachedPlayers;
-    {
-        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
-        cachedPlayers = Globals::Caches::CachedPlayerObjects;
-    }
+    const std::vector<RobloxPlayer>& cachedPlayers = Globals::Caches::FramePlayers();
 
-    for (auto& player : cachedPlayers)
+    for (const auto& player : cachedPlayers)
     {
         if (player.address == Globals::Roblox::LocalPlayer.address)
             continue;
@@ -330,11 +326,7 @@ auto localCharacter = Globals::Roblox::LocalPlayer.Character();
     if (!localHRP.address)
         tbNoHRP++;
 
-    std::vector<RobloxPlayer> cachedPlayers;
-    {
-        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
-        cachedPlayers = Globals::Caches::CachedPlayerObjects;
-    }
+    const std::vector<RobloxPlayer>& cachedPlayers = Globals::Caches::FramePlayers();
 
     if (cachedPlayers.empty())
     {

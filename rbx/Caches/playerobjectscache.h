@@ -572,8 +572,13 @@ else
 				p.Humanoid = p.Character.FindFirstChildWhichIsA("Humanoid");
 				if (p.Humanoid.address)
 				{
-					p.Health = player.Health();
-					p.MaxHealth = player.MaxHealth();
+					// Read straight off the humanoid resolved two lines above.
+					// player.Health()/player.MaxHealth() each re-ran
+					// Character() + FindFirstChildWhichIsA() - two more full
+					// child-list scans per player per rebuild just to reach the
+					// same humanoid we already had in hand.
+					p.Health = Memory->read<float>(p.Humanoid.address + Offsets::Humanoid::Health);
+					p.MaxHealth = Memory->read<float>(p.Humanoid.address + Offsets::Humanoid::MaxHealth);
 				}
 				else
 				{
@@ -759,41 +764,61 @@ else
 				}
 			}
 
-			switch (p.RigType)
+			if (p.RigType == 0 || p.RigType == 1)
 			{
-			case 0: // R6
-				p.Left_Arm = p.Character.FindFirstChild("Left Arm");
-				p.Left_Leg = p.Character.FindFirstChild("Left Leg");
+				// One GetChildren pass for the whole rig instead of up to 15
+				// separate FindFirstChild calls. Each FindFirstChild re-read the
+				// full child list plus a name per child (~80 driver reads), so
+				// this block alone cost >1000 reads per R15 player per rebuild
+				// - tens of thousands/sec across a full lobby. Matching is
+				// exact and first-wins, identical to FindFirstChild.
+				auto charChildren = p.Character.GetChildren();
+				std::unordered_map<std::string, RobloxInstance> limbByName;
+				limbByName.reserve(charChildren.size());
+				for (auto& c : charChildren)
+					limbByName.emplace(c.Name(), c);
+				auto limb = [&](const char* n) -> RobloxInstance
+				{
+					auto it = limbByName.find(n);
+					return (it != limbByName.end()) ? it->second : RobloxInstance(0);
+				};
 
-				p.Right_Arm = p.Character.FindFirstChild("Right Arm");
-				p.Right_Leg = p.Character.FindFirstChild("Right Leg");
+				switch (p.RigType)
+				{
+				case 0: // R6
+					p.Left_Arm = limb("Left Arm");
+					p.Left_Leg = limb("Left Leg");
 
-				p.Torso = p.Character.FindFirstChild("Torso");
+					p.Right_Arm = limb("Right Arm");
+					p.Right_Leg = limb("Right Leg");
 
-				break;
-			case 1: // R15
-				p.Upper_Torso = p.Character.FindFirstChild("UpperTorso");
-				p.Lower_Torso = p.Character.FindFirstChild("LowerTorso");
+					p.Torso = limb("Torso");
 
-				p.Right_Upper_Arm = p.Character.FindFirstChild("RightUpperArm");
-				p.Right_Lower_Arm = p.Character.FindFirstChild("RightLowerArm");
-				p.Right_Hand = p.Character.FindFirstChild("RightHand");
+					break;
+				case 1: // R15
+					p.Upper_Torso = limb("UpperTorso");
+					p.Lower_Torso = limb("LowerTorso");
 
-				p.Left_Upper_Arm = p.Character.FindFirstChild("LeftUpperArm");
-				p.Left_Lower_Arm = p.Character.FindFirstChild("LeftLowerArm");
-				p.Left_Hand = p.Character.FindFirstChild("LeftHand");
+					p.Right_Upper_Arm = limb("RightUpperArm");
+					p.Right_Lower_Arm = limb("RightLowerArm");
+					p.Right_Hand = limb("RightHand");
 
-				p.Right_Upper_Leg = p.Character.FindFirstChild("RightUpperLeg");
-				p.Right_Lower_Leg = p.Character.FindFirstChild("RightLowerLeg");
-				p.Right_Foot = p.Character.FindFirstChild("RightFoot");
+					p.Left_Upper_Arm = limb("LeftUpperArm");
+					p.Left_Lower_Arm = limb("LeftLowerArm");
+					p.Left_Hand = limb("LeftHand");
 
-				p.Left_Upper_Leg = p.Character.FindFirstChild("LeftUpperLeg");
-				p.Left_Lower_Leg = p.Character.FindFirstChild("LeftLowerLeg");
-				p.Left_Foot = p.Character.FindFirstChild("LeftFoot");
+					p.Right_Upper_Leg = limb("RightUpperLeg");
+					p.Right_Lower_Leg = limb("RightLowerLeg");
+					p.Right_Foot = limb("RightFoot");
 
-				break;
-			default:
-				break;
+					p.Left_Upper_Leg = limb("LeftUpperLeg");
+					p.Left_Lower_Leg = limb("LeftLowerLeg");
+					p.Left_Foot = limb("LeftFoot");
+
+					break;
+				default:
+					break;
+				}
 			}
 
 			tempList.push_back(p);

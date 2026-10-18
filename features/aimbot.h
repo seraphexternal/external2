@@ -479,13 +479,9 @@ inline RobloxPlayer GetClosestPlayer()
     // Snapshot under the cache mutex: CachePlayerObjects() replaces this vector
     // (CachedPlayerObjects = std::move(tempList)) on its own thread, so
     // iterating the live vector races with that free.
-    std::vector<RobloxPlayer> aimSnapshot1;
-    {
-        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
-        aimSnapshot1 = Globals::Caches::CachedPlayerObjects;
-    }
+    const std::vector<RobloxPlayer>& aimSnapshot1 = Globals::Caches::FramePlayers();
 
-    for (auto& player : aimSnapshot1)
+    for (const auto& player : aimSnapshot1)
     {
         auto HRP = player.HumanoidRootPart;
         if (!HRP.address)
@@ -1025,11 +1021,7 @@ inline void FlickbotTick()
     POINT cursor;
     GetCursorPos(&cursor);
 
-    std::vector<RobloxPlayer> aimSnapshot2;
-    {
-        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
-        aimSnapshot2 = Globals::Caches::CachedPlayerObjects;
-    }
+    const std::vector<RobloxPlayer>& aimSnapshot2 = Globals::Caches::FramePlayers();
 
     for (const auto& player : aimSnapshot2)
     {
@@ -1407,11 +1399,7 @@ inline void RunAimCoreInternal(ImDrawList* drawList)
     // Flickbot: one-shot snap to the nearest target on key press.
     FlickbotTick();
 
-    std::vector<RobloxPlayer> aimSnapshot3;
-    {
-        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
-        aimSnapshot3 = Globals::Caches::CachedPlayerObjects;
-    }
+    const std::vector<RobloxPlayer>& aimSnapshot3 = Globals::Caches::FramePlayers();
     if (aimSnapshot3.empty())
         return;
 

@@ -71,8 +71,18 @@ Globals::Roblox::DataModel = dataModel;
 			Globals::Caches::forceRefresh = true;
 		}
 
-		// Continuous self-healing checks for cached pointers
-		if (Globals::Roblox::DataModel.address != 0)
+		// Continuous self-healing checks for cached pointers.
+		// Each FindFirstChildWhichIsA below walks every DataModel/Workspace child
+		// reading a class per child, so running them on the 100ms tick was ~5k
+		// driver reads/sec in the background in every game. Nothing these catch
+		// (a pointer going stale inside a live DataModel) resolves faster than
+		// a second, so they run 1-in-10 ticks; the cheap DataModel/place-id
+		// check above keeps its 100ms cadence for fast join/leave detection.
+		static int s_healTick = 0;
+		const bool doHeal = (++s_healTick >= 10);
+		if (doHeal) s_healTick = 0;
+
+		if (doHeal && Globals::Roblox::DataModel.address != 0)
 		{
 			auto currentWorkspace = Globals::Roblox::DataModel.FindFirstChildWhichIsA("Workspace");
 			if (currentWorkspace.address != Globals::Roblox::Workspace.address)
