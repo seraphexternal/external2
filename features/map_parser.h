@@ -362,7 +362,10 @@ namespace MapParser
             toCenter.x * toCenter.x +
             toCenter.y * toCenter.y +
             toCenter.z * toCenter.z - projection * projection;
-        return dsq > part.radius_sq;
+        const float radius = part.radius * 1.05f;
+        const float distFromCenter = (toCenter.x * toCenter.x + toCenter.y * toCenter.y + toCenter.z * toCenter.z);
+        if (distFromCenter < radius * radius) return false; // inside, not blocked
+        return dsq > part.radius_sq * 1.05f * 1.05f;
     }
 
     inline bool RayVsOBB(

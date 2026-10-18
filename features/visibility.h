@@ -257,7 +257,7 @@ namespace Visibility
         float distance,
         uintptr_t ignoreModelAddress)
     {
-        const float maxDistance = distance - 0.75f;
+        const float maxDistance = distance - 0.35f;
 
         if (MapParser::IsCacheReady())
         {
@@ -280,7 +280,7 @@ namespace Visibility
             if (wallDist > cullDistance)
                 continue;
 
-            if (RayIntersectsSphere(origin, delta, wall.position, wall.radius + 0.35f, maxDistance))
+            if (RayIntersectsSphere(origin, delta, wall.position, wall.radius + 0.25f, maxDistance))
                 return true;
         }
 
