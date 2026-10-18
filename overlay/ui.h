@@ -3,6 +3,7 @@
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
 #include "imgui/KeyBind.h"
+#include "clicksound.h"
 #include "../rbx/globals/options.h"
 #include <map>
 #include <string>
@@ -264,6 +265,22 @@ namespace UI
         ImGui::Dummy(ImVec2(0.0f, 8.0f));
     }
 
+    // ── click feedback ────────────────────────────────────────────
+    // Short UI tick on widget interaction. Centralized so every widget
+    // (checkboxes, sliders, combos, binds, buttons, sections) shares one
+    // debounce + volume-safe playback path.
+    inline void ClickFx()
+    {
+        if (!Options::Misc::MenuClickSound)
+            return;
+        static double last = -1.0;
+        const double now = ImGui::GetTime();
+        if (last >= 0.0 && now - last < 0.03)
+            return;
+        last = now;
+        ClickSound::Play();
+    }
+
     struct CheckboxState { float anim = 0.0f; };
     static std::map<ImGuiID, CheckboxState> checkbox_states;
 
@@ -293,6 +310,7 @@ namespace UI
 
         if (hovered && ImGui::IsMouseClicked(0))
         {
+            ClickFx();
             *v = !*v;
             anim = *v ? 1.0f : 0.0f;
             changed = true;
@@ -355,7 +373,7 @@ namespace UI
 
         float& anim = checkbox_states[id].anim;
         float target = *v ? 1.0f : 0.0f;
-        if (hovered && ImGui::IsMouseClicked(0)) { *v = !*v; anim = *v ? 1.0f : 0.0f; changed = true; }
+        if (hovered && ImGui::IsMouseClicked(0)) { ClickFx(); *v = !*v; anim = *v ? 1.0f : 0.0f; changed = true; }
         float rate = 1.0f - expf(-io.DeltaTime * 12.0f);
         anim += (target - anim) * rate;
         float eased = EaseOutCubic(anim);
@@ -382,7 +400,7 @@ namespace UI
                                  ImVec2(total_bb.Max.x - 14.0f * Sc, total_bb.Min.y + frame_size.y * Sc - 20.0f * Sc));
             dl->AddRectFilled(mode_bb.Min, mode_bb.Max, U(second_color), round_5 * Sc);
             bool mhov = ImGui::IsMouseHoveringRect(mode_bb.Min, mode_bb.Max);
-            if (mhov && ImGui::IsMouseClicked(0)) *mode = (*mode == 0) ? 1 : 0;
+            if (mhov && ImGui::IsMouseClicked(0)) { ClickFx(); *mode = (*mode == 0) ? 1 : 0; }
             ImGui::PushFont(small_font);
             centerText(mode_bb.Min, mode_bb.Max, mn, mhov ? U(text_color[0]) : U(text_color[1]), 15.0f * Sc, small_font);
             ImGui::PopFont();
@@ -417,7 +435,7 @@ namespace UI
         dl->AddRectFilled(box_min, box_max, IM_COL32((int)(col[0] * 255.0f), (int)(col[1] * 255.0f), (int)(col[2] * 255.0f), 255), 3.0f * Sc);
         dl->AddRect(box_min, box_max, U(stroke_color), 3.0f * Sc, 0, 1.0f);
         bool mhov = ImGui::IsMouseHoveringRect(box_min, box_max);
-        if (mhov && ImGui::IsMouseClicked(0)) ImGui::OpenPopup((std::string(label) + "##cwpick").c_str());
+        if (mhov && ImGui::IsMouseClicked(0)) { ClickFx(); ImGui::OpenPopup((std::string(label) + "##cwpick").c_str()); }
         if (ImGui::BeginPopup((std::string(label) + "##cwpick").c_str()))
         {
             ImGui::PushStyleColor(ImGuiCol_PopupBg, U(background_color));
@@ -459,6 +477,8 @@ namespace UI
 
         bool hovered = ImGui::IsItemHovered();
         bool changed = false;
+
+        if (hovered && ImGui::IsMouseClicked(0)) ClickFx();
 
         if (hovered || ImGui::IsItemActive())
         {
@@ -596,6 +616,7 @@ namespace UI
 
         if (hovered && ImGui::IsMouseClicked(0))
         {
+            ClickFx();
             ImGui::OpenPopup(label);
             state.opened = true;
         }
@@ -663,6 +684,7 @@ namespace UI
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 12.0f * Sc);
                 if (ImGui::Selectable(items[i], *current_item == i, 0, ImVec2(total_bb.GetWidth() - 12.0f * Sc, 28.0f * Sc)))
                 {
+                    ClickFx();
                     *current_item = i;
                     value_changed = true;
                     ImGui::CloseCurrentPopup();
@@ -699,6 +721,7 @@ namespace UI
         KeybindState& st = keybind_states[id];
         if (hovered && ImGui::IsMouseClicked(0))
         {
+            ClickFx();
             st.listening = true;
             st.wait_release = true;
         }
@@ -767,7 +790,7 @@ namespace UI
         {
             const char* mn = (*mode == 1) ? "TOGG" : "HOLD";
             bool mhov = ImGui::IsMouseHoveringRect(mode_bb.Min, mode_bb.Max);
-            if (mhov && ImGui::IsMouseClicked(0)) *mode = (*mode == 0) ? 1 : 0;
+            if (mhov && ImGui::IsMouseClicked(0)) { ClickFx(); *mode = (*mode == 0) ? 1 : 0; }
             dl->AddRectFilled(mode_bb.Min, mode_bb.Max, U(second_color), round_5 * Sc);
             ImGui::PushFont(small_font);
             centerText(mode_bb.Min, mode_bb.Max, mn, mhov ? U(text_color[0]) : U(text_color[1]), 15.0f * Sc, small_font);
@@ -813,7 +836,7 @@ namespace UI
 
         bool hovered = ImGui::IsItemHovered();
         bool pressed = false;
-        if (hovered && ImGui::IsMouseClicked(0)) pressed = true;
+        if (hovered && ImGui::IsMouseClicked(0)) { ClickFx(); pressed = true; }
 
         const ImVec4 main = ImVec4(main_color.Value.x, main_color.Value.y, main_color.Value.z, 1.0f);
         ImU32 frame_col = LerpU32(U(ImVec4(main.x, main.y, main.z, 0.30f)), U(main), Anim(id, hovered, 14.0f));
@@ -855,7 +878,7 @@ namespace UI
 
         const std::string popup_id = std::string(label) + "##cppk";
         bool box_hov = ImGui::IsMouseHoveringRect(box.Min, box.Max);
-        if (box_hov && ImGui::IsMouseClicked(0)) ImGui::OpenPopup(popup_id.c_str());
+        if (box_hov && ImGui::IsMouseClicked(0)) { ClickFx(); ImGui::OpenPopup(popup_id.c_str()); }
         if (ImGui::BeginPopup(popup_id.c_str()))
         {
             ImGui::PushStyleColor(ImGuiCol_PopupBg, U(background_color));
@@ -958,7 +981,7 @@ namespace UI
 
         const ImVec4 main = ImVec4(main_color.Value.x, main_color.Value.y, main_color.Value.z, 1.0f);
         bool pressed = false;
-        if (hovered && ImGui::IsMouseClicked(0)) pressed = true;
+        if (hovered && ImGui::IsMouseClicked(0)) { ClickFx(); pressed = true; }
 
         if (anim > 0.02f)
         {
@@ -999,7 +1022,7 @@ namespace UI
 
         bool hovered = ImGui::IsItemHovered();
         bool pressed = false;
-        if (hovered && ImGui::IsMouseClicked(0)) pressed = true;
+        if (hovered && ImGui::IsMouseClicked(0)) { ClickFx(); pressed = true; }
 
         if (active || hovered)
             dl->AddRectFilled(bb.Min, bb.Max, U(second_color), round_5 * Sc);
@@ -1020,7 +1043,7 @@ namespace UI
 
         bool hovered = ImGui::IsMouseHoveringRect(tab_min, tab_max);
         bool pressed = false;
-        if (hovered && ImGui::IsMouseClicked(0)) pressed = true;
+        if (hovered && ImGui::IsMouseClicked(0)) { ClickFx(); pressed = true; }
 
         float anim = AnimEased(ImGui::GetID(label), active, 12.0f);
         const ImVec4 main = ImVec4(main_color.Value.x, main_color.Value.y, main_color.Value.z, 1.0f);
@@ -1098,6 +1121,7 @@ namespace UI
         ImGui::InvisibleButton("##csh", ImVec2(width, hdrH));
         if (ImGui::IsItemClicked())
         {
+            ClickFx();
             open = !open;
             store->SetBool(id, open);
         }

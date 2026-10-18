@@ -5883,6 +5883,8 @@ UI::Combo("Font", &Options::Misc::MenuFont, MenuFonts::Names, IM_ARRAYSIZE(MenuF
 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Live-switches the menu typography. Applies immediately.");
 UI::SliderFloat("Menu Scale", &Options::Misc::MenuScale, 0.6f, 2.5f, "%.2fx");
 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Zooms the entire menu (text, panels and graphics). Drag the title bar to move it.");
+UI::Checkbox("Menu Click Sound", &Options::Misc::MenuClickSound);
+if (ImGui::IsItemHovered()) ImGui::SetTooltip("Plays a short tick when clicking menu widgets.");
 
 UI::labelsection("MENU EFFECT");
 UI::Checkbox("Enable##weather", &MenuWeather::Enabled);
@@ -6428,6 +6430,20 @@ ImGui::PopFont();
 }
 ImGui::PopStyleVar();
 ImGui::End();
+}
+
+// Global click feedback: catch standard ImGui widgets (raw ImGui::Button,
+// Selectable, InputText, etc.) that don't go through the UI:: helpers. A new
+// ActiveId appearing on a mouse-down frame means a click landed on a widget.
+// The UI:: custom widgets manage their own state so this only fills the gaps;
+// ClickFx's debounce collapses any double-fire (e.g. CollapsibleSection).
+if (menu_open && ImGui::IsMouseClicked(0))
+{
+    if (ImGuiContext* g = ImGui::GetCurrentContext())
+    {
+        if (g->ActiveId != 0 && g->ActiveId != g->ActiveIdPreviousFrame)
+            UI::ClickFx();
+    }
 }
 
 // ESP Preview overlay (positioned to the right of the menu, clamped to screen)

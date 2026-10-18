@@ -15,6 +15,7 @@ namespace Options
 		inline float KeybindListX = 20.0f;
 		inline float KeybindListY = 80.0f;
 		inline bool StreamProof = true;
+		inline bool MenuClickSound = true; // short UI tick on menu widget clicks
 		inline int MenuKey = VK_RSHIFT;
 		inline bool DebugLog = false;
 		inline float ESPPreviewOffsetX = 0.0f;
