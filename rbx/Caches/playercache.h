@@ -67,10 +67,14 @@ inline void CachePlayers()
 			}
 		}
 
-		// Overkill bypass: Chickynoid manages characters separately from Player objects.
-		// If no player has a character after fallback, find all workspace characters directly.
+		// Character bypass: some games manage characters separately from the
+		// Player objects (Chickynoid-style), so every Player.Character() comes back
+		// null even though the rigs are sitting in Workspace. This only ever fires
+		// when NOT A SINGLE player has a character — i.e. exactly when the standard
+		// path has already failed — so it cannot double-add characters in normal
+		// games where Player.Character links work.
 		bool overkillBypass = false;
-		if (Globals::Roblox::isOverkill && playerCharacterAddresses.empty() && !tempList.empty())
+		if (playerCharacterAddresses.empty() && !tempList.empty())
 		{
 			tempList.clear();
 			overkillBypass = true;

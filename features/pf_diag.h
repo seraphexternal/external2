@@ -11,6 +11,8 @@
 #include <chrono>
 #include <cmath>
 #include <unordered_set>
+#include <set>
+#include <utility>
 
 namespace PFDiag
 {
@@ -148,6 +150,821 @@ namespace PFDiag
                 cp.x, cp.y, cp.z,
                 wsPlayerCount, wsPlayerSubTotal, rootsCount);
             Write(buf);
+
+            // --- ESP / aimbot acquisition diagnostics (runs in every game) -----
+            // The old heartbeat only counted Phantom Forces' Workspace.Players /
+            // Workspace.Roots folders, so it said nothing about whether the list
+            // ESP and the aimbot actually iterate was populated.
+            Vectors::Vector3 camPos{ 0.f, 0.f, 0.f };
+            if (Globals::Roblox::Camera.address)
+                camPos = Memory->read<Vectors::Vector3>(Globals::Roblox::Camera.address + Offsets::Camera::Position);
+
+            auto wsChars = FindAllCharactersInWorkspace();
+            snprintf(buf, sizeof(buf),
+                "[PFDIAG] acq dm=%llu cam=%llu camPos=(%.0f,%.0f,%.0f) viewport=%d localChar=%llu cachedPlayers=%zu cachedObjects=%zu wsChars=%zu",
+                (unsigned long long)Globals::Roblox::DataModel.address,
+                (unsigned long long)Globals::Roblox::Camera.address,
+                camPos.x, camPos.y, camPos.z,
+                (int)Globals::Viewport::Valid,
+                (unsigned long long)Globals::Roblox::LocalPlayer.Character().address,
+                Globals::Caches::CachedPlayers.size(),
+                Globals::Caches::CachedPlayerObjects.size(),
+                wsChars.size());
+            Write(buf);
+
+            int printed = 0;
+            int printed2 = 0;
+            for (const auto& p : Globals::Caches::CachedPlayerObjects)
+            {
+                if (printed >= 8) break;
+                const auto hpPos = p.HumanoidRootPart.Position();
+                const float dx = hpPos.x - camPos.x, dy = hpPos.y - camPos.y, dz = hpPos.z - camPos.z;
+                const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                const RobloxInstance charParent(p.Character.address
+                    ? Memory->read<uintptr_t>(p.Character.address + Offsets::Instance::Parent) : 0);
+                snprintf(buf, sizeof(buf),
+                    "[PFDIAG] obj[%d] name=%.20s char=%llu hum=%llu head=%llu hrp=%llu hp=%.0f pos=(%.0f,%.0f,%.0f) dist=%.0f team=%.16s tm=%d parent=%.20s bc=%d pc=%d tcOpt=%d maxD=%.0f",
+                    printed, p.Name.c_str(),
+                    (unsigned long long)p.Character.address,
+                    (unsigned long long)p.Humanoid.address,
+                    (unsigned long long)p.Head.address,
+                    (unsigned long long)p.HumanoidRootPart.address,
+                    p.Health,
+                    hpPos.x, hpPos.y, hpPos.z,
+                    dist, p.TeamName.c_str(), (int)IsTeammate(p), charParent.Name().c_str(), p.TeamBrickColor, p.TeamColor,
+                    (int)Options::ESP::TeamCheck, Options::ESP::MaxRenderDistance);
+                Write(buf);
+                ++printed;
+            }
+
+            // Local player team probe: check character's AttributeStorage for
+            // "Team" attribute, and see if our own character has a Highlight
+            // (possibly disabled). Also dump TeamSelect model under Reactor.
+            {
+                static uint64_t lastLocal = 0;
+                const uint64_t nowL = GetTickCount64();
+                if (nowL - lastLocal > 20000)
+                {
+                    lastLocal = nowL;
+                    const auto lpChar = Globals::Roblox::LocalPlayer.Character();
+                    if (lpChar.address)
+                    {
+                        const uintptr_t attrStore = Memory->read<uintptr_t>(lpChar.address + 0x40);
+                        snprintf(buf, sizeof(buf), "[PFDIAG] localChar attrStore=%llu",
+                            (unsigned long long)attrStore);
+                        Write(buf);
+                        if (attrStore > 0x10000 && attrStore < 0x7fffffffffffULL)
+                        {
+                            unsigned char w[0x100]{};
+                            Memory->readRaw(attrStore, w, sizeof(w));
+                            char txt[0x101]{};
+                            for (size_t b = 0; b < sizeof(w); ++b)
+                                txt[b] = (w[b] >= 32 && w[b] < 127) ? (char)w[b] : '.';
+                            txt[sizeof(w)] = 0;
+                            snprintf(buf, sizeof(buf), "[PFDIAG] localChar attrRaw=%.120s", txt);
+                            Write(buf);
+                        }
+
+                        // Check for Highlight on local character (maybe disabled)
+                        const auto kids = lpChar.GetChildren();
+                        for (auto& k : kids)
+                        {
+                            if (k.Class() == "Highlight")
+                            {
+                                const bool en = Memory->read<bool>(k.address + 0xF4);
+                                const float fc[3] = { Memory->read<float>(k.address + 0xC8),
+                                    Memory->read<float>(k.address + 0xCC), Memory->read<float>(k.address + 0xD0) };
+                                snprintf(buf, sizeof(buf),
+                                    "[PFDIAG] localChar Highlight en=%d fill=(%.2f,%.2f,%.2f)",
+                                    (int)en, fc[0], fc[1], fc[2]);
+                                Write(buf);
+                            }
+                        }
+                    }
+
+                    // TeamSelect model under Reactor
+                    const auto reactor = Globals::Roblox::DataModel.FindFirstChild("Reactor");
+                    if (reactor.address)
+                    {
+                        const auto ts = reactor.FindFirstChild("TeamSelect");
+                        if (ts.address)
+                        {
+                            const auto tsk = ts.GetChildren();
+                            for (auto& c : tsk)
+                            {
+                                snprintf(buf, sizeof(buf),
+                                    "[PFDIAG] TeamSelect kid=%.24s cls=%.16s kids=%zu",
+                                    c.Name().c_str(), c.Class().c_str(), c.GetChildren().size());
+                                Write(buf);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Team discriminator probe: for the first objects dump the character's
+            // child count, its Highlight (if any) and the torso colour, so a
+            // teammate and an enemy can be told apart by their signatures.
+            {
+                int sig = 0;
+                for (const auto& p : Globals::Caches::CachedPlayerObjects)
+                {
+                    if (printed2 >= 8) break;
+                    ++printed2;
+                    if (!p.Character.address) continue;
+
+                    const auto kids = p.Character.GetChildren();
+                    RobloxInstance hl(0);
+                    for (auto& k : kids)
+                        if (k.Class() == "Highlight") { hl = k; break; }
+                    char hlCol[80] = "none";
+                    if (hl.address)
+                        snprintf(hlCol, sizeof(hlCol),
+                            "fill=(%.2f,%.2f,%.2f) out=(%.2f,%.2f,%.2f) ft=%.2f ot=%.2f",
+                            Memory->read<float>(hl.address + 0xC8), Memory->read<float>(hl.address + 0xCC),
+                            Memory->read<float>(hl.address + 0xD0), Memory->read<float>(hl.address + 0xD4),
+                            Memory->read<float>(hl.address + 0xD8), Memory->read<float>(hl.address + 0xDC),
+                            Memory->read<float>(hl.address + 0xE4), Memory->read<float>(hl.address + 0xEC));
+
+                    const auto torso = p.Character.FindFirstChild("UpperTorso");
+                    int tbc = -1;
+                    float tc3[3] = { 0.f, 0.f, 0.f };
+                    if (torso.address)
+                    {
+                        tbc = Memory->read<int>(torso.address + 0x1A8);
+                        tc3[0] = Memory->read<float>(torso.address + 0x1A8);
+                        tc3[1] = Memory->read<float>(torso.address + 0x1AC);
+                        tc3[2] = Memory->read<float>(torso.address + 0x1B0);
+                    }
+
+                    snprintf(buf, sizeof(buf),
+                        "[PFDIAG] sig[%d] name=%.20s nk=%zu hl=%d %s torsoBC=%d torsoC=(%.3f,%.3f,%.3f)",
+                        sig, p.Name.c_str(), kids.size(), (int)(hl.address ? 1 : 0), hlCol, tbc, tc3[0], tc3[1], tc3[2]);
+                    Write(buf);
+
+                    // Rivals team probe: dump character AttributeStorage and look for Team attribute
+                    if (Globals::Roblox::isRivals && p.Character.address)
+                    {
+                        const uintptr_t charAttrStore = Memory->read<uintptr_t>(p.Character.address + 0x40);
+                        if (charAttrStore > 0x10000)
+                        {
+                            unsigned char w[0x100]{};
+                            Memory->readRaw(charAttrStore, w, sizeof(w));
+                            char txt[0x101]{};
+                            for (size_t b = 0; b < sizeof(w); ++b)
+                                txt[b] = (w[b] >= 32 && w[b] < 127) ? (char)w[b] : '.';
+                            txt[sizeof(w)] = 0;
+                            snprintf(buf, sizeof(buf), "[PFDIAG] charAttr %s store=%llu raw=%.120s",
+                                p.Name.c_str(), (unsigned long long)charAttrStore, txt);
+                            Write(buf);
+                        }
+
+                        // Dump all character children looking for team indicators
+                        for (auto& k : kids)
+                        {
+                            const std::string kname = k.Name();
+                            const std::string kclass = k.Class();
+                            std::string klow = kname;
+                            for (char& c : klow) c = (char)tolower((unsigned char)c);
+                            if (klow.find("team") != std::string::npos || klow.find("side") != std::string::npos ||
+                                kclass == "BoolValue" || kclass == "IntValue" || kclass == "StringValue" || kclass == "NumberValue")
+                            {
+                                snprintf(buf, sizeof(buf), "[PFDIAG] charChild %s kid=%.24s cls=%.16s",
+                                    p.Name.c_str(), kname.c_str(), kclass.c_str());
+                                Write(buf);
+                            }
+                        }
+                    }
+                    ++sig;
+                }
+            }
+
+            // Look for a team roster: any DataModel node whose children are named
+            // after cached players (Blox Strike's real team source may be a data
+            // object rather than Player.Team / a player attribute).
+            {
+                static uint64_t lastRoster = 0;
+                const uint64_t nowR = GetTickCount64();
+                if (nowR - lastRoster > 20000)
+                {
+                    lastRoster = nowR;
+                    std::set<std::string> pnames;
+                    for (const auto& pl : Globals::Caches::CachedPlayers)
+                        if (!pl.Name().empty()) pnames.insert(pl.Name());
+
+                    std::vector<std::pair<int, RobloxInstance>> frontier;
+                    frontier.push_back({ 0, Globals::Roblox::DataModel });
+                    int visited = 0, logged = 0;
+                    while (!frontier.empty() && visited < 600 && logged < 30)
+                    {
+                        const auto cur = frontier.back();
+                        frontier.pop_back();
+                        if (!cur.second.address) continue;
+                        ++visited;
+
+                        auto kk = cur.second.GetChildren();
+                        int matches = 0;
+                        std::string names;
+                        for (auto& c : kk)
+                        {
+                            const std::string nm = c.Name();
+                            const std::string cl = c.Class();
+                            std::string low;
+                            for (char ch2 : nm) low += (char)tolower((unsigned char)ch2);
+                            if (low.find("team") != std::string::npos ||
+                                low.find("terror") != std::string::npos ||
+                                low.find("counter") != std::string::npos)
+                            {
+                                snprintf(buf, sizeof(buf),
+                                    "[PFDIAG] roster node=%.20s kid=%.24s cls=%.16s kids=%zu",
+                                    cur.second.Name().c_str(), nm.c_str(), cl.c_str(), c.GetChildren().size());
+                                Write(buf);
+                                ++logged;
+                            }
+                            if (pnames.count(nm))
+                            {
+                                ++matches;
+                                if (names.size() < 60) names += nm + ",";
+                            }
+                        }
+                        if (matches >= 2)
+                        {
+                            snprintf(buf, sizeof(buf),
+                                "[PFDIAG] rosterHIT d=%d node=%.20s cls=%.16s kids=%zu matches=%d [%.60s]",
+                                cur.first, cur.second.Name().c_str(), cur.second.Class().c_str(),
+                                kk.size(), matches, names.c_str());
+                            Write(buf);
+                            ++logged;
+                        }
+
+                        if (cur.first >= 3) continue;
+                        for (auto& c : kk)
+                        {
+                            const std::string ccl = c.Class();
+                            if (cur.first == 0 || ccl == "Folder" || ccl == "Model" ||
+                                ccl == "Configuration" || ccl == "PlayerGui" || ccl == "ScreenGui" ||
+                                ccl == "Frame" || ccl == "ScrollingFrame" || ccl == "Teams" ||
+                                ccl == "TextLabel" || ccl == "TextButton" || ccl == "GuiObject" ||
+                                ccl == "ReplicatedStorage")
+                                frontier.push_back({ cur.first + 1, c });
+                        }
+                    }
+                    snprintf(buf, sizeof(buf), "[PFDIAG] roster scan visited=%d", visited);
+                    Write(buf);
+                }
+            }
+
+            // GUI roster scan: the game's HUD/scoreboard spells out player names
+            // and team names, which is the one place the team split is certain.
+            {
+                static uint64_t lastGui = 0;
+                const uint64_t nowG = GetTickCount64();
+                if (nowG - lastGui > 20000)
+                {
+                    lastGui = nowG;
+                    std::vector<RobloxInstance> roots;
+                    if (Globals::Roblox::LocalPlayer.address)
+                    {
+                        auto pg = Globals::Roblox::LocalPlayer.FindFirstChild("PlayerGui");
+                        if (pg.address) roots.push_back(pg);
+                    }
+                    if (Globals::Roblox::DataModel.address)
+                    {
+                        auto cg = Globals::Roblox::DataModel.FindFirstChild("CoreGui");
+                        if (cg.address) roots.push_back(cg);
+                    }
+
+                    std::vector<std::pair<int, RobloxInstance>> frontier;
+                    for (auto& r : roots) frontier.push_back({ 0, r });
+                    int visited = 0, logged2 = 0;
+                    while (!frontier.empty() && visited < 500 && logged2 < 60)
+                    {
+                        const auto curNode = frontier.back();
+                        frontier.pop_back();
+                        if (!curNode.second.address) continue;
+                        ++visited;
+                        auto kk = curNode.second.GetChildren();
+
+                        const std::string cl = curNode.second.Class();
+                        if (cl == "TextLabel" || cl == "TextButton" || cl == "TextBox")
+                        {
+                            const std::string t = Memory->readString(curNode.second.address + 0xE00);
+                            if (!t.empty())
+                            {
+                                snprintf(buf, sizeof(buf), "[PFDIAG] gui d=%d cls=%.10s text=%.40s",
+                                    curNode.first, cl.c_str(), t.c_str());
+                                Write(buf);
+                                ++logged2;
+                            }
+                        }
+
+                        if (curNode.first >= 5) continue;
+                        for (auto& c : kk)
+                            frontier.push_back({ curNode.first + 1, c });
+                    }
+                    snprintf(buf, sizeof(buf), "[PFDIAG] gui scan visited=%d logged=%d", visited, logged2);
+                    Write(buf);
+                }
+            }
+
+            // Hunt for the real team marker: dump a live character model's
+            // children and the Workspace.Characters team folders.
+            // children and the Workspace.Characters team folders.
+            {
+                const RobloxInstance& first = Globals::Caches::CachedPlayerObjects.empty()
+                    ? RobloxInstance(0) : Globals::Caches::CachedPlayerObjects.front().Character;
+                if (first.address)
+                {
+                    snprintf(buf, sizeof(buf), "[PFDIAG] charKids begin=%.20s", first.Name().c_str());
+                    Write(buf);
+                    int k = 0;
+                    for (auto& ch : first.GetChildren())
+                    {
+                        if (k >= 30) break;
+                        snprintf(buf, sizeof(buf), "[PFDIAG]   ck[%d] name=%.24s cls=%.16s",
+                            k, ch.Name().c_str(), ch.Class().c_str());
+                        Write(buf);
+                        ++k;
+                    }
+                }
+                const auto charsFolder = Globals::Roblox::Workspace.FindFirstChild("Characters");
+                if (charsFolder.address)
+                {
+                    snprintf(buf, sizeof(buf), "[PFDIAG] charsFolder kids=%d",
+                        (int)charsFolder.GetChildren().size());
+                    Write(buf);
+                    int k = 0;
+                    for (auto& ch : charsFolder.GetChildren())
+                    {
+                        if (k >= 8) break;
+                        snprintf(buf, sizeof(buf), "[PFDIAG]   cf[%d] name=%.24s cls=%.16s kids=%d",
+                            k, ch.Name().c_str(), ch.Class().c_str(), (int)ch.GetChildren().size());
+                        Write(buf);
+                        ++k;
+                    }
+                }
+
+                // Rivals: dump ShootingRangeEntities Target characters to see if they have player refs
+                if (Globals::Roblox::isRivals)
+                {
+                    const auto sre = Globals::Roblox::Workspace.FindFirstChild("ShootingRangeEntities");
+                    if (sre.address)
+                    {
+                        snprintf(buf, sizeof(buf), "[PFDIAG] SRE kids=%d",
+                            (int)sre.GetChildren().size());
+                        Write(buf);
+                        int k = 0;
+                        for (auto& ch : sre.GetChildren())
+                        {
+                            if (k >= 10) break;
+                            auto kids = ch.GetChildren();
+                            bool hasPlayerRef = false;
+                            for (auto& gc : kids)
+                            {
+                                std::string low = gc.Name();
+                                for (char& c : low) c = (char)tolower((unsigned char)c);
+                                if (low.find("player") != std::string::npos || low.find("owner") != std::string::npos)
+                                    hasPlayerRef = true;
+                            }
+                            snprintf(buf, sizeof(buf), "[PFDIAG] SRE[%d] name=%.24s cls=%.16s kids=%d hasPlayerRef=%d",
+                                k, ch.Name().c_str(), ch.Class().c_str(), (int)kids.size(), hasPlayerRef);
+                            Write(buf);
+                            if (hasPlayerRef)
+                            {
+                                for (auto& gc : kids)
+                                {
+                                    std::string low = gc.Name();
+                                    for (char& c : low) c = (char)tolower((unsigned char)c);
+                                    if (low.find("player") != std::string::npos || low.find("owner") != std::string::npos)
+                                    {
+                                        snprintf(buf, sizeof(buf), "[PFDIAG]   SRE.ref kid=%.24s cls=%.16s",
+                                            gc.Name().c_str(), gc.Class().c_str());
+                                        Write(buf);
+                                    }
+                                }
+                            }
+                            ++k;
+                        }
+                    }
+                }
+            }
+
+            // Are the toggles even on? ESP/Aimbot silently draw nothing when
+            // the master switch (or every sub-element) is off, which is
+            // indistinguishable from "no targets" in the log.
+            snprintf(buf, sizeof(buf),
+                "[PFDIAG] opts espEn=%d espTog=%d box=%d boxType=%d skel=%d name=%d health=%d tcOpt=%d aimEn=%d aim=%d aimTc=%d addrTC=%p",
+                (int)Options::ESP::Enabled, (int)Options::ESP::Toggled,
+                (int)Options::ESP::Box, (int)Options::ESP::BoxType,
+                (int)Options::ESP::Skeleton, (int)Options::ESP::Name,
+                (int)Options::ESP::Health, (int)Options::ESP::TeamCheck,
+                (int)Options::Aimbot::Enabled, (int)Options::Aimbot::Aimbot,
+                (int)Options::Aimbot::TeamCheck, &Options::ESP::TeamCheck);
+            Write(buf);
+
+            // Every Players-service entry, so we can see WHICH players got
+            // dropped for a null Character (playerobjectscache.h skips them).
+            {
+                int i = 0;
+                for (const auto& pl : Globals::Caches::CachedPlayers)
+                {
+                    if (i >= 12) break;
+                    if (!pl.address) { ++i; continue; }
+                    const auto ch = pl.Character();
+                    snprintf(buf, sizeof(buf),
+                        "[PFDIAG] plr[%d] name=%.24s class=%.16s char=%llu",
+                        i, pl.Name().c_str(), pl.Class().c_str(),
+                        (unsigned long long)ch.address);
+                    Write(buf);
+                    ++i;
+                }
+            }
+
+            // Where does the team actually come from?  Player.Team is often
+            // stripped by these games, in which case the team lives somewhere
+            // else: the Teams service, a StringValue child, or TeamColor.
+            {
+                const auto teamsSvc = Globals::Roblox::DataModel.FindFirstChild("Teams");
+                if (teamsSvc.address)
+                {
+                    int i = 0;
+                    for (auto& t : teamsSvc.GetChildren())
+                    {
+                        if (i >= 8) break;
+                        snprintf(buf, sizeof(buf), "[PFDIAG] svcTeam[%d] name=%.20s cls=%.12s addr=%llu",
+                            i, t.Name().c_str(), t.Class().c_str(), (unsigned long long)t.address);
+                        Write(buf);
+                        ++i;
+                    }
+                }
+                else
+                    Write("[PFDIAG] svcTeam: no Teams service");
+
+                int i = 0;
+                for (const auto& pl : Globals::Caches::CachedPlayers)
+                {
+                    if (i >= 6) break;
+                    if (!pl.address) { ++i; continue; }
+                    const auto team = pl.Team();
+                    const int rawColor = Memory->read<int>(pl.address + Offsets::Player::TeamColor);
+                    snprintf(buf, sizeof(buf),
+                        "[PFDIAG] plrTeam[%d] name=%.20s team=%llu teamName=%.20s rawColor=%d",
+                        i, pl.Name().c_str(), (unsigned long long)team.address,
+                        team.Name().c_str(), rawColor);
+                    Write(buf);
+                    int k = 0;
+                    for (auto& ch : pl.GetChildren())
+                    {
+                        if (k >= 6) break;
+                        snprintf(buf, sizeof(buf), "[PFDIAG]   plrChild[%d.%d] name=%.20s cls=%.12s",
+                            i, k, ch.Name().c_str(), ch.Class().c_str());
+                        Write(buf);
+                        ++k;
+                    }
+                    ++i;
+                }
+
+                // Rivals: deep probe for ANY client-visible team signal.
+                // Team/TeamColor/attributes all read neutral in Rivals, so find where
+                // the game actually encodes teammate-vs-enemy (Highlight, BillboardGui
+                // name-tag color, leaderstats values, team folders in Workspace).
+                {
+                    static uint64_t lastDeepTeam = 0;
+                    if (Globals::Roblox::isRivals && GetTickCount64() - lastDeepTeam > 15000)
+                    {
+                        lastDeepTeam = GetTickCount64();
+
+                        // (a) Workspace scan (depth<=2) for Team folders / Team instances / Highlight / BillboardGui
+                        int tseen = 0;
+                        {
+                            std::vector<std::pair<RobloxInstance, int>> stk;
+                            for (auto& c : Globals::Roblox::Workspace.GetChildren())
+                                stk.push_back({ c, 0 });
+                            while (!stk.empty() && tseen < 10)
+                            {
+                                auto cur = stk.back(); stk.pop_back();
+                                if (!cur.first.address || cur.second > 2) continue;
+                                std::string cls = cur.first.Class();
+                                std::string nm = cur.first.Name();
+                                std::string low = nm;
+                                for (char& q : low) q = (char)tolower((unsigned char)q);
+                                if (cls == "Team" || cls == "Highlight" || cls == "BillboardGui" ||
+                                    low.find("team") != std::string::npos)
+                                {
+                                    snprintf(buf, sizeof(buf), "[PFDIAG] steam name=%.40s cls=%.16s d=%d",
+                                        nm.c_str(), cls.c_str(), cur.second);
+                                    Write(buf);
+                                    ++tseen;
+                                }
+                                if (cur.second < 2)
+                                    for (auto& c2 : cur.first.GetChildren())
+                                        stk.push_back({ c2, cur.second + 1 });
+                            }
+                        }
+                        if (tseen == 0)
+                            Write("[PFDIAG] steam none (no Team/Highlight/Billboard in Workspace d<=2)");
+
+                        // (b) leaderstats values per real player
+                        for (const auto& pl : Globals::Caches::CachedPlayers)
+                        {
+                            if (!pl.address) continue;
+                            std::string pnm = pl.Name();
+                            if (pnm.empty()) continue;
+                            auto ls = pl.FindFirstChild("CustomLeaderstats");
+                            if (!ls.address) ls = pl.FindFirstChild("leaderstats");
+                            if (!ls.address) continue;
+                            int k = 0;
+                            for (auto& v : ls.GetChildren())
+                            {
+                                if (k >= 6) break;
+                                snprintf(buf, sizeof(buf), "[PFDIAG] ls %s|%.20s|cls=%.16s",
+                                    pnm.substr(0, 12).c_str(), v.Name().c_str(), v.Class().c_str());
+                                Write(buf);
+                                ++k;
+                            }
+                        }
+
+                        // (c) non-part descendants of each cached character (GUI / values / Highlight)
+                        for (const auto& p : Globals::Caches::CachedPlayerObjects)
+                        {
+                            if (!p.Character.address || p.Name.empty()) continue;
+                            std::vector<std::pair<RobloxInstance, int>> stk2;
+                            stk2.push_back({ p.Character, 0 });
+                            int budget = 40;
+                            while (!stk2.empty() && budget > 0)
+                            {
+                                auto cur = stk2.back(); stk2.pop_back();
+                                --budget;
+                                if (!cur.first.address || cur.second > 1) continue;
+                                for (auto& c2 : cur.first.GetChildren())
+                                {
+                                    if (!c2.address) continue;
+                                    std::string cc = c2.Class();
+                                    bool isPart = (cc == "Part" || cc == "MeshPart" || cc == "WedgePart" ||
+                                        cc == "TrussPart" || cc == "CornerWedgePart" || cc == "UnionOperation" ||
+                                        cc == "SkinnedMeshPart" || cc == "Seat" || cc == "VehicleSeat");
+                                    if (!isPart)
+                                    {
+                                        snprintf(buf, sizeof(buf), "[PFDIAG] chd %s|%.28s|cls=%.20s d=%d",
+                                            p.Name.substr(0, 12).c_str(), c2.Name().c_str(), cc.c_str(), cur.second + 1);
+                                        Write(buf);
+                                    }
+                                    if (cur.second < 1 && (isPart || cc == "Model"))
+                                        stk2.push_back({ c2, cur.second + 1 });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // DEBUG: per-player teammate-label resolution. Reports whether the
+                // cached flag is set AND, if a TeammateLabel exists, which part owns
+                // it. This distinguishes "detection missed the part" from "ESP never
+                // consumed the flag" in a single run.
+                static uint64_t lastTld = 0;
+                if (Globals::Roblox::isRivals && GetTickCount64() - lastTld > 8000)
+                {
+                    lastTld = GetTickCount64();
+                    for (const auto& p : Globals::Caches::CachedPlayerObjects)
+                    {
+                        if (p.Name.empty()) continue;
+                        std::string owner = "none";
+                        if (p.Character.address)
+                        {
+                            for (auto& k : p.Character.GetChildren())
+                            {
+                                if (!k.address) continue;
+                                if (k.Name() == "TeammateLabel") { owner = "CHAR:" + k.Class(); break; }
+                                for (auto& gc : k.GetChildren())
+                                {
+                                    if (gc.address && gc.Name() == "TeammateLabel")
+                                    { owner = "PART:" + k.Name(); break; }
+                                }
+                                if (owner != "none") break;
+                            }
+                        }
+                        snprintf(buf, sizeof(buf), "[PFDIAG] tld %s|flag=%d|owner=%s|self=%d",
+                            p.Name.substr(0, 14).c_str(), (int)p.HasTeammateLabel,
+                            owner.c_str(), (int)(p.address == Globals::Roblox::LocalPlayer.address));
+                        Write(buf);
+                    }
+                }
+
+                // DEBUG: dump isRivals flag
+                static uint64_t lastDbg = 0;
+                if (GetTickCount64() - lastDbg > 5000)
+                {
+                    lastDbg = GetTickCount64();
+                    snprintf(buf, sizeof(buf), "[PFDIAG] DBG isRivals=%d placeID=%lld",
+                        (int)Globals::Roblox::isRivals, (long long)Globals::Roblox::lastPlaceID);
+                    Write(buf);
+                }
+
+                // DEBUG: verify plrAttr block executes
+                static uint64_t lastPlrAttr = 0;
+                if (GetTickCount64() - lastPlrAttr > 5000)
+                {
+                    lastPlrAttr = GetTickCount64();
+                    Write("[PFDIAG] plrAttrBlock entered");
+
+                    // Dump player attribute stores
+                    for (const auto& pl : Globals::Caches::CachedPlayers)
+                    {
+                        if (!pl.address) continue;
+                        const uintptr_t attrStore = Memory->read<uintptr_t>(pl.address + 0x40);
+                        snprintf(buf, sizeof(buf), "[PFDIAG] plrAttrRaw %s store=%llu",
+                            pl.Name().c_str(), (unsigned long long)attrStore);
+                        Write(buf);
+                    }
+
+                    // Dump character attribute stores
+                    for (const auto& p : Globals::Caches::CachedPlayerObjects)
+                    {
+                        if (!p.Character.address) continue;
+                        const uintptr_t attrStore = Memory->read<uintptr_t>(p.Character.address + 0x40);
+                        snprintf(buf, sizeof(buf), "[PFDIAG] charAttrRaw %s store=%llu",
+                            p.Name.c_str(), (unsigned long long)attrStore);
+                        Write(buf);
+                    }
+
+                    // Dump Duels folder
+                    const auto duels = Globals::Roblox::DataModel.FindFirstChild("Duels");
+                    if (duels.address)
+                    {
+                        for (auto& d : duels.GetChildren())
+                        {
+                            snprintf(buf, sizeof(buf), "[PFDIAG] Duels kid=%.24s cls=%.16s kids=%d",
+                                d.Name().c_str(), d.Class().c_str(), (int)d.GetChildren().size());
+                            Write(buf);
+                        }
+                    }
+                }
+
+                // Rivals-specific: check Duels folder and player/character attributes
+                if (Globals::Roblox::isRivals)
+                {
+                    const auto duels = Globals::Roblox::DataModel.FindFirstChild("Duels");
+                    if (duels.address)
+                    {
+                        for (auto& d : duels.GetChildren())
+                        {
+                            snprintf(buf, sizeof(buf), "[PFDIAG] Duels kid=%.24s cls=%.16s kids=%d",
+                                d.Name().c_str(), d.Class().c_str(), (int)d.GetChildren().size());
+                            Write(buf);
+                            for (auto& gc : d.GetChildren())
+                            {
+                                snprintf(buf, sizeof(buf), "[PFDIAG]   Duels.gc=%.24s cls=%.16s", gc.Name().c_str(), gc.Class().c_str());
+                                Write(buf);
+                            }
+                        }
+                    }
+
+                    // Check player AttributeStorage for Team attribute
+                    for (const auto& pl : Globals::Caches::CachedPlayers)
+                    {
+                        if (!pl.address) continue;
+                        const uintptr_t attrStore = Memory->read<uintptr_t>(pl.address + 0x40);
+                        if (attrStore > 0x10000)
+                        {
+                            unsigned char w[0x100]{};
+                            Memory->readRaw(attrStore, w, sizeof(w));
+                            char txt[0x101]{};
+                            for (size_t b = 0; b < sizeof(w); ++b)
+                                txt[b] = (w[b] >= 32 && w[b] < 127) ? (char)w[b] : '.';
+                            txt[sizeof(w)] = 0;
+                            snprintf(buf, sizeof(buf), "[PFDIAG] plrAttr %s store=%llu raw=%.120s",
+                                pl.Name().c_str(), (unsigned long long)attrStore, txt);
+                            Write(buf);
+                        }
+                    }
+                }
+            }
+
+            // Every character model actually sitting in Workspace, so we can
+            // compare against the player list above (matched by name?).
+            {
+                int i = 0;
+                for (const auto& w : wsChars)
+                {
+                    if (i >= 12) break;
+                    const auto hrp = w.model.FindFirstChild("HumanoidRootPart");
+                    auto pp = hrp.address ? hrp.Position() : Vectors::Vector3{ 0,0,0 };
+                    // Parent chain up to Workspace, so we can tell a live rig in
+                    // Characters from a culled/pooled copy parked elsewhere.
+                    auto up = RobloxInstance(Memory->read<uintptr_t>(w.model.address + Offsets::Instance::Parent));
+                    std::string path;
+                    for (int d = 0; d < 4 && up.address && up.address != Globals::Roblox::Workspace.address; ++d)
+                    {
+                        path = up.Name() + "/" + path;
+                        up = RobloxInstance(Memory->read<uintptr_t>(up.address + Offsets::Instance::Parent));
+                    }
+                    snprintf(buf, sizeof(buf),
+                        "[PFDIAG] ws[%d] name=%.24s char=%llu hrp=%llu pos=(%.0f,%.0f,%.0f) path=%.32s",
+                        i, w.model.Name().c_str(),
+                        (unsigned long long)w.model.address,
+                        (unsigned long long)hrp.address,
+                        pp.x, pp.y, pp.z, path.c_str());
+                    Write(buf);
+                    ++i;
+                }
+            }
+
+            // Attribute probe: Blox Strike keeps the team in the Player attribute
+            // "Team" (Player.Team / TeamColor and the Teams service are all dead
+            // ends). Roblox hangs the attribute container off every Instance at
+            // AttributeStorage (0x40) -- dump it so we can find "Team".
+            {
+                static uint64_t lastAttr = 0;
+                const uint64_t nowAttr = GetTickCount64();
+                if (nowAttr - lastAttr > 20000)
+                {
+                    lastAttr = nowAttr;
+
+                    auto ascii = [](const unsigned char* w, size_t n, char* out) {
+                        for (size_t b = 0; b < n; ++b)
+                            out[b] = (w[b] >= 32 && w[b] < 127) ? (char)w[b] : '.';
+                        out[n] = 0;
+                    };
+
+                    struct AT { const char* tag; uintptr_t addr; };
+                    std::vector<AT> ats;
+                    if (Globals::Roblox::LocalPlayer.address)
+                        ats.push_back({ "local", Globals::Roblox::LocalPlayer.address });
+                    for (const auto& pl : Globals::Caches::CachedPlayers)
+                    {
+                        if (pl.address && pl.address != Globals::Roblox::LocalPlayer.address)
+                        {
+                            ats.push_back({ "other", pl.address });
+                            if (ats.size() >= 3) break;
+                        }
+                    }
+
+                    for (const auto& a : ats)
+                    {
+                        const uintptr_t storage = Memory->read<uintptr_t>(a.addr + 0x40);
+                        snprintf(buf, sizeof(buf), "[PFDIAG] attr %s player=%llu storage=%llu",
+                            a.tag, (unsigned long long)a.addr, (unsigned long long)storage);
+                        Write(buf);
+                        if (storage < 0x10000 || storage > 0x7fffffffffffULL) continue;
+
+                        char txt0[0x101]{};
+                        {
+                            unsigned char w0[0x100]{};
+                            Memory->readRaw(storage, w0, sizeof(w0));
+                            for (size_t b = 0; b < sizeof(w0); ++b)
+                                txt0[b] = (w0[b] >= 32 && w0[b] < 127) ? (char)w0[b] : '.';
+                            txt0[sizeof(w0)] = 0;
+                        }
+                        snprintf(buf, sizeof(buf), "[PFDIAG] attr0 raw=%.120s", txt0);
+                        Write(buf);
+
+                        // Bounded walk of the container looking for the "Team" key.
+                        std::vector<std::pair<int, uintptr_t>> frontier;
+                        frontier.push_back({ 0, storage });
+                        int visited = 0;
+                        while (!frontier.empty() && visited < 60)
+                        {
+                            const std::pair<int, uintptr_t> curNode = frontier.back();
+                            frontier.pop_back();
+                            const int depth = curNode.first;
+                            const uintptr_t node = curNode.second;
+                            if (node < 0x10000 || node > 0x7fffffffffffULL) continue;
+                            ++visited;
+
+                            unsigned char w[0x100]{};
+                            Memory->readRaw(node, w, sizeof(w));
+                            int key = -1;
+                            for (size_t b = 0; b + 5 <= sizeof(w); ++b)
+                                if (w[b] == 'T' && w[b + 1] == 'e' && w[b + 2] == 'a' &&
+                                    w[b + 3] == 'm' && w[b + 4] == 0)
+                                { key = (int)b; break; }
+
+                            if (key >= 0)
+                            {
+                                char txt[0x101]{};
+                                for (size_t b = 0; b < sizeof(w); ++b)
+                                    txt[b] = (w[b] >= 32 && w[b] < 127) ? (char)w[b] : '.';
+                                txt[sizeof(w)] = 0;
+                                snprintf(buf, sizeof(buf),
+                                    "[PFDIAG] attrKey d=%d at=0x%x node=%llu txt=%.120s",
+                                    depth, key, (unsigned long long)node, txt);
+                                Write(buf);
+                            }
+
+                            if (depth >= 3) continue;
+                            for (int k = 0; k < 8; ++k)
+                            {
+                                const uintptr_t p = Memory->read<uintptr_t>(node + (uintptr_t)k * 8);
+                                if (p >= 0x10000 && p <= 0x7fffffffffffULL)
+                                    frontier.push_back({ depth + 1, p });
+                            }
+                        }
+                        snprintf(buf, sizeof(buf), "[PFDIAG] attrWalk done visited=%d", visited);
+                        Write(buf);
+                    }
+                }
+            }
+
         }
 
         {

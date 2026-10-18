@@ -116,7 +116,7 @@ namespace Options
 		inline int ToggleType = 1;
 		inline bool Toggled = true;
 		
-		inline bool TeamCheck = false;
+		inline bool TeamCheck = true;
 		inline bool Box = true; // master enable for Box ESP
 		inline int BoxType = 1; // 1 = Normal Box, 2 = 3D Box
 		inline bool BoxFill = false;
@@ -280,7 +280,7 @@ namespace Options
 		inline bool TargetHudOutline = true;
 		inline int TargetHudBarStyle = 0;
 		inline int TargetHudBarDirection = 0;
-		inline bool TeamCheck = false;
+		inline bool TeamCheck = true;
 		inline bool DownedCheck = false;
 		inline bool WallCheck = true;
 		inline float Range = 150.f;

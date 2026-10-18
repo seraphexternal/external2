@@ -63,8 +63,18 @@ struct RobloxPlayer
     // render loop never does string work per player per frame.
     std::string RankStem;
 
+    // Rivals: the game tags YOUR teammates' characters with a "TeammateLabel"
+    // BillboardGui parented to a body part (the Head). Team()/TeamColor both
+    // read as unassigned for every player in Rivals, so this name-tag is the
+    // only client-visible teammate-vs-enemy signal the game exposes.
+    bool HasTeammateLabel = false;
+
     bool UseAnchor = false;
     Vectors::Vector3 AnchorPos = {0.f, 0.f, 0.f};
+
+    // Sound-based position for culled enemies (footstep triangulation)
+    Vectors::Vector3 SoundPos = {0.f, 0.f, 0.f};
+    float SoundPosTime = 0.f;
 };
 
 // ELO -> tier name. Thresholds are the same ladder the reference ESP used, in
@@ -189,6 +199,9 @@ namespace Globals
 		inline constexpr __int64 MM2_ID = 142823291; // Murder Mystery 2
 		inline bool isBladeBall = false;
 		inline constexpr __int64 BLADEBALL_ID = 13772394625; // Blade Ball
+		inline bool isBloxStrike = false;
+		inline constexpr __int64 BLOX_STRIKE_ID = 114234929420007; // Blox Strike
+		inline bool IsBloxStrikePlace(__int64 id) { return id == BLOX_STRIKE_ID; }
     }
 
     namespace BladeBall
@@ -322,6 +335,17 @@ CameraCFrame.x = pos.x; CameraCFrame.y = pos.y; CameraCFrame.z = pos.z;
         inline std::vector<RobloxInstance> CachedPlayers;
         inline std::vector<RobloxPlayer> CachedPlayerObjects;
         inline std::mutex CachedPlayerObjectsMutex;
+
+        // Locked copy of the player list.  CachePlayerObjects() replaces
+        // CachedPlayerObjects wholesale (`= std::move(tempList)`) on its own
+        // thread, so any thread that merely *reads* the list must not iterate the
+        // live vector - doing so walked the freed heap and crashed.  Use this in
+        // range-for loops: for (const auto& p : SnapshotCachedPlayerObjects()).
+        inline std::vector<RobloxPlayer> SnapshotCachedPlayerObjects()
+        {
+            std::lock_guard<std::mutex> lock(CachedPlayerObjectsMutex);
+            return CachedPlayerObjects;
+        }
         inline bool forceRefresh = false;
         inline bool playerCacheNeedsRefresh = false;
         inline bool playerObjectsCacheNeedsRefresh = false;
@@ -443,11 +467,46 @@ inline bool IsTeammate(const RobloxPlayer& player)
     if (player.address == Globals::Roblox::LocalPlayer.address)
         return true;
 
+    // Blox Strike: team is indicated by a Highlight on the character model.
+    // Green fill (R<0.5, G>0.5) = CT, Red/orange fill (R>0.5, G<0.5) = T.
+    // Local player is T (per user), so teammates have red Highlight.
+    if (Globals::Roblox::isBloxStrike)
+    {
+        const auto charModel = player.Character;
+        if (charModel.address)
+        {
+            const auto kids = charModel.GetChildren();
+            for (auto& k : kids)
+            {
+                if (k.Class() == "Highlight" && k.address)
+                {
+                    const float r = Memory->read<float>(k.address + 0xC8); // FillColor.R
+                    const float g = Memory->read<float>(k.address + 0xCC); // FillColor.G
+                    // Red/orange = teammate (T), Green = enemy (CT)
+                    if (r > 0.5f && g < 0.5f)
+                        return true; // Terrorist teammate
+                    if (r < 0.5f && g > 0.5f)
+                        return false; // CT enemy
+                    // If color is ambiguous, fall through
+                }
+            }
+        }
+        // No Highlight or ambiguous color: can't determine, treat as enemy
+        return false;
+    }
+
     // Rivals-specific: Team object is stripped for non-local players,
     // so fall back to TeamColor (from player's TeamColor offset) and
     // TeamBrickColor (cached from same offset for Rivals).
     if (Globals::Roblox::isRivals)
     {
+        // Authoritative signal: Rivals hangs a "TeammateLabel" BillboardGui on
+        // the Head of players on YOUR team (confirmed by probe: only the one
+        // teammate in a 2v2 carried it). Cached per player during rebuild.
+        // Enemies never have it, so its presence is the whole answer.
+        if (player.HasTeammateLabel)
+            return true;
+
         auto localTeam = Globals::Roblox::LocalPlayerTeam;
         auto playerTeam = player.Team;
         
@@ -461,16 +520,22 @@ inline bool IsTeammate(const RobloxPlayer& player)
         }
 
         // Fallback: compare TeamColor (player's TeamColor offset)
+        // In Rivals, TeamColor=1 (White) is the default/unassigned color.
+        // Only use TeamColor for team check if it's a real team color.
         auto localTeamColor = Globals::Roblox::LocalPlayerTeamColor & 0xFFFF;
         auto playerTeamColor = player.TeamColor & 0xFFFF;
-        if (localTeamColor != 0 && localTeamColor != 194 && localTeamColor != 0xFFFF &&
+        if (localTeamColor != 0 && localTeamColor != 1 && localTeamColor != 194 && localTeamColor != 0xFFFF &&
             localTeamColor == playerTeamColor)
             return true;
 
         // Fallback: compare TeamBrickColor (cached from player's TeamColor offset for Rivals)
-        if (Globals::Roblox::LocalPlayerTeamBrickColor != 0 && Globals::Roblox::LocalPlayerTeamBrickColor != 194 && Globals::Roblox::LocalPlayerTeamBrickColor != -1 &&
+        if (Globals::Roblox::LocalPlayerTeamBrickColor != 0 && Globals::Roblox::LocalPlayerTeamBrickColor != 1 && Globals::Roblox::LocalPlayerTeamBrickColor != 194 && Globals::Roblox::LocalPlayerTeamBrickColor != -1 &&
             Globals::Roblox::LocalPlayerTeamBrickColor == player.TeamBrickColor)
             return true;
+
+        // If local player has default TeamColor (1=White), assume FFA mode - no teammates
+        if (Globals::Roblox::LocalPlayerTeamColor == 1 || Globals::Roblox::LocalPlayerTeamColor == 194 || Globals::Roblox::LocalPlayerTeamColor == 0)
+            return false;
 
         return false;
     }
@@ -635,7 +700,12 @@ inline std::vector<FoundCharacter> FindAllCharactersInWorkspace()
             {
                 auto humanoid = child.FindFirstChildWhichIsA("Humanoid");
                 auto hrp = child.FindFirstChild("HumanoidRootPart");
-                if (humanoid.address && hrp.address)
+                // A Humanoid is NOT required here: some games (Blox Strike) drive
+                // their characters with a custom controller and ship a rig with no
+                // Humanoid at all, only a HumanoidRootPart. The callers handle a
+                // null Humanoid (they fall back to the root part for position and
+                // to a default health), so match on the root part instead.
+                if (hrp.address)
                 {
                     results.push_back({ child, humanoid, hrp });
                 }

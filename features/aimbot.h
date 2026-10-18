@@ -339,6 +339,14 @@ inline Vectors::Vector3 GetTargetPosition(const RobloxPlayer& player)
         case 0: // Head
             targetPart = player.Head;
             basePos = player.Head.Position();
+            // Some rigs have no part literally named "Head". Aiming at a missing
+            // part silently resolves to world origin (0,0,0), so the aim tracks
+            // nothing. Fall back to the root part instead.
+            if (!targetPart.address)
+            {
+                targetPart = player.HumanoidRootPart;
+                basePos = player.HumanoidRootPart.Position();
+            }
             break;
         case 1: // Torso/HumanoidRootPart
             targetPart = player.HumanoidRootPart;
@@ -468,7 +476,16 @@ inline RobloxPlayer GetClosestPlayer()
     std::vector<CandidateEntry> candidates;
     candidates.reserve(32);
 
-    for (auto& player : Globals::Caches::CachedPlayerObjects)
+    // Snapshot under the cache mutex: CachePlayerObjects() replaces this vector
+    // (CachedPlayerObjects = std::move(tempList)) on its own thread, so
+    // iterating the live vector races with that free.
+    std::vector<RobloxPlayer> aimSnapshot1;
+    {
+        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
+        aimSnapshot1 = Globals::Caches::CachedPlayerObjects;
+    }
+
+    for (auto& player : aimSnapshot1)
     {
         auto HRP = player.HumanoidRootPart;
         if (!HRP.address)
@@ -1008,7 +1025,13 @@ inline void FlickbotTick()
     POINT cursor;
     GetCursorPos(&cursor);
 
-    for (const auto& player : Globals::Caches::CachedPlayerObjects)
+    std::vector<RobloxPlayer> aimSnapshot2;
+    {
+        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
+        aimSnapshot2 = Globals::Caches::CachedPlayerObjects;
+    }
+
+    for (const auto& player : aimSnapshot2)
     {
         if (player.address == 0 || player.address == Globals::Roblox::LocalPlayer.address)
             continue;
@@ -1384,7 +1407,12 @@ inline void RunAimCoreInternal(ImDrawList* drawList)
     // Flickbot: one-shot snap to the nearest target on key press.
     FlickbotTick();
 
-    if (Globals::Caches::CachedPlayerObjects.empty())
+    std::vector<RobloxPlayer> aimSnapshot3;
+    {
+        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
+        aimSnapshot3 = Globals::Caches::CachedPlayerObjects;
+    }
+    if (aimSnapshot3.empty())
         return;
 
     POINT p;

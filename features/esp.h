@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <urlmon.h>
 #include <wininet.h>
@@ -295,7 +295,17 @@ inline void RenderESP(ImDrawList* drawList)
     if (!drawList || !Globals::Viewport::Valid || !EspAnyEnabled())
         return;
 
-    if (Globals::Caches::CachedPlayerObjects.empty())
+
+    // Snapshot the player list under the cache mutex.  CachePlayerObjects()
+    // replaces this vector (`CachedPlayerObjects = std::move(tempList)`) on its
+    // own thread, so iterating the live vector here could walk the freed heap
+    // and crash inside RenderESP.
+    std::vector<RobloxPlayer> players;
+    {
+        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
+        players = Globals::Caches::CachedPlayerObjects;
+    }
+    if (players.empty())
         return;
 
     const auto localCharacter = Globals::Roblox::LocalPlayer.Character();
@@ -309,6 +319,17 @@ inline void RenderESP(ImDrawList* drawList)
     Vectors::Vector3 localPos = {0,0,0};
     if (localHRP.address) localPos = localHRP.Position();
     else if (localHead.address) localPos = localHead.Position();
+
+    // Phantom Forces / Chickynoid: LocalPlayer.Character() is unlinked, so the
+    // local rig above resolves to nothing and distance/scale/tracer math would
+    // collapse (distance 0 -> MaxRenderDistance bypassed, box scale pinned to
+    // max, distance text measured from the world origin). The camera sits at the
+    // local player's eye, so use it as the local origin instead.
+    if (localPos.x == 0.f && localPos.y == 0.f && localPos.z == 0.f &&
+        Globals::Roblox::Camera.address)
+    {
+        localPos = Globals::Roblox::Camera.CFrame().Position();
+    }
 
     Visibility::BeginFrame();
 
@@ -325,7 +346,7 @@ inline void RenderESP(ImDrawList* drawList)
             for (auto it = s_TrailHistory.begin(); it != s_TrailHistory.end(); )
             {
                 bool alive = false;
-                for (const auto& p : Globals::Caches::CachedPlayerObjects)
+                for (const auto& p : players)
                     if (p.address == it->first) { alive = true; break; }
                 if (!alive) it = s_TrailHistory.erase(it); else ++it;
             }
@@ -404,7 +425,7 @@ inline void RenderESP(ImDrawList* drawList)
         return true;
     };
 
-    for (const auto& player : Globals::Caches::CachedPlayerObjects)
+    for (const auto& player : Globals::Caches::SnapshotCachedPlayerObjects())
     {
         if (!player.address || player.address == Globals::Roblox::LocalPlayer.address)
             continue;
@@ -992,7 +1013,7 @@ inline void RenderESP(ImDrawList* drawList)
                 255);
             const ImU32 outlineCol = IM_COL32(0, 0, 0, 255);
             const float thickness = Options::ESP::SkeletonThickness;
-            const bool perBone = true;
+            const bool perBone = Options::ESP::SkeletonVisibilityColor;
             const uintptr_t skelIgnore = player.Character.address;
 
             auto W2S = [&](const Vectors::Vector3& worldPos, ImVec2& out) -> bool
@@ -2803,12 +2824,6 @@ inline void RenderArrows(ImDrawList* drawList)
             return;
     }
 
-    const auto localCharacter = Globals::Roblox::LocalPlayer.Character();
-    auto localHRP = localCharacter.FindFirstChild("HumanoidRootPart");
-    if (!localHRP.address)
-        return;
-
-    const auto localPos = localHRP.Position();
     const ImVec2 screenCenter(
         Globals::Viewport::Dimensions.x * 0.5f + Globals::Viewport::ScreenPos.x,
         Globals::Viewport::Dimensions.y * 0.5f + Globals::Viewport::ScreenPos.y
@@ -2829,7 +2844,7 @@ inline void RenderArrows(ImDrawList* drawList)
     auto camRight = camCFrame.GetRightVector();
     auto camPos = camCFrame.Position();
 
-    for (const auto& player : Globals::Caches::CachedPlayerObjects)
+    for (const auto& player : Globals::Caches::SnapshotCachedPlayerObjects())
     {
         if (!player.address || player.address == Globals::Roblox::LocalPlayer.address)
             continue;
@@ -2911,12 +2926,6 @@ inline void RenderRadar(ImDrawList* drawList)
             return;
     }
 
-    const auto localCharacter = Globals::Roblox::LocalPlayer.Character();
-    auto localHRP = localCharacter.FindFirstChild("HumanoidRootPart");
-    if (!localHRP.address)
-        return;
-
-    const auto localPos = localHRP.Position();
     const float radarSize = Options::ESP::RadarSize;
     const float radarRange = Options::ESP::RadarRange;
     const float dotRadius = 3.0f;
@@ -3008,7 +3017,7 @@ inline void RenderRadar(ImDrawList* drawList)
     auto camRight = camCFrame.GetRightVector();
     auto camPos = camCFrame.Position();
 
-    for (const auto& player : Globals::Caches::CachedPlayerObjects)
+    for (const auto& player : Globals::Caches::SnapshotCachedPlayerObjects())
     {
         if (!player.address || player.address == Globals::Roblox::LocalPlayer.address)
             continue;

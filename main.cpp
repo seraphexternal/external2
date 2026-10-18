@@ -418,12 +418,13 @@ int main()
         Globals::Roblox::LocalPlayer = RobloxInstance(Memory->read<uintptr_t>(Globals::Roblox::Players.address + Offsets::Player::LocalPlayer));
         OutputDebugStringA("[S] main: got LocalPlayer\n");
 
-        Globals::Roblox::lastPlaceID = Memory->read<int>(Globals::Roblox::DataModel.address + Offsets::DataModel::PlaceId);
+        Globals::Roblox::lastPlaceID = Memory->read<long long>(Globals::Roblox::DataModel.address + Offsets::DataModel::PlaceId);
         Globals::Roblox::isPhantomForces = (Globals::Roblox::lastPlaceID == Globals::Roblox::PHANTOM_FORCES_ID);
-        Globals::Roblox::isRivals = (Globals::Roblox::lastPlaceID == Globals::Roblox::RIVALS_ID);
+        Globals::Roblox::isRivals = Globals::Roblox::IsRivalsPlace(Globals::Roblox::lastPlaceID);
         Globals::Roblox::isOverkill = (Globals::Roblox::lastPlaceID == Globals::Roblox::OVERKILL_ID);
         Globals::Roblox::isMM2 = (Globals::Roblox::lastPlaceID == Globals::Roblox::MM2_ID);
         Globals::Roblox::isBladeBall = (Globals::Roblox::lastPlaceID == Globals::Roblox::BLADEBALL_ID);
+        Globals::Roblox::isBloxStrike = (Globals::Roblox::lastPlaceID == Globals::Roblox::BLOX_STRIKE_ID);
 
         // Resolve a human-readable game name for the detected place.
         if (Globals::Roblox::isPhantomForces) Globals::Roblox::gameName = "Phantom Forces";
@@ -431,6 +432,7 @@ int main()
         else if (Globals::Roblox::isOverkill) Globals::Roblox::gameName = "Overkill";
         else if (Globals::Roblox::isMM2) Globals::Roblox::gameName = "Murder Mystery 2";
         else if (Globals::Roblox::isBladeBall) Globals::Roblox::gameName = "Blade Ball";
+        else if (Globals::Roblox::isBloxStrike) Globals::Roblox::gameName = "Blox Strike";
         else Globals::Roblox::gameName = "Game #" + std::to_string(Globals::Roblox::lastPlaceID);
 
         OutputDebugStringA("[S] main: about to launch threads\n");

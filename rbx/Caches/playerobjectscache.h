@@ -477,6 +477,26 @@ inline void CachePlayerObjects()
 			continue;
 		}
 
+		// Workspace character lookup, used ONLY for players whose
+		// Player.Character link came back null. Some shooters keep their rigs in
+		// Workspace under the player's own name instead of linking them back to
+		// the Player object, which made every such player silently drop out of
+		// CachedPlayerObjects below — and both ESP and the aimbot iterate that
+		// list, so they showed nothing at all for those players.
+		std::unordered_map<std::string, RobloxInstance> wsCharByName;
+		{
+			const uintptr_t localCharAddr = Globals::Roblox::LocalPlayer.Character().address;
+			for (auto& ch : FindAllCharactersInWorkspace())
+			{
+				const std::string n = ch.model.Name();
+				if (n.empty() || n.find("Dummy") != std::string::npos || n == "Noob")
+					continue;
+				if (ch.model.address == localCharAddr)
+					continue;
+				wsCharByName.emplace(n, ch.model);
+			}
+		}
+
 		for (auto& player : Globals::Caches::CachedPlayers)
 		{
 			RobloxPlayer p;
@@ -539,12 +559,34 @@ else
 					}
 				p.Character = player.Character();
 				if (!p.Character.address)
+				{
+					// No link from the Player object. Fall back to a Workspace
+					// character carrying this player's name rather than dropping
+					// the player entirely.
+					auto it = wsCharByName.find(p.Name);
+					if (it != wsCharByName.end())
+						p.Character = it->second;
+				}
+				if (!p.Character.address)
 					continue;
 				p.Humanoid = p.Character.FindFirstChildWhichIsA("Humanoid");
-				if (!p.Humanoid.address)
-					continue;
-				p.Health = player.Health();
-				p.MaxHealth = player.MaxHealth();
+				if (p.Humanoid.address)
+				{
+					p.Health = player.Health();
+					p.MaxHealth = player.MaxHealth();
+				}
+				else
+				{
+					// Humanoid-less character (Blox Strike and other games that
+					// drive their rigs with a custom controller). ESP and the
+					// aimbot only need the HumanoidRootPart, so keep the player
+					// instead of dropping it silently - which is exactly what made
+					// those games show no ESP at all.
+					if (!p.Character.FindFirstChild("HumanoidRootPart").address)
+						continue;
+					p.Health = 100.f;
+					p.MaxHealth = 100.f;
+				}
 
 				// ── Rivals progression ──
 				// CustomLeaderstats, NOT "leaderstats". Rank is not a name either:
@@ -626,10 +668,49 @@ else
 				}
 			}
 
-			p.RigType = p.Humanoid.RigType();
+			if (p.Humanoid.address)
+				p.RigType = p.Humanoid.RigType();
+			else
+				// No Humanoid to ask, so infer the rig from the part names the
+				// character actually has (Humanoid-less rigs use R15 names).
+				p.RigType = p.Character.FindFirstChild("UpperTorso").address ? 1 : 0;
 
 			p.Head = p.Character.FindFirstChild("Head");
 			p.HumanoidRootPart = p.Character.FindFirstChild("HumanoidRootPart");
+
+			// Rivals team signal: a "TeammateLabel" BillboardGui parented to a
+			// body part of YOUR teammates' characters (probe-confirmed: it is the
+			// only non-cosmetic descendant that differs between teammate and
+			// enemy). The probe only showed it at depth 2, not which part, so scan
+			// every direct child of the character (parts and models) plus their
+			// children rather than assuming the Head. Cached here because this is
+			// a per-player multi-read and the cache rebuild only runs ~every 500ms
+			// -- doing it per ESP frame would tank framerate. Enemies never carry
+			// it, so its presence is the whole answer.
+			p.HasTeammateLabel = false;
+			if (Globals::Roblox::isRivals && p.Character.address)
+			{
+				const auto kids = p.Character.GetChildren();
+				for (auto& k : kids)
+				{
+					if (!k.address) continue;
+					if (k.Name() == "TeammateLabel")
+					{
+						p.HasTeammateLabel = true;
+						break;
+					}
+					// depth-2: label hangs off a body part / nested model
+					for (auto& gc : k.GetChildren())
+					{
+						if (gc.address && gc.Name() == "TeammateLabel")
+						{
+							p.HasTeammateLabel = true;
+							break;
+						}
+					}
+					if (p.HasTeammateLabel) break;
+				}
+			}
 
 			if (p.HumanoidRootPart.address)
 			{
@@ -716,6 +797,58 @@ else
 			}
 
 			tempList.push_back(p);
+		}
+
+		// Rivals: add "Target" characters from ShootingRangeEntities as enemy players
+		// (In duels, enemy players control these dummies but have no character link).
+		// Gated on Cache NPCs: there are ~200 of them and caching them all drags
+		// ESP/aimbot hard, so they only exist when the user opted into NPCs.
+		if (Globals::Roblox::isRivals && Options::Misc::CacheNPCs && Globals::Roblox::Workspace.address)
+		{
+			const auto sre = Globals::Roblox::Workspace.FindFirstChild("ShootingRangeEntities");
+			if (sre.address)
+			{
+				for (auto& ch : sre.GetChildren())
+				{
+					if (ch.Name() != "Target") continue;
+					if (!ch.FindFirstChild("HumanoidRootPart").address) continue;
+
+					RobloxPlayer target;
+					target.address = ch.address; // use character address as player ID
+					target.Name = "Target";
+					target.Team = RobloxInstance(0);
+					target.TeamColor = 0;
+					target.TeamBrickColor = 0;
+					target.TeamName = "";
+					target.Character = ch;
+					target.Humanoid = ch.FindFirstChildWhichIsA("Humanoid");
+					target.HumanoidRootPart = ch.FindFirstChild("HumanoidRootPart");
+					target.Head = ch.FindFirstChild("Head");
+					target.Health = 100.f;
+					target.MaxHealth = 100.f;
+					target.RigType = 1; // R15
+					target.UseAnchor = true;
+					target.AnchorPos = target.HumanoidRootPart.address ? target.HumanoidRootPart.Position() : Vectors::Vector3{0,0,0};
+
+					// Rig parts for R15
+					target.Upper_Torso = ch.FindFirstChild("UpperTorso");
+					target.Lower_Torso = ch.FindFirstChild("LowerTorso");
+					target.Right_Upper_Arm = ch.FindFirstChild("RightUpperArm");
+					target.Right_Lower_Arm = ch.FindFirstChild("RightLowerArm");
+					target.Right_Hand = ch.FindFirstChild("RightHand");
+					target.Left_Upper_Arm = ch.FindFirstChild("LeftUpperArm");
+					target.Left_Lower_Arm = ch.FindFirstChild("LeftLowerArm");
+					target.Left_Hand = ch.FindFirstChild("LeftHand");
+					target.Right_Upper_Leg = ch.FindFirstChild("RightUpperLeg");
+					target.Right_Lower_Leg = ch.FindFirstChild("RightLowerLeg");
+					target.Right_Foot = ch.FindFirstChild("RightFoot");
+					target.Left_Upper_Leg = ch.FindFirstChild("LeftUpperLeg");
+					target.Left_Lower_Leg = ch.FindFirstChild("LeftLowerLeg");
+					target.Left_Foot = ch.FindFirstChild("LeftFoot");
+
+					tempList.push_back(target);
+				}
+			}
 		}
 
 		{
