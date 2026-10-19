@@ -19,6 +19,13 @@ namespace Options
 		inline int MenuClickVolume = 25; // percent, applied as playback gain to the click sound
 		inline bool MenuClickEffect = true; // sparkle burst drawn at the cursor on menu clicks
 		inline float MenuClickEffectColor[3] = { 0.94f, 0.94f, 0.94f }; // neutral soft white
+		// ── Roblox client / offsets upkeep ──
+		// Offsets are only valid for the build they were dumped from, so the
+		// cheat keeps itself in step with the live client instead of relying
+		// on a manual re-dump. All three are best-effort.
+		inline bool AutoUpdateOffsets = true;  // fetch the dump for the client that is running
+		inline bool AutoUpdateRoblox = true;   // run the Roblox installer when the client is behind
+		inline bool AutoLaunchRoblox = true;   // start Roblox if it is not already running
 		inline int MenuKey = VK_RSHIFT;
 		inline bool DebugLog = false;
 		inline float ESPPreviewOffsetX = 0.0f;

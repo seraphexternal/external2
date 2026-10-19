@@ -6019,6 +6019,14 @@ if (Options::Misc::MenuClickEffect)
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tint of the click effect (neutral white by default).");
 }
 
+UI::labelsection("CLIENT & OFFSETS");
+UI::Checkbox("Auto Update Offsets", &Options::Misc::AutoUpdateOffsets);
+if (ImGui::IsItemHovered()) ImGui::SetTooltip("Fetch the offset dump for the Roblox build you are running, from offsets.imtheo.lol.");
+UI::Checkbox("Auto Update Roblox", &Options::Misc::AutoUpdateRoblox);
+if (ImGui::IsItemHovered()) ImGui::SetTooltip("When Roblox is older than the live build, run the Roblox installer before attaching.");
+UI::Checkbox("Auto Launch Roblox", &Options::Misc::AutoLaunchRoblox);
+if (ImGui::IsItemHovered()) ImGui::SetTooltip("Start Roblox by itself when it is not already running.");
+
 UI::labelsection("MENU EFFECT");
 UI::Checkbox("Enable##weather", &MenuWeather::Enabled);
 

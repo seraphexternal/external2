@@ -230,6 +230,12 @@ int main()
 
     InitializeConfigPaths();
 
+    // Bring the Roblox client and the offsets into step before anything reads
+    // memory: update the client if it is behind, start it if it is not running,
+    // then fetch the dump that matches the build the user actually has. Runs
+    // once; a failure at any step leaves the bundled offsets in place.
+    OffsetsFetcher::Bootstrap();
+
     // The loader UI (stealth/theme/font/config selection) has been removed.
     // The overlay now attaches automatically: once Roblox is running it
     // reappears without any user interaction, and reattaches on relaunch.
