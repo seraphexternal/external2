@@ -648,6 +648,7 @@ inline json BuildConfigJson()
         { "Stream Proof", Options::Misc::StreamProof },
         { "Menu Click Sound", Options::Misc::MenuClickSound },
         { "Menu Click Volume", Options::Misc::MenuClickVolume },
+        { "Menu Click Effect", Options::Misc::MenuClickEffect },
         { "Third Person", Options::Misc::ThirdPerson },
         { "Anim Changer", Options::AnimationChanger::Enabled },
         { "Anim Idle", Options::AnimationChanger::Idle },
@@ -1436,6 +1437,7 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(ms, "Stream Proof", Options::Misc::StreamProof);
         LoadVal(ms, "Menu Click Sound", Options::Misc::MenuClickSound);
         LoadVal(ms, "Menu Click Volume", Options::Misc::MenuClickVolume);
+        LoadVal(ms, "Menu Click Effect", Options::Misc::MenuClickEffect);
         LoadVal(ms, "Third Person", Options::Misc::ThirdPerson);
         LoadVal(ms, "Anim Changer", Options::AnimationChanger::Enabled);
         LoadVal(ms, "Anim Idle", Options::AnimationChanger::Idle);

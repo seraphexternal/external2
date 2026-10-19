@@ -266,19 +266,29 @@ namespace UI
     }
 
     // ── click feedback ────────────────────────────────────────────
-    // Short UI tick on widget interaction. Centralized so every widget
-    // (checkboxes, sliders, combos, binds, buttons, sections) shares one
-    // debounce + volume-safe playback path.
+    // Visual click effect request, consumed by MenuClickFx::Update in
+    // renderer.cpp. Captured here because every widget already routes through
+    // ClickFx().
+    struct ClickBurstRequest { ImVec2 pos; double time; unsigned seed; };
+    inline std::vector<ClickBurstRequest> clickBursts;
+    inline unsigned clickBurstSeed = 0u;
+
+    // Short UI tick + sparkle burst on widget interaction. Centralized so every
+    // widget (checkboxes, sliders, combos, binds, buttons, sections) shares one
+    // debounce. Sound and effect are independent toggles.
     inline void ClickFx()
     {
-        if (!Options::Misc::MenuClickSound)
-            return;
         static double last = -1.0;
         const double now = ImGui::GetTime();
         if (last >= 0.0 && now - last < 0.03)
             return;
         last = now;
-        ClickSound::Play((float)Options::Misc::MenuClickVolume / 100.0f);
+
+        if (Options::Misc::MenuClickSound)
+            ClickSound::Play((float)Options::Misc::MenuClickVolume / 100.0f);
+
+        if (Options::Misc::MenuClickEffect)
+            clickBursts.push_back({ ImGui::GetIO().MousePos, now, ++clickBurstSeed });
     }
 
     // Plays the click once regardless of the debounce (used to preview the

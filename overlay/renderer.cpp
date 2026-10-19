@@ -2515,6 +2515,116 @@ drawList->PopClipRect();
 }
 }
 
+// ── Menu click effect: sparkle/ripple burst at the cursor on menu clicks ──
+// Requests are queued by UI::ClickFx() (every custom widget and the raw-ImGui
+// fallback funnel through it). Drawn on the foreground draw list so the effect
+// sits above the menu. All geometry is derived from a per-click seed, so no
+// per-particle state has to be simulated or stored.
+namespace MenuClickFx
+{
+struct Burst
+{
+    ImVec2 pos;
+    double start;
+    unsigned seed;
+};
+
+inline std::vector<Burst> bursts;
+inline const float kDuration = 0.55f; // seconds
+
+inline float Hash01(unsigned x)
+{
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return (float)(x & 0x00FFFFFFu) / (float)0x00FFFFFFu;
+}
+
+inline ImU32 WithAlpha(ImU32 rgb, float a)
+{
+    int ai = (int)(a * 255.f);
+    if (ai < 0) ai = 0; else if (ai > 255) ai = 255;
+    return (rgb & 0x00FFFFFFu) | ((ImU32)ai << 24);
+}
+
+const ImU32 kWhiteRgb = 0x00FFFFFFu;
+
+inline void Update()
+{
+    if (!UI::clickBursts.empty())
+    {
+        for (const auto& r : UI::clickBursts)
+            bursts.push_back({ r.pos, r.time, r.seed });
+        UI::clickBursts.clear();
+        if (bursts.size() > 64)
+            bursts.erase(bursts.begin(), bursts.begin() + (bursts.size() - 64));
+    }
+
+    const double now = ImGui::GetTime();
+    bursts.erase(std::remove_if(bursts.begin(), bursts.end(),
+        [now](const Burst& b) { return (now - b.start) > (double)kDuration; }),
+        bursts.end());
+}
+
+inline void Render(ImDrawList* dl)
+{
+    if (bursts.empty()) return;
+
+    const double now = ImGui::GetTime();
+    const ImU32 accent = UI::U(UI::P.accent);
+
+    for (const auto& b : bursts)
+    {
+        const float u = (float)((now - b.start) / (double)kDuration);
+        if (u < 0.f || u > 1.f) continue;
+
+        const float fade = 1.f - u;
+        const float ease = 1.f - fade * fade; // ease-out
+
+        // Expanding ripple ring
+        dl->AddCircle(b.pos, 3.f + ease * 30.f,
+                      WithAlpha(accent, 0.75f * fade * fade), 48,
+                      2.4f * fade + 0.4f);
+
+        // Soft glow + hot core flash
+        const float core = 8.f * fade;
+        if (core > 0.4f)
+        {
+            dl->AddCircleFilled(b.pos, core * 2.6f, WithAlpha(accent, 0.20f * fade), 28);
+            dl->AddCircleFilled(b.pos, core * 1.4f, WithAlpha(accent, 0.35f * fade), 28);
+            dl->AddCircleFilled(b.pos, core,       WithAlpha(kWhiteRgb, 0.85f * fade), 20);
+        }
+
+        // Sparkles: 9 streaks radiating outwards
+        for (int i = 0; i < 9; ++i)
+        {
+            const float ang = Hash01(b.seed * 131u + (unsigned)i * 17u) * 6.2831853f;
+            const float spd = 26.f + Hash01(b.seed * 977u + (unsigned)i * 31u) * 30.f;
+            const float dist = ease * spd;
+            const ImVec2 p(b.pos.x + cosf(ang) * dist, b.pos.y + sinf(ang) * dist);
+            const ImVec2 tail(b.pos.x + cosf(ang) * dist * 0.5f, b.pos.y + sinf(ang) * dist * 0.5f);
+            const ImU32 c = (i % 3 == 0) ? WithAlpha(kWhiteRgb, 0.90f * fade)
+                                         : WithAlpha(accent,    0.90f * fade);
+            dl->AddLine(tail, p, c, 1.7f * fade + 0.3f);
+            dl->AddCircleFilled(p, 1.7f * fade + 0.3f, c, 8);
+        }
+
+        // Rotating 4-point star flash
+        const float starR = 15.f * fade;
+        if (starR > 0.5f)
+        {
+            const float rot = u * 0.6f;
+            for (int k = 0; k < 2; ++k)
+            {
+                const float a = rot + (float)k * 1.5707963f;
+                const ImVec2 d(cosf(a) * starR, sinf(a) * starR);
+                dl->AddLine(ImVec2(b.pos.x - d.x, b.pos.y - d.y),
+                            ImVec2(b.pos.x + d.x, b.pos.y + d.y),
+                            WithAlpha(kWhiteRgb, 0.70f * fade * fade), 1.3f);
+            }
+        }
+    }
+}
+}
+
 
 
 HWND FindRobloxWindow() {
@@ -3906,6 +4016,10 @@ Globals::Roblox::LocalPlayer = RobloxInstance(Memory->read<uintptr_t>(Globals::R
     // Skip weather physics when the menu has never been opened
     if (gMenuWasEverOpen && (menu_open || menuAlpha > 0.0f))
         MenuWeather::Update((float)ImGui::GetIO().DisplaySize.x, (float)ImGui::GetIO().DisplaySize.y);
+
+    // Click-effect bursts are cheap and short-lived; keep pruning them even
+    // while the menu is closing so nothing lingers onto the game.
+    MenuClickFx::Update();
 
 // Dynamic streamproof toggle
 static bool lastStreamProofState = Options::Misc::StreamProof;
@@ -5891,6 +6005,8 @@ if (Options::Misc::MenuClickSound)
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Volume of the menu click sound (applied as a playback gain).");
     if (ImGui::IsItemDeactivatedAfterEdit()) UI::ClickPreview();
 }
+UI::Checkbox("Click Effect", &Options::Misc::MenuClickEffect);
+if (ImGui::IsItemHovered()) ImGui::SetTooltip("Draws a sparkle burst at the cursor when you click a menu widget.");
 
 UI::labelsection("MENU EFFECT");
 UI::Checkbox("Enable##weather", &MenuWeather::Enabled);
@@ -6451,6 +6567,10 @@ if (menu_open && ImGui::IsMouseClicked(0))
             UI::ClickFx();
     }
 }
+
+// Visual click effect, drawn above the menu.
+if (menu_open || menuAlpha > 0.0f)
+    MenuClickFx::Render(ImGui::GetForegroundDrawList());
 
 // ESP Preview overlay (positioned to the right of the menu, clamped to screen)
 if (tab == 1 && tab2 == 0 && Options::ESP::Enabled && menuAlpha > 0.0f && menuPos.x >= 0)
