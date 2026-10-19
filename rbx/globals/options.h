@@ -16,6 +16,7 @@ namespace Options
 		inline float KeybindListY = 80.0f;
 		inline bool StreamProof = true;
 		inline bool MenuClickSound = true; // short UI tick on menu widget clicks
+		inline int MenuClickVolume = 40; // percent, applied as playback gain to the click sound
 		inline int MenuKey = VK_RSHIFT;
 		inline bool DebugLog = false;
 		inline float ESPPreviewOffsetX = 0.0f;

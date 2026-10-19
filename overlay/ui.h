@@ -278,7 +278,16 @@ namespace UI
         if (last >= 0.0 && now - last < 0.03)
             return;
         last = now;
-        ClickSound::Play();
+        ClickSound::Play((float)Options::Misc::MenuClickVolume / 100.0f);
+    }
+
+    // Plays the click once regardless of the debounce (used to preview the
+    // volume slider). Still respects the enable toggle and volume value.
+    inline void ClickPreview()
+    {
+        if (!Options::Misc::MenuClickSound)
+            return;
+        ClickSound::Play((float)Options::Misc::MenuClickVolume / 100.0f);
     }
 
     struct CheckboxState { float anim = 0.0f; };

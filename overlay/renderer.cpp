@@ -5885,6 +5885,12 @@ UI::SliderFloat("Menu Scale", &Options::Misc::MenuScale, 0.6f, 2.5f, "%.2fx");
 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Zooms the entire menu (text, panels and graphics). Drag the title bar to move it.");
 UI::Checkbox("Menu Click Sound", &Options::Misc::MenuClickSound);
 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Plays a short tick when clicking menu widgets.");
+if (Options::Misc::MenuClickSound)
+{
+    UI::SliderInt("Click Volume", &Options::Misc::MenuClickVolume, 0, 100, "%d%%");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Volume of the menu click sound (applied as a playback gain).");
+    if (ImGui::IsItemDeactivatedAfterEdit()) UI::ClickPreview();
+}
 
 UI::labelsection("MENU EFFECT");
 UI::Checkbox("Enable##weather", &MenuWeather::Enabled);

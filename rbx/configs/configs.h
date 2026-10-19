@@ -647,6 +647,7 @@ inline json BuildConfigJson()
         { "ESP Preview Offset Y", Options::Misc::ESPPreviewOffsetY },
         { "Stream Proof", Options::Misc::StreamProof },
         { "Menu Click Sound", Options::Misc::MenuClickSound },
+        { "Menu Click Volume", Options::Misc::MenuClickVolume },
         { "Third Person", Options::Misc::ThirdPerson },
         { "Anim Changer", Options::AnimationChanger::Enabled },
         { "Anim Idle", Options::AnimationChanger::Idle },
@@ -1434,6 +1435,7 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(ms, "ESP Preview Offset Y", Options::Misc::ESPPreviewOffsetY);
         LoadVal(ms, "Stream Proof", Options::Misc::StreamProof);
         LoadVal(ms, "Menu Click Sound", Options::Misc::MenuClickSound);
+        LoadVal(ms, "Menu Click Volume", Options::Misc::MenuClickVolume);
         LoadVal(ms, "Third Person", Options::Misc::ThirdPerson);
         LoadVal(ms, "Anim Changer", Options::AnimationChanger::Enabled);
         LoadVal(ms, "Anim Idle", Options::AnimationChanger::Idle);
