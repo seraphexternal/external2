@@ -2569,7 +2569,13 @@ inline void Render(ImDrawList* dl)
     if (bursts.empty()) return;
 
     const double now = ImGui::GetTime();
-    const ImU32 accent = UI::U(UI::P.accent);
+    // Neutral tint (configurable). Kept separate from the menu accent so the
+    // effect stays soft/neutral and doesn't get recoloured by Rainbow Accent.
+    const ImU32 accent = IM_COL32(
+        (int)(std::clamp(Options::Misc::MenuClickEffectColor[0], 0.f, 1.f) * 255.f),
+        (int)(std::clamp(Options::Misc::MenuClickEffectColor[1], 0.f, 1.f) * 255.f),
+        (int)(std::clamp(Options::Misc::MenuClickEffectColor[2], 0.f, 1.f) * 255.f),
+        255) & 0x00FFFFFFu;
 
     for (const auto& b : bursts)
     {
@@ -6007,6 +6013,11 @@ if (Options::Misc::MenuClickSound)
 }
 UI::Checkbox("Click Effect", &Options::Misc::MenuClickEffect);
 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Draws a sparkle burst at the cursor when you click a menu widget.");
+if (Options::Misc::MenuClickEffect)
+{
+    ImGui::ColorEdit3("Effect Color", Options::Misc::MenuClickEffectColor, ImGuiColorEditFlags_NoInputs);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tint of the click effect (neutral white by default).");
+}
 
 UI::labelsection("MENU EFFECT");
 UI::Checkbox("Enable##weather", &MenuWeather::Enabled);
