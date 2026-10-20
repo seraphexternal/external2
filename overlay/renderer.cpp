@@ -4323,12 +4323,21 @@ ImFont* menuFont = (MenuFonts::Count > 0
     const char* nameStr = uname.empty() ? "Not connected" : uname.c_str();
     const ImU32 muted = ImGui::ColorConvertFloat4ToU32(ImVec4(1, 1, 1, 0.30f));
     ImFont* sf = UI::small_font ? UI::small_font : ImGui::GetFont();
-    const float fs = UI::small_font ? sf->FontSize : 17.0f * sc;
-    float yy = sideMax.y - 100.0f * sc; // Moved down to bottom (was -170)
+    // small_font is baked at a fixed 17px (the atlas is only built once, and
+    // draw->AddText ignores SetWindowFontScale), so it must be scaled here by
+    // hand like every other menu string. Using the raw FontSize made this
+    // block taller than the gap the nav tabs leave behind.
+    const float fs = 17.0f * sc;
+    const float avSize = 60.0f * sc;
+    // Size the block from what it actually draws, then pin its bottom edge to
+    // sideMax.y. The old fixed anchor (sideMax.y - 100) assumed a two-line
+    // footer, so once the avatar block was added the FPS line landed ~13px
+    // past sideMax.y and drew outside the menu window entirely.
+    const float blockH = 2.0f * sc + avSize + 4.0f * sc + fs + 3.0f * sc + fs;
+    float yy = sideMax.y - 12.0f * sc - blockH;
 
 // Avatar (circular profile icon)
         {
-            const float avSize = 72.0f * sc;
             const float avX = sideMin.x + 12.0f * sc;
             const float avY = yy - 2.0f * sc;
             const ImVec2 avCenter(avX + avSize * 0.5f, avY + avSize * 0.5f);
