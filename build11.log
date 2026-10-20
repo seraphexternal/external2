@@ -1,0 +1,74 @@
+﻿
+  Generating code
+  25 of 22979 functions ( 0.1%) were compiled, the rest were copied from previous compilation.
+    9 functions were new in current compilation
+    255 functions had inline decision re-evaluated but remain unchanged
+  Finished generating code
+  Seraph.vcxproj -> C:\Users\ncomp\source\repos\BackupExternal\Seraph\build\Release\Fleasion-v2.4.0-Windows.exe
+  Copying hitsounds and Models to output directory
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\12.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\4.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\agpa1.mp3
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\agpa2.mp3
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\animezing.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\archive.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\basshit.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\Beep1.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\bell.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\bepis.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\bubble.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\burp.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\cod.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\coinmaster.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\connectpacanoff.mp3
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\copperbell.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\cowbell.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\crowbar.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\dog.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\doorsmasher.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\dsr-1.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\duck.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\fatality.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\fire.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\huhh.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\klatsch.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\mariowoahh.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\mcbow.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\Metal.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\mgs.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\minecraft_bow.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\msfrs.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\my_name_jeff.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\neverlose.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\plasmablaster.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\poolplayer.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\poordrum.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\primordial.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\Punch.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\punchy.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\quake.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\reminder.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\roblox.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\rust_headshot.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\skeet.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\sonic.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\stapler.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\unreal1.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\window_xp_error.wav
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\hitsounds\zingtrio.wav
+  50 File(s) copied
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\Models\Mario\Mario.glb
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\Models\Mario\Mario.obj
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\Models\Mario\textures\0x39b36443.png
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\Models\Mario\textures\0x3b7d69bc.png
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\Models\Mario\textures\0x4c506d2f.png
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\Models\Mario\textures\0x54faa61.png
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\Models\Mario\textures\0x73e72eb1.png
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\Models\Mario\textures\0x95852189.png
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\Models\Mario\textures\0x96b71089.png
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\Models\Mario\textures\0xbc4e9ae5.png
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\Models\Roblox\RobloxR15Rigged.glb
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\Models\Roblox\RobloxR15Rigged.obj
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\Models\TungTung\tung_tung_sahur.glb
+  C:\Users\ncomp\source\repos\BackupExternal\Seraph\Models\TungTung\tung_tung_sahur.obj
+  14 File(s) copied

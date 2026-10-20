@@ -531,6 +531,28 @@ inline void RenderESP(ImDrawList* drawList)
         top -= height * 0.08f;
         bottom += height * 0.05f;
 
+        // The bounds above are built from just two projected points (Head and
+        // HumanoidRootPart), which are near-vertically coplanar in world space.
+        // They can therefore land on the same screen pixel (or the same screen
+        // column/row), leaving width and/or height at ~0. This used to `continue`
+        // and discard the player entirely, which silently killed ESP for every
+        // target whose two sample points collapsed. Degenerate bounds mean "we
+        // have a point, not a rectangle", so give the box a minimum extent
+        // instead of dropping it.
+        constexpr float kMinEspExtent = 2.0f;
+        if (right - left < kMinEspExtent)
+        {
+            const float cx = (left + right) * 0.5f;
+            left = cx - kMinEspExtent * 0.5f;
+            right = cx + kMinEspExtent * 0.5f;
+        }
+        if (bottom - top < kMinEspExtent)
+        {
+            const float cy = (top + bottom) * 0.5f;
+            top = cy - kMinEspExtent * 0.5f;
+            bottom = cy + kMinEspExtent * 0.5f;
+        }
+
         const bool validBounds = left < right && top < bottom;
         if (!validBounds)
             continue;
@@ -540,8 +562,8 @@ inline void RenderESP(ImDrawList* drawList)
         GetPlayerHealth(player, liveHealth, liveMaxHealth);
 
         const float distance3D = localPos.x != 0 ? targetHRP.Position().Distance(localPos) : 0.f;
-        if (distance3D > Options::ESP::MaxRenderDistance) continue;
-        if (distance3D > 2000.f) continue;
+        if (distance3D > Options::ESP::MaxRenderDistance)
+            continue;
         const float scale = EspClamp(450.f / EspClamp(distance3D, 1.f, 4500.f), 0.65f, 2.5f);
 
         const bool playerVisible = Visibility::IsPlayerVisible(player);
@@ -809,8 +831,14 @@ inline void RenderESP(ImDrawList* drawList)
                 }
             }
 
-            if (hist.size() < 2)
-                continue;
+            // A trail needs at least two recorded points. This used to be a
+            // bare `continue`, which sits directly in the player loop body and
+            // therefore skipped the box / skeleton / name / health / corner
+            // drawing for every player that had not built up trail history yet
+            // (i.e. essentially every player, most of the time). Only the trail
+            // itself may be skipped here.
+            if (hist.size() >= 2)
+            {
 
             // Base color by mode: 0 = custom, 1 = team, 2 = health, 3 = rainbow.
             ImU32 baseColor;
@@ -929,6 +957,7 @@ inline void RenderESP(ImDrawList* drawList)
                 // Main line.
                 drawList->AddLine(p1, p2, IM_COL32(baseR, baseG, baseB, segAlpha), scaledThickness);
             }
+            } // hist.size() >= 2
         }
 
         if (Options::ESP::Box && Options::ESP::BoxType == 2)
@@ -1517,7 +1546,6 @@ inline void RenderESP(ImDrawList* drawList)
         }
     }
 
-    // Local-only effects: when enabled, draw a ring / glow around the local player.
     if (Options::ESP::LocalOnly && localHRP.address)
     {
         const auto localScreen = WorldToScreen(localHRP.Position());

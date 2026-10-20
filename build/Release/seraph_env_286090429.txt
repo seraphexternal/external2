@@ -1,0 +1,10 @@
+=== Game Environment ===
+PlaceId: 286090429
+GameName: Game #286090429
+Timestamp: 1792110677
+
+
+Process ID: 19812
+Base address: 0x7ff790860000
+
+=== End ===

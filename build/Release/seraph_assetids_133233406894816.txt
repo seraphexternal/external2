@@ -1,0 +1,11 @@
+=== Asset ID Dump ===
+PlaceId: 133233406894816
+Timestamp: 1792112714
+
+Part | QuakeBubble | 0x180cae0b800 | AssetId: 1059431846 (offset 0x280)
+Folder | QuakeWeaponFx | 0x18092ca28c0 | AssetId: 8589934619 (offset 0x1b0)
+Part | gothic_light3_2K | 0x180b0d9cc00 | AssetId: 8589934594 (offset 0x280)
+Folder | VisualLit | 0x1809bb858e0 | AssetId: 4294901760 (offset 0x280)
+
+Total assets found: 4
+=== End ===
