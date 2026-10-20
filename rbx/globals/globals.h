@@ -218,49 +218,92 @@ namespace Globals
         inline HWND RobloxHWND = nullptr;
         inline bool Valid = false;
 
+        // The game's render surface lives in the "WINDOWSCLIENT" top-level
+        // window owned by the Roblox process. FindWindowA(NULL, "Roblox") used
+        // to be the primary lookup, but the title is not unique or stable and
+        // it happily matched a transient 120x0 window, which then got cached
+        // for the whole session. Every WorldToScreen call divides by
+        // Dimensions, so a 120x0 client rect collapsed the entire ESP into a
+        // 120x0 box in the top-left corner of the screen.
+        //
+        // Resolve by class *and* owning pid instead, and keep looking until a
+        // window with a real client rect shows up, re-resolving whenever the
+        // cached handle stops being usable (game relaunches get a new hwnd).
+        inline bool ClientRectUsable(HWND hwnd, RECT& out)
+        {
+            if (!hwnd || !IsWindow(hwnd)) return false;
+            if (!IsWindowVisible(hwnd)) return false;
+            if (IsIconic(hwnd)) return false;
+            RECT rc{};
+            if (!GetClientRect(hwnd, &rc)) return false;
+            // A real game client is at least a couple hundred pixels each way;
+            // anything smaller is a helper/transient window.
+            if (rc.right < 200 || rc.bottom < 200) return false;
+            out = rc;
+            return true;
+        }
+
+        inline HWND ResolveGameWindow()
+        {
+            const DWORD pid = Memory ? (DWORD)Memory->getProcessId() : 0;
+
+            struct Ctx { DWORD pid; HWND best; long area; bool bestIsClient; };
+            Ctx ctx{ pid, nullptr, 0, false };
+
+            EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
+                auto* c = reinterpret_cast<Ctx*>(lParam);
+
+                DWORD wpid = 0;
+                GetWindowThreadProcessId(hwnd, &wpid);
+                if (c->pid != 0 && wpid != c->pid) return TRUE;
+
+                RECT rc{};
+                if (!ClientRectUsable(hwnd, rc)) return TRUE;
+
+                char cls[64] = { 0 };
+                GetClassNameA(hwnd, cls, sizeof(cls));
+                const bool isClient = (strcmp(cls, "WINDOWSCLIENT") == 0);
+                const long area = (rc.right - rc.left) * (rc.bottom - rc.top);
+
+                // Prefer the game's own client class; otherwise the largest
+                // usable window the process owns.
+                if (!c->best ||
+                    (isClient && !c->bestIsClient) ||
+                    (isClient == c->bestIsClient && area > c->area))
+                {
+                    c->best = hwnd;
+                    c->area = area;
+                    c->bestIsClient = isClient;
+                }
+                return TRUE;
+            }, reinterpret_cast<LPARAM>(&ctx));
+
+            return ctx.best;
+        }
+
         inline void Update()
         {
-            if (!RobloxHWND || !IsWindow(RobloxHWND))
+            RECT clientRect{};
+            if (!ClientRectUsable(RobloxHWND, clientRect))
             {
-                RobloxHWND = FindWindowA(NULL, "Roblox");
-                if (!RobloxHWND)
+                // Cached handle is gone, minimised, or degenerate - re-resolve.
+                RobloxHWND = ResolveGameWindow();
+                if (!ClientRectUsable(RobloxHWND, clientRect))
                 {
-                    DWORD pid = (Memory ? (DWORD)Memory->getProcessId() : 0);
-                    if (pid != 0)
-                    {
-                        HWND found = nullptr;
-                        EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
-                            DWORD wpid = 0;
-                            GetWindowThreadProcessId(hwnd, &wpid);
-                            if (wpid == (DWORD)lParam && IsWindowVisible(hwnd) && GetWindow(hwnd, GW_OWNER) == nullptr) {
-                                *reinterpret_cast<HWND*>(lParam) = hwnd;
-                                return FALSE;
-                            }
-                            return TRUE;
-                        }, reinterpret_cast<LPARAM>(&found));
-                        if (found) RobloxHWND = found;
-                    }
+                    Valid = false;
+                    return;
                 }
             }
 
-            if (RobloxHWND)
+            Dimensions = { (float)clientRect.right, (float)clientRect.bottom };
+
+            ScreenPos = { 0, 0 };
+            ClientToScreen(RobloxHWND, &ScreenPos);
+
+            if (Roblox::VisualEngine != 0)
             {
-                RECT clientRect;
-                GetClientRect(RobloxHWND, &clientRect);
-                Dimensions = { (float)clientRect.right, (float)clientRect.bottom };
-
-                ScreenPos = { 0, 0 };
-                ClientToScreen(RobloxHWND, &ScreenPos);
-
-                if (Roblox::VisualEngine != 0)
-                {
-                    ViewMatrix = Memory->read<Matrixes::Matrix4>(Roblox::VisualEngine + Offsets::VisualEngine::ViewMatrix);
-                    Valid = true;
-                }
-                else
-                {
-                    Valid = false;
-                }
+                ViewMatrix = Memory->read<Matrixes::Matrix4>(Roblox::VisualEngine + Offsets::VisualEngine::ViewMatrix);
+                Valid = true;
             }
             else
             {

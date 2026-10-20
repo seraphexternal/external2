@@ -2655,6 +2655,46 @@ return result;
 }
 
 bool IsGameOnTop(const std::string& expectedTitle) {
+// ESP used to be gated on Roblox owning the *foreground* window, which broke
+// it whenever anything else held focus - the Seraph overlay itself, a
+// browser, even the menu. The gate reported false for entire sessions while
+// the game was plainly on screen, so RenderESP never ran and the only things
+// visible were the passes drawn outside this check (FOV fill, keybinds,
+// arrows), which piled up in a corner.
+//
+// What ESP actually needs is "the game is up and showing", so test that:
+// the Roblox window exists, is visible, and is not minimized. Foreground
+// focus is irrelevant - the overlay is topmost and composites over the game
+// regardless of who owns focus.
+HWND rbWnd = Globals::Viewport::RobloxHWND;
+if (!rbWnd || !IsWindow(rbWnd))
+{
+    rbWnd = FindWindowA(NULL, "Roblox");
+    if (!rbWnd)
+    {
+        DWORD pid = Memory ? (DWORD)Memory->getProcessId() : 0;
+        if (pid != 0)
+        {
+            HWND found = nullptr;
+            EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
+                DWORD wpid = 0;
+                GetWindowThreadProcessId(hwnd, &wpid);
+                if (wpid == (DWORD)lParam && IsWindowVisible(hwnd) && GetWindow(hwnd, GW_OWNER) == nullptr) {
+                    *reinterpret_cast<HWND*>(lParam) = hwnd;
+                    return FALSE;
+                }
+                return TRUE;
+            }, reinterpret_cast<LPARAM>(&found));
+            if (found) rbWnd = found;
+        }
+    }
+}
+
+if (rbWnd && IsWindow(rbWnd))
+    return IsWindowVisible(rbWnd) != 0 && !IsIconic(rbWnd);
+
+// No Roblox window resolved: fall back to the old foreground/pid test so the
+// gate still works if the window handle was never published.
 HWND hwnd = GetForegroundWindow();
 if (!hwnd) return false;
 
