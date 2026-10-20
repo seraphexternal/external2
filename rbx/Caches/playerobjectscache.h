@@ -544,6 +544,19 @@ inline void CachePlayerObjects()
 				// Resolve R6 vs R15 so skeleton/box ESP draws the right rig. Without
 				// this RigType stayed 0 (R6), so every R15 NPC had its limbs mismatched.
 				p.RigType = p.Character.FindFirstChild("UpperTorso").address ? 1 : 0;
+
+				// A rig with no Head and no torso part is a viewmodel or a prop,
+				// not a character - skip it rather than filling the cache and the
+				// ESP loop with junk.
+				if (!p.Head.address &&
+					!p.Character.FindFirstChild("Torso").address &&
+					!p.Character.FindFirstChild("UpperTorso").address)
+					continue;
+				// Dead NPCs (corpses) carry health 0. ESP already refuses to draw
+				// them, but keeping them cost a full limb scan per corpse per
+				// rebuild, which is pure read traffic for something never rendered.
+				if (p.Humanoid.address && p.Health <= 0.f)
+					continue;
 			}
 else
 				{

@@ -140,6 +140,9 @@ inline void CachePlayers()
 			{
 				WalkNode node = pending.back();
 				pending.pop_back();
+				// Remember this node's name so accepted rigs can record their
+				// parent container (used to filter corpses/viewmodels below).
+				const std::string parentName = node.inst.Name();
 				if (node.depth >= maxDepth)
 					continue;
 
@@ -161,11 +164,34 @@ inline void CachePlayers()
 
 						if (!excluded && child.FindFirstChild("HumanoidRootPart").address != 0)
 						{
-							npcAddrs.push_back(child.address);
-							tempList.push_back(child);
-							// Don't descend into a rig we've already accepted; its
-							// parts are not characters.
-							continue;
+							// A root part alone is not enough to call something a
+							// character. Two kinds of non-character passed that test
+							// in a real game (place 140651474416458):
+							//   - weapon viewmodels parked straight in Workspace
+							//     ("UMP"/"Viewmodel": a Humanoid + HumanoidRootPart but
+							//     NO Head, so ESP drew a nameless box in front of us)
+							//   - dead-body containers ("DummyCorpses\*", health 0)
+							// Reject both here so they never inflate the NPC list.
+							const std::string nm = child.Name();
+							const bool looksNonCharacter =
+								child.FindFirstChild("Head").address == 0 &&
+								child.FindFirstChild("Torso").address == 0 &&
+								child.FindFirstChild("UpperTorso").address == 0;
+
+							const bool looksCorpse =
+								parentName.find("Corpse") != std::string::npos ||
+								nm.find("Corpse") != std::string::npos ||
+								parentName == "Viewmodel" ||
+								nm == "Viewmodel";
+
+							if (!looksNonCharacter && !looksCorpse)
+							{
+								npcAddrs.push_back(child.address);
+								tempList.push_back(child);
+								// Don't descend into a rig we've accepted; its parts
+								// are not characters.
+								continue;
+							}
 						}
 					}
 
