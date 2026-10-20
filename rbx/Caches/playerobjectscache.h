@@ -520,10 +520,30 @@ inline void CachePlayerObjects()
 				p.TeamName = "";
 				p.Character = player;
 				p.Humanoid = p.Character.FindFirstChildWhichIsA("Humanoid");
-				if (!p.Humanoid.address)
+				// A Humanoid is not required: playercache.h accepts NPC rigs on
+				// HumanoidRootPart alone (custom-controller and dummy rigs ship no
+				// Humanoid). Demanding one here silently dropped every such NPC
+				// right after it had been discovered, so the NPC ESP toggle still
+				// showed nothing. ESP draws off the root part; default the health.
+				p.HumanoidRootPart = p.Character.FindFirstChild("HumanoidRootPart");
+				if (!p.HumanoidRootPart.address)
 					continue;
-				p.Health = Memory->read<float>(p.Humanoid.address + Offsets::Humanoid::Health);
-				p.MaxHealth = Memory->read<float>(p.Humanoid.address + Offsets::Humanoid::MaxHealth);
+				// ESP falls back to the root part when Head is null, but resolving it
+				// gives name-tag/head-dot ESP the correct anchor.
+				p.Head = p.Character.FindFirstChild("Head");
+				if (p.Humanoid.address)
+				{
+					p.Health = Memory->read<float>(p.Humanoid.address + Offsets::Humanoid::Health);
+					p.MaxHealth = Memory->read<float>(p.Humanoid.address + Offsets::Humanoid::MaxHealth);
+				}
+				else
+				{
+					p.Health = 100.f;
+					p.MaxHealth = 100.f;
+				}
+				// Resolve R6 vs R15 so skeleton/box ESP draws the right rig. Without
+				// this RigType stayed 0 (R6), so every R15 NPC had its limbs mismatched.
+				p.RigType = p.Character.FindFirstChild("UpperTorso").address ? 1 : 0;
 			}
 else
 				{

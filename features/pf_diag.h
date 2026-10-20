@@ -164,8 +164,14 @@ namespace PFDiag
                 camPos = Memory->read<Vectors::Vector3>(Globals::Roblox::Camera.address + Offsets::Camera::Position);
 
             auto wsChars = FindAllCharactersInWorkspace();
+            int npcObjs = 0, playerObjs = 0;
+            for (const auto& p : Globals::Caches::FramePlayers())
+            {
+                if (p.address != 0 && p.address == p.Character.address) ++npcObjs;
+                else ++playerObjs;
+            }
             snprintf(buf, sizeof(buf),
-                "[PFDIAG] acq dm=%llu cam=%llu camPos=(%.0f,%.0f,%.0f) viewport=%d localChar=%llu cachedPlayers=%zu cachedObjects=%zu wsChars=%zu",
+                "[PFDIAG] acq dm=%llu cam=%llu camPos=(%.0f,%.0f,%.0f) viewport=%d localChar=%llu cachedPlayers=%zu cachedObjects=%zu npc=%d playerObjs=%d cacheNPCs=%d wsChars=%zu",
                 (unsigned long long)Globals::Roblox::DataModel.address,
                 (unsigned long long)Globals::Roblox::Camera.address,
                 camPos.x, camPos.y, camPos.z,
@@ -173,6 +179,7 @@ namespace PFDiag
                 (unsigned long long)Globals::Roblox::LocalPlayer.Character().address,
                 Globals::Caches::CachedPlayers.size(),
                 Globals::Caches::CachedPlayerObjects.size(),
+                npcObjs, playerObjs, (int)Options::Misc::CacheNPCs,
                 wsChars.size());
             Write(buf);
 
