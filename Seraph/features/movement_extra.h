@@ -5,6 +5,22 @@
 #include <thread>
 #include <chrono>
 #include <cmath>
+#include <atomic>
+#include <mutex>
+
+// ── PF Aim shared state ─────────────────────────────────────────────────
+// Declared here (global scope, matching the readers in PFAimLoop below) so
+// the camera-lock thread has its staging buffer. Writers lock g_PFAimMutex
+// before touching g_PFAimCamera / g_PFAimRotation.
+inline std::atomic<int64_t> g_PFAimUpdatedMs{ 0 };      // last staged ms
+inline std::atomic<bool>    g_PFAimActive{ false };      // hold the camera lock
+inline std::mutex           g_PFAimMutex;
+inline uintptr_t            g_PFAimCamera = 0;
+inline int                  g_PFAimSavedCameraType = -1;
+inline Matrixes::Matrix3x3  g_PFAimRotation{
+    1.f, 0.f, 0.f,
+    0.f, 1.f, 0.f,
+    0.f, 0.f, 1.f };
 
 // ── Click TP: teleport the local character to the ground point under the cursor ─
 // Unprojects the cursor through the real view-projection matrix and intersects
@@ -119,15 +135,76 @@ inline void ClickTPLoop()
                     continue;
             }
 
-            for (int i = 0; i < 10000; ++i)
+            // ~40ms of writes at 1ms spacing, not 10000 back-to-back: same
+            // race-winning coverage over the game's physics steps, ~500x fewer
+            // driver writes on the shared IO mutex.
+            const auto tpEnd = std::chrono::steady_clock::now() + std::chrono::milliseconds(40);
+            do
             {
                 Memory->write<Vectors::Vector3>(prim + Offsets::Primitive::Position, target);
                 Memory->write<Vectors::Vector3>(prim + Offsets::Primitive::AssemblyLinearVelocity, { 0.f, 0.f, 0.f });
-            }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } while (Globals::running && std::chrono::steady_clock::now() < tpEnd);
         }
         catch (...)
         {
         }
+    }
+}
+
+// ── PF Aim: dedicated thread that holds the aimbot camera lock on Phantom ────
+// Forces CameraType to 7 and hammers the staged rotation in ~14ms bursts so
+// Roblox's camera script cannot win the inter-frame race (same technique as
+// FreeCam / ThirdPerson). Only the rotation is written; position is untouched.
+inline void PFAimLoop()
+{
+    bool wasHammering = false;
+    while (Globals::running)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+        int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        bool fresh = (now - g_PFAimUpdatedMs.load(std::memory_order_relaxed)) < 100;
+
+        if (!Globals::Roblox::isPhantomForces || !g_PFAimActive.load(std::memory_order_relaxed) || !fresh)
+        {
+            if (wasHammering)
+            {
+                uintptr_t cam;
+                {
+                    std::lock_guard<std::mutex> lock(g_PFAimMutex);
+                    cam = g_PFAimCamera;
+                }
+                if (cam && g_PFAimSavedCameraType >= 0)
+                    Memory->write<int>(cam + Offsets::Camera::CameraType, g_PFAimSavedCameraType);
+                wasHammering = false;
+            }
+            continue;
+        }
+
+        Matrixes::Matrix3x3 rot;
+        uintptr_t cam;
+        {
+            std::lock_guard<std::mutex> lock(g_PFAimMutex);
+            rot = g_PFAimRotation;
+            cam = g_PFAimCamera;
+        }
+
+        if (!cam)
+            continue;
+
+        // ~14ms coverage, 1ms between batches: beats the once-per-frame camera
+        // script without hammering the shared IO mutex at full speed.
+        auto writeStart = std::chrono::high_resolution_clock::now();
+        do {
+            Memory->write<int>(cam + Offsets::Camera::CameraType, 7);
+            Memory->write<Matrixes::Matrix3x3>(cam + Offsets::Camera::Rotation, rot);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } while (std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::high_resolution_clock::now() - writeStart).count() < 14000);
+
+        wasHammering = true;
     }
 }
 
@@ -363,11 +440,14 @@ inline void FreeCamLoop()
         }
 
         // ── Hammer the camera transform (~14ms burst) so nothing can override ─
+        // Batches are spaced 1ms apart: one write per ms still lands after the
+        // game's once-per-frame camera write, without ~1M IOCTLs/sec.
         auto writeStart = std::chrono::high_resolution_clock::now();
         do {
             Memory->write<int>(cam.address + Offsets::Camera::CameraType, 7);
             Memory->write<Vectors::Vector3>(cam.address + Offsets::Camera::Position, savedPos);
             Memory->write<Matrixes::Matrix3x3>(cam.address + Offsets::Camera::Rotation, rot);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         } while (std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::high_resolution_clock::now() - writeStart).count() < 14000);
 

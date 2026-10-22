@@ -80,6 +80,14 @@ void PreviewRenderer::Update(float dt)
 		m_SceneDirty = true;
 	}
 
+	// Re-evaluate the skeleton when the pose changed (also forces a redraw).
+	if (m_HasSkin && m_PoseDirty)
+	{
+		RecomputeBoneMatrices();
+		m_PoseDirty = false;
+		m_SceneDirty = true;
+	}
+
 	if (!m_SceneDirty)
 		return;
 	m_SceneDirty = false;
@@ -98,7 +106,27 @@ void PreviewRenderer::Update(float dt)
 		XMVectorSet(0.0f, 0.02f, -camDist, 1.0f),
 		XMVectorSet(0.0f, 0.02f, 0.0f, 1.0f),
 		XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f));
-	XMMATRIX proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(40.0f), aspect, 0.01f, 100.0f);
+
+	// Use orthographic projection for consistent model size. Under perspective
+	// the model's silhouette scaled with depth, so as SetViewYaw turned it with
+	// the camera the model appeared to grow/shrink. Orthographic removes that
+	// depth scaling entirely, so the size is constant no matter how it rotates.
+	XMMATRIX proj;
+	if (m_UseOrthographic) {
+		// Match the perspective framing at the model's centre plane:
+		//   halfHeight = camDist * tan(fov / 2)
+		// This makes the on-screen size identical to the perspective path (so
+		// toggling the option does not make the model jump) while keeping the
+		// size independent of rotation/depth. The old value (m_FrameScale*0.5)
+		// was not a world size and framed the model wildly differently per file.
+		const float halfH = camDist * tanf(XMConvertToRadians(40.0f) * 0.5f);
+		proj = XMMatrixOrthographicLH(
+			2.0f * halfH * aspect,   // width
+			2.0f * halfH,            // height
+			0.01f, 100.0f);
+	} else {
+		proj = XMMatrixPerspectiveFovLH(XMConvertToRadians(40.0f), aspect, 0.01f, 100.0f);
+	}
 
 	XMMATRIX cpuMVP = world * view * proj;
 	XMStoreFloat4x4(reinterpret_cast<XMFLOAT4X4*>(m_LastMVP), cpuMVP);
@@ -140,10 +168,10 @@ void PreviewRenderer::Update(float dt)
 
     m_Ctx->OMSetRenderTargets(1, &m_RTV, m_DSV);
     const float clear_bg[4] = {
-        colors::child_fill.x,
-        colors::child_fill.y,
-        colors::child_fill.z,
-        colors::child_fill.w
+        m_ClearColor[0],
+        m_ClearColor[1],
+        m_ClearColor[2],
+        m_ClearColor[3]
     };
     m_Ctx->ClearRenderTargetView(m_RTV, clear_bg);
     m_Ctx->ClearDepthStencilView(m_DSV, D3D11_CLEAR_DEPTH, 1.0f, 0);
@@ -154,11 +182,29 @@ void PreviewRenderer::Update(float dt)
     m_Ctx->RSSetState(m_RS);
 
     UINT stride = sizeof(ModelVertex), offset = 0;
-    m_Ctx->IASetInputLayout(m_IL);
     m_Ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_Ctx->IASetVertexBuffers(0, 1, &m_VB, &stride, &offset);
+
+    m_Ctx->IASetInputLayout(m_IL);
     m_Ctx->VSSetShader(m_VS, nullptr, 0);
     m_Ctx->VSSetConstantBuffers(0, 1, &m_CB);
+
+    // Upload + bind the skeleton bone matrices (b1).
+    if (m_BoneCB) {
+        D3D11_MAPPED_SUBRESOURCE ms{};
+        if (SUCCEEDED(m_Ctx->Map(m_BoneCB, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
+            float* dst = (float*)ms.pData;
+            const UINT bytes = (UINT)(MaxBones * 64 + 16);
+            memset(dst, 0, bytes);
+            int nb = (int)m_SkinJoints.size();
+            if (nb > MaxBones) nb = MaxBones;
+            for (int i = 0; i < nb; ++i)
+                memcpy(dst + i * 16, &m_BoneMatrices[i * 16], 64);
+            dst[MaxBones * 16] = m_HasSkin ? 1.0f : 0.0f;
+            m_Ctx->Unmap(m_BoneCB, 0);
+        }
+        m_Ctx->VSSetConstantBuffers(1, 1, &m_BoneCB);
+    }
     m_Ctx->PSSetShader(m_PS, nullptr, 0);
     m_Ctx->PSSetConstantBuffers(0, 1, &m_CB);
     if (m_TexSRV) m_Ctx->PSSetShaderResources(0, 1, &m_TexSRV);
@@ -215,4 +261,3 @@ void PreviewRenderer::Update(float dt)
     if (prevDS) prevDS->Release();
     if (prevBS) prevBS->Release();
 }
-

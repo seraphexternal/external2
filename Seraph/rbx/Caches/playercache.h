@@ -67,10 +67,14 @@ inline void CachePlayers()
 			}
 		}
 
-		// Overkill bypass: Chickynoid manages characters separately from Player objects.
-		// If no player has a character after fallback, find all workspace characters directly.
+		// Character bypass: some games manage characters separately from the
+		// Player objects (Chickynoid-style), so every Player.Character() comes back
+		// null even though the rigs are sitting in Workspace. This only ever fires
+		// when NOT A SINGLE player has a character — i.e. exactly when the standard
+		// path has already failed — so it cannot double-add characters in normal
+		// games where Player.Character links work.
 		bool overkillBypass = false;
-		if (Globals::Roblox::isOverkill && playerCharacterAddresses.empty() && !tempList.empty())
+		if (playerCharacterAddresses.empty() && !tempList.empty())
 		{
 			tempList.clear();
 			overkillBypass = true;
@@ -91,61 +95,160 @@ inline void CachePlayers()
 			}
 		}
 
-		// Cache NPCs from Workspace - look for any Model with a Humanoid
+		// Cache NPCs from Workspace - any Model carrying a character rig.
+		//
+		// This used to inspect Workspace's direct children plus exactly ONE level
+		// inside a Folder, and demanded a Humanoid on top of that. Both limits
+		// silently produced zero NPCs in most games:
+		//   - NPCs are overwhelmingly nested deeper than one folder deep
+		//     (Workspace\Enemies\Wave1\Grunt, Workspace\Map\Spawns\Dummy, ...), so
+		//     the scan never even saw them and toggling "Cache NPCs" did nothing.
+		//   - Rigid/custom-controller rigs (and plenty of dummy setups) ship a
+		//     HumanoidRootPart with no Humanoid at all. ESP only needs the root
+		//     part - it already falls back to a default health for those - so
+		//     requiring a Humanoid dropped rigs that would have drawn fine.
+		// Now: bounded recursive walk of the whole Workspace, accept on
+		// HumanoidRootPart, and let the object cache fill in health/limbs.
 		auto workspace = Globals::Roblox::Workspace;
 		if (workspace.address != 0 && Options::Misc::CacheNPCs && !overkillBypass)
 		{
-			auto workspaceChildren = workspace.GetChildren();
-			
-			for (auto& child : workspaceChildren)
+			// Every address we must not treat as an NPC: us and any real player.
+			std::vector<uintptr_t> exclude = playerCharacterAddresses;
+			if (localCharacter.address != 0)
+				exclude.push_back(localCharacter.address);
+
+			// Also exclude anything parented under the Players service - those are
+			// player characters that failed to link, not NPCs, and pulling them in
+			// here would duplicate (and misfile) real players as NPCs.
+			uintptr_t playersServiceAddr = Globals::Roblox::Players.address;
+
+			// Already-added guard, so a Model reached twice (or a rig whose parent
+			// also looks like a rig) is only pushed once.
+			std::vector<uintptr_t> npcAddrs;
+
+			// Depth-first walk. Depth cap and a node budget keep this bounded on
+			// huge maps: the old code was shallow but the whole-Workspace walk has
+			// to be capped or a big place would stall the cache thread.
+			int budget = 60000;
+			const int maxDepth = 15;
+
+			struct WalkNode { RobloxInstance inst; int depth; };
+			std::vector<WalkNode> pending;
+			pending.push_back({ workspace, 0 });
+
+			while (!pending.empty() && budget > 0)
 			{
-				std::string childClass = child.Class();
-				
-				// If it's a Folder, check inside it
-				if (childClass == "Folder")
+				WalkNode node = pending.back();
+				pending.pop_back();
+				if (node.depth >= maxDepth)
+					continue;
+
+				// One child-list read per node, reused for the name check and
+				// for every part lookup below. This walk is allowed to touch
+				// 60000 nodes; reading the same child array once per
+				// FindFirstChild made a single pass millions of syscalls.
+				std::vector<RobloxInstance> kids = node.inst.GetChildren();
+				if (kids.empty())
+					continue;
+				const std::string parentName = node.inst.Name();
+
+				for (auto& child : kids)
 				{
-					auto folderChildren = child.GetChildren();
-					for (auto& folderChild : folderChildren)
+					if (--budget <= 0)
+						break;
+					if (!child.address)
+						continue;
+
+					const std::string cls = child.Class();
+
+					// Only containers can hold a character rig. Skipping parts
+					// here is what keeps this walk bounded on a big map: the
+					// map model holds thousands of Parts, none of which is a
+					// character or can contain one.
+					const bool container = (cls == "Model" || cls == "Folder" ||
+						cls == "Actor" || cls == "Workspace");
+					if (!container)
+						continue;
+
+					// A Model with a root part is a drawable character rig.
+					if (cls == "Model")
 					{
-						std::string folderChildClass = folderChild.Class();
-						
-						if (folderChildClass == "Model")
+						const bool excluded =
+							std::find(exclude.begin(), exclude.end(), child.address) != exclude.end() ||
+							std::find(npcAddrs.begin(), npcAddrs.end(), child.address) != npcAddrs.end();
+
+						if (!excluded)
 						{
-							// Skip if this is the local player's character or any real player's character
-							if (folderChild.address == localCharacter.address ||
-								std::find(playerCharacterAddresses.begin(), playerCharacterAddresses.end(), folderChild.address) != playerCharacterAddresses.end())
-								continue;
-								
-							auto humanoid = folderChild.FindFirstChildWhichIsA("Humanoid");
-							if (humanoid.address != 0)
+							// A root part alone is not enough to call something a
+							// character. Two kinds of non-character passed that test
+							// in a real game (place 140651474416458):
+							//   - weapon viewmodels parked straight in Workspace
+							//     ("UMP"/"Viewmodel": a Humanoid + HumanoidRootPart but
+							//     NO Head, so ESP drew a nameless box in front of us)
+							//   - dead-body containers ("DummyCorpses\*", health 0)
+							// Reject both here so they never inflate the NPC list.
+							// All four lookups share the child list fetched above.
+							const auto grandkids = child.GetChildren();
+							bool hasRoot = false, hasHead = false, hasTorso = false;
+							for (const auto& gc : grandkids)
 							{
-								auto hrp = folderChild.FindFirstChild("HumanoidRootPart");
-								if (hrp.address != 0)
+								const std::string gn = gc.Name();
+								if (gn == "HumanoidRootPart") hasRoot = true;
+								else if (gn == "Head") hasHead = true;
+								else if (gn == "Torso" || gn == "UpperTorso") hasTorso = true;
+								if (hasRoot && hasHead && hasTorso) break;
+							}
+
+							if (hasRoot)
+							{
+								const std::string nm = child.Name();
+								const bool looksNonCharacter = !hasHead && !hasTorso;
+								const bool looksCorpse =
+									parentName.find("Corpse") != std::string::npos ||
+									nm.find("Corpse") != std::string::npos ||
+									parentName == "Viewmodel" ||
+									nm == "Viewmodel";
+
+								if (!looksNonCharacter && !looksCorpse)
 								{
-									tempList.push_back(folderChild);
+									npcAddrs.push_back(child.address);
+									tempList.push_back(child);
+									// Don't descend into a rig we've accepted; its parts
+									// are not characters.
+									continue;
 								}
 							}
 						}
 					}
+
+					// Recurse through containers. Models that were NOT accepted are
+					// still descended into (a rig can be nested inside a non-rig
+					// Model), and Folders/other containers always are.
+					pending.push_back({ child, node.depth + 1 });
 				}
-				
-				// Check if it's a Model directly in workspace
-				if (childClass == "Model")
+			}
+
+			// Keep the Players-service rigs out of the NPC list. Without this, a
+			// game that parks player characters under Players without linking them
+			// (Chickynoid-style) would list every real player twice.
+			if (playersServiceAddr != 0 && !tempList.empty())
+			{
+				std::vector<uintptr_t> playerRigAddrs;
+				for (auto& pl : Globals::Roblox::Players.GetChildren())
 				{
-					// Skip if this is the local player's character or any real player's character
-					if (child.address == localCharacter.address ||
-						std::find(playerCharacterAddresses.begin(), playerCharacterAddresses.end(), child.address) != playerCharacterAddresses.end())
-						continue;
-						
-					auto humanoid = child.FindFirstChildWhichIsA("Humanoid");
-					if (humanoid.address != 0)
-					{
-						auto hrp = child.FindFirstChild("HumanoidRootPart");
-						if (hrp.address != 0)
-						{
-							tempList.push_back(child);
-						}
-					}
+					auto ch = pl.Character();
+					if (ch.address != 0)
+						playerRigAddrs.push_back(ch.address);
+				}
+				if (!playerRigAddrs.empty())
+				{
+					tempList.erase(
+						std::remove_if(tempList.begin(), tempList.end(),
+							[&](const RobloxInstance& inst) {
+								return std::find(playerRigAddrs.begin(), playerRigAddrs.end(),
+									inst.address) != playerRigAddrs.end();
+							}),
+						tempList.end());
 				}
 			}
 		}

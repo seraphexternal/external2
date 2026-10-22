@@ -45,8 +45,8 @@
 #include "features/movement_extra.h"
 #include "features/rewind.h"
 #include "features/thirdperson.h"
+#include "features/aimview.h"
 #include "tray.h"
-#include "overlay/loader.h"
 #include "features/rivals_skinchanger.h"
 #include "features/mm2.h"
 #include "features/bladeball.h"
@@ -230,33 +230,22 @@ int main()
 
     InitializeConfigPaths();
 
-    // The loader UI (stealth/theme/font/config selection) is only shown on the
-    // very first launch. Reattaches afterwards are fully automatic: when Roblox
-    // closes and reopens, the overlay reappears without any user interaction.
-    bool firstLaunch = true;
+    // Bring the Roblox client and the offsets into step before anything reads
+    // memory: update the client if it is behind, start it if it is not running,
+    // then fetch the dump that matches the build the user actually has. Runs
+    // once; a failure at any step leaves the bundled offsets in place.
+    OffsetsFetcher::Bootstrap();
+
+    // The loader UI (stealth/theme/font/config selection) has been removed.
+    // The overlay now attaches automatically: once Roblox is running it
+    // reappears without any user interaction, and reattaches on relaunch.
     int loopIter = 0;
     while (true)
     {
         loopIter++;
         SeraphLog("[S] main: loop iteration " + std::to_string(loopIter));
-        // â”€â”€ Loader UI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        if (firstLaunch && !Options::Loader::AutoAttach)
-        {
-            SeraphLog("[S] main: showing loader (first launch)");
-            bool injected = Loader::Run();
-            SeraphLog(std::string("[S] main: loader returned ") + (injected ? "true" : "false"));
-            if (!injected)
-            {
-                OutputDebugStringA("[S] main: loader returned false, exiting\n");
-                return 0; // user closed the loader without injecting
-            }
-            OutputDebugStringA("[S] main: loader returned true, proceeding to attach\n");
-        }
-        else
-        {
-            SeraphLog("[S] main: skipping loader (auto reattach)");
-        }
-        firstLaunch = false;
+        // Attach automatically once Roblox is up.
+        SeraphLog("[S] main: loader UI removed, attaching automatically");
         OutputDebugStringA("[S] main: checking for Roblox...\n");
         while (!IsGameRunning(L"RobloxPlayerBeta.exe"))
         {
@@ -435,12 +424,13 @@ int main()
         Globals::Roblox::LocalPlayer = RobloxInstance(Memory->read<uintptr_t>(Globals::Roblox::Players.address + Offsets::Player::LocalPlayer));
         OutputDebugStringA("[S] main: got LocalPlayer\n");
 
-        Globals::Roblox::lastPlaceID = Memory->read<int>(Globals::Roblox::DataModel.address + Offsets::DataModel::PlaceId);
+        Globals::Roblox::lastPlaceID = Memory->read<long long>(Globals::Roblox::DataModel.address + Offsets::DataModel::PlaceId);
         Globals::Roblox::isPhantomForces = (Globals::Roblox::lastPlaceID == Globals::Roblox::PHANTOM_FORCES_ID);
-        Globals::Roblox::isRivals = (Globals::Roblox::lastPlaceID == Globals::Roblox::RIVALS_ID);
+        Globals::Roblox::isRivals = Globals::Roblox::IsRivalsPlace(Globals::Roblox::lastPlaceID);
         Globals::Roblox::isOverkill = (Globals::Roblox::lastPlaceID == Globals::Roblox::OVERKILL_ID);
         Globals::Roblox::isMM2 = (Globals::Roblox::lastPlaceID == Globals::Roblox::MM2_ID);
         Globals::Roblox::isBladeBall = (Globals::Roblox::lastPlaceID == Globals::Roblox::BLADEBALL_ID);
+        Globals::Roblox::isBloxStrike = (Globals::Roblox::lastPlaceID == Globals::Roblox::BLOX_STRIKE_ID);
 
         // Resolve a human-readable game name for the detected place.
         if (Globals::Roblox::isPhantomForces) Globals::Roblox::gameName = "Phantom Forces";
@@ -448,6 +438,7 @@ int main()
         else if (Globals::Roblox::isOverkill) Globals::Roblox::gameName = "Overkill";
         else if (Globals::Roblox::isMM2) Globals::Roblox::gameName = "Murder Mystery 2";
         else if (Globals::Roblox::isBladeBall) Globals::Roblox::gameName = "Blade Ball";
+        else if (Globals::Roblox::isBloxStrike) Globals::Roblox::gameName = "Blox Strike";
         else Globals::Roblox::gameName = "Game #" + std::to_string(Globals::Roblox::lastPlaceID);
 
         OutputDebugStringA("[S] main: about to launch threads\n");
@@ -489,17 +480,18 @@ int main()
         std::thread(RampFlingLoop).detach();
         std::thread(VoidHideLoop).detach();
         std::thread(BhopLoop).detach();
-		std::thread(ClickTPLoop).detach();
-		std::thread(HipHeightLoop).detach();
-		std::thread(FreeCamLoop).detach();
-		std::thread(ThirdPersonLoop).detach();
-		std::thread(Rewind::Tick).detach();
-		std::thread(StretchResLoop).detach();
-		std::thread(RageKillLoop).detach();
+        std::thread(ClickTPLoop).detach();
+        std::thread(HipHeightLoop).detach();
+        std::thread(FreeCamLoop).detach();
+        std::thread(ThirdPersonLoop).detach();
+        std::thread(AimViewLoop).detach();
+        std::thread(Rewind::Tick).detach();
+        std::thread(StretchResLoop).detach();
+        std::thread(RageKillLoop).detach();
         std::thread(RivalsSkinChangerLoop).detach();
         std::thread(BladeBall::RunService).detach();
-		Visibility::StartOccluderThread();
-		std::thread(MapParser::WorkerLoop).detach();
+        Visibility::StartOccluderThread();
+        std::thread(MapParser::WorkerLoop).detach();
 
         // Monitor process exit without holding any handle into Roblox.
         // Poll via snapshot so no process handle is ever retained.
@@ -541,7 +533,12 @@ int main()
 
         // Clear all caches and reset global state
         Globals::Caches::CachedPlayers.clear();
-        Globals::Caches::CachedPlayerObjects.clear();
+        {
+            // The detached cache/TP threads can still be winding down; clearing
+            // the live vector without the mutex let them walk freed memory.
+            std::lock_guard<std::mutex> plk(Globals::Caches::CachedPlayerObjectsMutex);
+            Globals::Caches::CachedPlayerObjects.clear();
+        }
         Globals::Caches::CharacterFallbackCache.clear();
         Globals::DynamicOffsets::PlayerTeam = 0;
         Globals::Roblox::isPhantomForces = false;
@@ -563,7 +560,12 @@ int main()
         Globals::Viewport::RobloxHWND = nullptr;
         Globals::Viewport::ViewMatrix = Matrixes::Matrix4{};
         Globals::Caches::CachedPlayers.clear();
-        Globals::Caches::CachedPlayerObjects.clear();
+        {
+            // The detached cache/TP threads can still be winding down; clearing
+            // the live vector without the mutex let them walk freed memory.
+            std::lock_guard<std::mutex> plk(Globals::Caches::CachedPlayerObjectsMutex);
+            Globals::Caches::CachedPlayerObjects.clear();
+        }
         Globals::Caches::CharacterFallbackCache.clear();
         Globals::DynamicOffsets::PlayerTeam = 0;
         Globals::Roblox::isPhantomForces = false;

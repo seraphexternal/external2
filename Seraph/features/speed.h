@@ -68,15 +68,24 @@ void SpeedLoop()
             Vectors::Vector3 moveDir = Memory->read<Vectors::Vector3>(humanoid.address + Offsets::Humanoid::MoveDirection);
             Vectors::Vector3 currentVelocity = Memory->read<Vectors::Vector3>(primitive + Offsets::Primitive::AssemblyLinearVelocity);
 
-            for (int i = 0; i < 10000; i++)
+            const Vectors::Vector3 newVelocity(
+                moveDir.x * Options::WalkSpeed::Speed,
+                currentVelocity.y,
+                moveDir.z * Options::WalkSpeed::Speed
+            );
+
+            // Re-assert velocity once per ms for ~40ms instead of firing 10000
+            // back-to-back driver writes. Roblox recomputes velocity on its
+            // ~16ms physics step, so a write every 1ms already lands after
+            // every one of those steps; the old burst queued up to ~1M
+            // IOCTLs/sec behind the shared IO mutex, starving the ESP/aimbot
+            // threads and handing kernel time back to the game.
+            const auto hammerEnd = std::chrono::steady_clock::now() + std::chrono::milliseconds(40);
+            do
             {
-                Vectors::Vector3 newVelocity(
-                    moveDir.x * Options::WalkSpeed::Speed,
-                    currentVelocity.y,
-                    moveDir.z * Options::WalkSpeed::Speed
-                );
                 Memory->write<Vectors::Vector3>(primitive + Offsets::Primitive::AssemblyLinearVelocity, newVelocity);
-            }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } while (Globals::running && std::chrono::steady_clock::now() < hammerEnd);
         }
         catch (...)
         {

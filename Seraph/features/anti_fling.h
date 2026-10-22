@@ -14,6 +14,7 @@
 
 #include <cmath>
 #include <chrono>
+#include <thread>
 
 namespace AntiFling
 {
@@ -27,9 +28,25 @@ namespace AntiFling
         auto character = Globals::Roblox::LocalPlayer.Character();
         if (!character.address)
             return;
-        auto hrp = character.FindFirstChild("HumanoidRootPart");
-        if (!hrp.address)
+
+        // Character() + FindFirstChild() walks every child reading a name per
+        // child, and this tick runs ~1000x/sec from the misc loop — that was
+        // tens of thousands of driver reads/sec for as long as Anti-Fling was
+        // enabled. The rig only changes on respawn, so re-resolve against the
+        // character address instead of on every call.
+        static uintptr_t s_cachedChar = 0;
+        static uintptr_t s_cachedHrp = 0;
+        static std::chrono::steady_clock::time_point s_rescanAt = std::chrono::steady_clock::now();
+        if (character.address != s_cachedChar ||
+            std::chrono::steady_clock::now() - s_rescanAt > std::chrono::seconds(2))
+        {
+            s_cachedChar = character.address;
+            s_rescanAt = std::chrono::steady_clock::now();
+            s_cachedHrp = character.FindFirstChild("HumanoidRootPart").address;
+        }
+        if (!s_cachedHrp)
             return;
+        const RobloxInstance hrp(s_cachedHrp);
 
         uintptr_t prim = Memory->read<uintptr_t>(hrp.address + Offsets::BasePart::Primitive);
         if (!prim)
@@ -84,6 +101,10 @@ namespace AntiFling
             // Hammer restore with position AND both velocity types zeroed.
             Vectors::Vector3 zeroVec = { 0.f, 0.f, 0.f };
 
+            // Restore writes are spaced 1ms apart over the same 14ms window:
+            // the game can only write these once per physics step, so a batch
+            // per ms already lands after each of them instead of spinning the
+            // shared IO mutex for the full window at full speed.
             auto hammerStart = std::chrono::steady_clock::now();
             while (std::chrono::duration<float, std::milli>(
                 std::chrono::steady_clock::now() - hammerStart).count() < 14.f)
@@ -91,6 +112,7 @@ namespace AntiFling
                 Memory->write<Vectors::Vector3>(prim + Offsets::Primitive::Position, s_savedPos);
                 Memory->write<Vectors::Vector3>(prim + Offsets::Primitive::AssemblyLinearVelocity, zeroVec);
                 Memory->write<Vectors::Vector3>(prim + Offsets::Primitive::AssemblyAngularVelocity, zeroVec);
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
 
             // Invalidate saved pos — re-save once velocity settles.

@@ -12,6 +12,7 @@
 #include "visibility.h"
 #include "silentaim.h"
 #include "playerfilter.h"
+#include "pf_diag.h"
 
 // Weapon profile system: detects local player's held weapon and applies
 // per-weapon aimbot settings. Returns the index of the matched profile or -1.
@@ -52,10 +53,20 @@ inline int ApplyWeaponProfile()
             Options::Aimbot::StickyAim = prof.StickyAim;
             Options::Aimbot::SilentAim = prof.SilentAim;
             Options::Aimbot::SilentAimMode = prof.SilentAimMode;
-            Options::Aimbot::TargetBone = prof.TargetBone;
+            // The profile "Target Bone" combo is { Head, Torso, Upper Torso,
+            // Lower Torso } but Aimbot::TargetBone is the 8-entry aimbot list
+            // { Head, Torso, Left Arm, Right Arm, Left Leg, Right Leg,
+            //   Lower Torso, Upper Torso }. Passing the raw 4-entry index
+            // through resolved "Upper Torso" to the Left Arm and "Lower Torso"
+            // to the Right Arm.
+            static const int kProfileBoneToAimbot[4] = { 0, 1, 7, 6 };
+            Options::Aimbot::TargetBone = kProfileBoneToAimbot[prof.TargetBone & 3];
             Options::Aimbot::IgnoreJump = prof.IgnoreJump;
             Options::Aimbot::JumpThreshold = prof.JumpThreshold;
             Options::Aimbot::HitboxMode = prof.ClosestPart;
+            // Silent aim keeps its own hit mode so the main aimbot's
+            // ClosestPart selection cannot discard the profile's bone.
+            Options::Aimbot::SilentAimHitMode = prof.SilentAimHitMode;
 
             return i;
         }
@@ -329,6 +340,14 @@ inline Vectors::Vector3 GetTargetPosition(const RobloxPlayer& player)
         case 0: // Head
             targetPart = player.Head;
             basePos = player.Head.Position();
+            // Some rigs have no part literally named "Head". Aiming at a missing
+            // part silently resolves to world origin (0,0,0), so the aim tracks
+            // nothing. Fall back to the root part instead.
+            if (!targetPart.address)
+            {
+                targetPart = player.HumanoidRootPart;
+                basePos = player.HumanoidRootPart.Position();
+            }
             break;
         case 1: // Torso/HumanoidRootPart
             targetPart = player.HumanoidRootPart;
@@ -458,7 +477,12 @@ inline RobloxPlayer GetClosestPlayer()
     std::vector<CandidateEntry> candidates;
     candidates.reserve(32);
 
-    for (auto& player : Globals::Caches::CachedPlayerObjects)
+    // Snapshot under the cache mutex: CachePlayerObjects() replaces this vector
+    // (CachedPlayerObjects = std::move(tempList)) on its own thread, so
+    // iterating the live vector races with that free.
+    const std::vector<RobloxPlayer>& aimSnapshot1 = Globals::Caches::FramePlayers();
+
+    for (const auto& player : aimSnapshot1)
     {
         auto HRP = player.HumanoidRootPart;
         if (!HRP.address)
@@ -714,6 +738,38 @@ inline void CameraRotation(const RobloxPlayer& target)
     Vectors::Vector3 camPos = Memory->read<Vectors::Vector3>(Globals::Roblox::Camera.address + Offsets::Camera::Position);
 
     Vectors::Vector3 targetPos = GetTargetPosition(target);
+
+    // ── Temporary aim trace ──────────────────────────────────────────────
+    // "Aims above the player sometimes" has no observable cause from the
+    // outside: the aim point, the camera origin, and the bone actually used
+    // all vary per frame. Log them together (once per ~1s while aiming) so the
+    // vertical error can be attributed to a specific input rather than guessed.
+    {
+        static DWORD s_aimTraceLast = 0;
+        const DWORD nowMs = ::GetTickCount();
+        if (nowMs - s_aimTraceLast >= 1000)
+        {
+            s_aimTraceLast = nowMs;
+            const float vy = target.Velocity.y;
+            const bool isInAir = (vy > 1.0f || vy < -1.0f);
+            const int bone = isInAir ? Options::Aimbot::AirTargetBone : Options::Aimbot::TargetBone;
+            const float dY = targetPos.y - camPos.y;
+            char tb[512];
+            snprintf(tb, sizeof(tb),
+                "[PFDIAG] AIMTRACE name=%s bone=%d inAir=%d velY=%.2f | camPos=(%.1f,%.1f,%.1f) targetPos=(%.1f,%.1f,%.1f) dY=%.2f | headY=%.1f hrpY=%.1f rig=%d pred=%d clampPart=%d tgtBoneOpt=%d airBoneOpt=%d",
+                target.Name.c_str(), bone, (int)isInAir, vy,
+                camPos.x, camPos.y, camPos.z,
+                targetPos.x, targetPos.y, targetPos.z, dY,
+                target.Head.address ? target.Head.Position().y : -9999.f,
+                target.HumanoidRootPart.address ? target.HumanoidRootPart.Position().y : -9999.f,
+                target.RigType,
+                (int)Options::Aimbot::Prediction,
+                (int)Options::Aimbot::ClosestPart,
+                Options::Aimbot::TargetBone,
+                Options::Aimbot::AirTargetBone);
+            PFDiag::Write(tb);
+        }
+    }
     
     // Add shake if enabled
     if (Options::Aimbot::Shake && Options::Aimbot::ShakeIntensity > 0.0f)
@@ -885,7 +941,9 @@ inline void SilentLockAim()
     {
         if (wasActive && hasSaved)
         {
-            if (Globals::Roblox::Camera.address)
+            // Restoring the saved rotation here would clobber a staged silent
+            // aim for the same frame, so hand off to the delivery path instead.
+            if (Globals::Roblox::Camera.address && !SilentAim::s_DeliveryReady)
             {
                 Memory->write<Matrixes::Matrix3x3>(Globals::Roblox::Camera.address + Offsets::Camera::Rotation, savedRotation);
                 Memory->write<Vector2int16>(Globals::Roblox::Camera.address + Offsets::Camera::Viewport, savedViewport);
@@ -996,7 +1054,9 @@ inline void FlickbotTick()
     POINT cursor;
     GetCursorPos(&cursor);
 
-    for (const auto& player : Globals::Caches::CachedPlayerObjects)
+    const std::vector<RobloxPlayer>& aimSnapshot2 = Globals::Caches::FramePlayers();
+
+    for (const auto& player : aimSnapshot2)
     {
         if (player.address == 0 || player.address == Globals::Roblox::LocalPlayer.address)
             continue;
@@ -1355,19 +1415,11 @@ inline void DrawFOVShape(ImDrawList* dl, const ImVec2& center, float r, ImU32 co
     }
 }
 
-inline void RunAimCore(ImDrawList* drawList)
+inline void RunAimCoreInternal(ImDrawList* drawList)
 {
-    // Apply per-weapon aimbot profile (if the local player is holding a
-    // weapon that matches one). This mutates the live Aimbot settings so
-    // both the camera aimbot and the raycast silent aim use the profile.
-    ApplyWeaponProfile();
-
     // Check if aimbot is enabled first
     if (!Options::Aimbot::Aimbot)
         return;
-
-    // Run raycast silent aim
-    SilentAim::RunSilentAim();
 
     auto localTeam = Globals::Roblox::LocalPlayer.Team();
     auto localCharacter = Globals::Roblox::LocalPlayer.Character();
@@ -1380,7 +1432,8 @@ inline void RunAimCore(ImDrawList* drawList)
     // Flickbot: one-shot snap to the nearest target on key press.
     FlickbotTick();
 
-    if (Globals::Caches::CachedPlayerObjects.empty())
+    const std::vector<RobloxPlayer>& aimSnapshot3 = Globals::Caches::FramePlayers();
+    if (aimSnapshot3.empty())
         return;
 
     POINT p;
@@ -1511,6 +1564,39 @@ inline void RunAimCore(ImDrawList* drawList)
 
         DrawFOVShape(drawList, fovCenter, r, FOVColor, Options::Aimbot::FOVShape, thickness,
             Options::Aimbot::ShowFOVFill, FOVFillColor, fovColorAt, spinRot);
+
+        // FOV Fill Gradient (for circle shape only)
+        if (Options::Aimbot::ShowFOVFill && Options::Aimbot::FOVFillGradient && Options::Aimbot::FOVShape == 0)
+        {
+            const int gradientLayers = 12;
+            ImU32 topCol = IM_COL32(
+                static_cast<int>(Options::Aimbot::FOVFillTopColor[0] * 255),
+                static_cast<int>(Options::Aimbot::FOVFillTopColor[1] * 255),
+                static_cast<int>(Options::Aimbot::FOVFillTopColor[2] * 255),
+                static_cast<int>(Options::Aimbot::FOVFillTopColor[3] * 255));
+            ImU32 bottomCol = IM_COL32(
+                static_cast<int>(Options::Aimbot::FOVFillBottomColor[0] * 255),
+                static_cast<int>(Options::Aimbot::FOVFillBottomColor[1] * 255),
+                static_cast<int>(Options::Aimbot::FOVFillBottomColor[2] * 255),
+                static_cast<int>(Options::Aimbot::FOVFillBottomColor[3] * 255));
+            
+            float time = static_cast<float>(ImGui::GetTime());
+            float rotate = Options::Aimbot::FOVFillGradientRotate ? time * 0.5f : 0.0f;
+            
+            for (int i = 0; i < gradientLayers; ++i)
+            {
+                float t = static_cast<float>(i) / static_cast<float>(gradientLayers - 1);
+                // Interpolate color
+                ImU32 layerCol = IM_COL32(
+                    static_cast<int>(((topCol >> 16) & 0xFF) + ((((bottomCol >> 16) & 0xFF) - ((topCol >> 16) & 0xFF)) * t)),
+                    static_cast<int>(((topCol >> 8) & 0xFF) + ((((bottomCol >> 8) & 0xFF) - ((topCol >> 8) & 0xFF)) * t)),
+                    static_cast<int>((topCol & 0xFF) + (((bottomCol & 0xFF) - (topCol & 0xFF)) * t)),
+                    static_cast<int>(((topCol >> 24) & 0xFF) + ((((bottomCol >> 24) & 0xFF) - ((topCol >> 24) & 0xFF)) * t))
+                );
+                float layerR = r * (1.0f - t * 0.95f); // Leave small center unfilled
+                drawList->AddCircle(fovCenter, layerR, layerCol, 96, 1.0f);
+            }
+        }
 
         if (Options::Aimbot::ShowFOVText)
         {
@@ -1666,7 +1752,26 @@ inline void RunAimCore(ImDrawList* drawList)
             if (Globals::Roblox::isPhantomForces)
             {
                 ResetViewport(Dimensions);
-                PFSilentAim(target);
+
+                // Phantom Forces honours the selected aim type like every other
+                // game: Silent uses the camera-spoofing PFSilentAim, Mouse moves
+                // the real cursor, and Camera rotates the view. Previously this
+                // branch always ran PFSilentAim, which silently aimed the camera
+                // and left the mouse aimbot doing nothing in PF.
+                if (ShouldUseSilentAim())
+                {
+                    PFSilentAim(target);
+                }
+                else if (Options::Aimbot::AimingType == 1)
+                {
+                    // PF locks/hides the cursor, so SetCursorPos is ignored.
+                    // Use relative SendInput deltas so the shot tracks the aim.
+                    MouseSendInput(targetPos, p, sensitivity);
+                }
+                else
+                {
+                    CameraRotation(target);
+                }
             }
             else if (Globals::Roblox::isOverkill)
             {
@@ -1832,6 +1937,31 @@ inline void RunAimCore(ImDrawList* drawList)
             }
         }
     }
+}
+
+// Frame entry point.
+//
+// Split from RunAimCoreInternal so the silent aim write lands LAST. Inside the
+// aimbot body, ResetViewport() (most branches) and CameraRotation() both write
+// the same camera fields silent aim needs, so whichever ran last used to win -
+// which is why hits were intermittent and the hit location flipped between the
+// head and the body depending on the branch taken that frame.
+inline void RunAimCore(ImDrawList* drawList)
+{
+    // Apply per-weapon aimbot profile (if the local player is holding a
+    // weapon that matches one). This mutates the live Aimbot settings so
+    // both the camera aimbot and the raycast silent aim use the profile.
+    ApplyWeaponProfile();
+
+    // Raycast silent aim. Runs independently of the main aimbot toggle, so the
+    // panel's own Enabled switch is not gated behind Aimbot::Aimbot.
+    SilentAim::RunSilentAim();
+
+    if (Options::Aimbot::Aimbot)
+        RunAimCoreInternal(drawList);
+
+    // Delivered after the aimbot path so nothing above can overwrite it.
+    SilentAim::CommitDelivery();
 }
 
 

@@ -54,6 +54,141 @@ namespace {
         return SUCCEEDED(device->CreateSamplerState(&smd, ppSamp));
     }
 
+    // ── Small row-major 4x4 helpers (D3D convention: p' = p * M) ─────────────
+    void MatIdentity(float* m) {
+        memset(m, 0, 64);
+        m[0] = m[5] = m[10] = m[15] = 1.0f;
+    }
+    void MatMul(const float* a, const float* b, float* out) {
+        float r[16];
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j) {
+                float s = 0.0f;
+                for (int k = 0; k < 4; ++k) s += a[i * 4 + k] * b[k * 4 + j];
+                r[i * 4 + j] = s;
+            }
+        memcpy(out, r, 64);
+    }
+    // Rotation about an arbitrary axis (Rodrigues) as a row-major 4x4.
+    void MatFromAxisAngle(const float axis[3], float angle, float* out) {
+        float x = axis[0], y = axis[1], z = axis[2];
+        float len = sqrtf(x * x + y * y + z * z);
+        if (len < 1e-8f) { MatIdentity(out); return; }
+        x /= len; y /= len; z /= len;
+        const float c = cosf(angle), s = sinf(angle), t = 1.0f - c;
+        out[0] = c + x * x * t;     out[1] = x * y * t + z * s; out[2] = x * z * t - y * s; out[3] = 0;
+        out[4] = y * x * t - z * s; out[5] = c + y * y * t;     out[6] = y * z * t + x * s; out[7] = 0;
+        out[8] = z * x * t + y * s; out[9] = z * y * t - x * s; out[10] = c + z * z * t;     out[11] = 0;
+        out[12] = 0; out[13] = 0; out[14] = 0; out[15] = 1;
+    }
+    // A = T(-p) * R * T(p): rotation about pivot p, in model space.
+    void MatPivotRot(const float pivot[3], const float axis[3], float angle, float* out) {
+        float R[16]; MatFromAxisAngle(axis, angle, R);
+        // Pivot rotate = R with translation (p - p*R)
+        float rot[16]; memcpy(rot, R, 64);
+        for (int j = 0; j < 3; ++j)
+            rot[12 + j] = pivot[j] - (pivot[0] * R[0 * 4 + j] + pivot[1] * R[1 * 4 + j] + pivot[2] * R[2 * 4 + j]);
+        memcpy(out, rot, 64);
+    }
+
+    // Quaternion helpers (rotation matrices in row-vector convention, matching
+    // MatFromAxisAngle above).
+    void QuatFromAxisAngle(const float axis[3], float angle, float q[4]) {
+        float x = axis[0], y = axis[1], z = axis[2];
+        float len = sqrtf(x * x + y * y + z * z);
+        if (len < 1e-8f) { q[0] = q[1] = q[2] = 0.0f; q[3] = 1.0f; return; }
+        x /= len; y /= len; z /= len;
+        const float h = angle * 0.5f, s = sinf(h);
+        q[0] = x * s; q[1] = y * s; q[2] = z * s; q[3] = cosf(h);
+    }
+    // q = a * b (same order as rotation-matrix multiplication).
+    void QuatMul(const float a[4], const float b[4], float out[4]) {
+        float r[4];
+        r[0] = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1];
+        r[1] = a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0];
+        r[2] = a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3];
+        r[3] = a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2];
+        memcpy(out, r, 16);
+    }
+    void MatFromQuat(const float q[4], float* out) {
+        const float x = q[0], y = q[1], z = q[2], w = q[3];
+        out[0] = 1 - 2 * (y * y + z * z); out[1] = 2 * (x * y + w * z); out[2] = 2 * (x * z - w * y); out[3] = 0;
+        out[4] = 2 * (x * y - w * z);     out[5] = 1 - 2 * (x * x + z * z); out[6] = 2 * (y * z + w * x); out[7] = 0;
+        out[8] = 2 * (x * z + w * y);     out[9] = 2 * (y * z - w * x);     out[10] = 1 - 2 * (x * x + y * y); out[11] = 0;
+        out[12] = 0; out[13] = 0; out[14] = 0; out[15] = 1;
+    }
+    void MatPivotQuat(const float pivot[3], const float q[4], float* out) {
+        float R[16]; MatFromQuat(q, R);
+        for (int j = 0; j < 3; ++j)
+            R[12 + j] = pivot[j] - (pivot[0] * R[0 * 4 + j] + pivot[1] * R[1 * 4 + j] + pivot[2] * R[2 * 4 + j]);
+        memcpy(out, R, 64);
+    }
+    // Pure-rotation transpose as a row-major 4x4 (translation cleared).
+    void MatRotTranspose(const float* m, float* out) {
+        out[0] = m[0]; out[1] = m[4]; out[2] = m[8];  out[3] = 0;
+        out[4] = m[1]; out[5] = m[5]; out[6] = m[9];  out[7] = 0;
+        out[8] = m[2]; out[9] = m[6]; out[10] = m[10]; out[11] = 0;
+        out[12] = 0; out[13] = 0; out[14] = 0; out[15] = 1;
+    }
+    // Same as MatPivotQuat but from an already-built rotation matrix.
+    void MatPivotFromRot(const float pivot[3], const float R[16], float* out) {
+        memcpy(out, R, 64);
+        for (int j = 0; j < 3; ++j)
+            out[12 + j] = pivot[j] - (pivot[0] * R[0 * 4 + j] + pivot[1] * R[1 * 4 + j] + pivot[2] * R[2 * 4 + j]);
+    }
+    // Quaternion for a row-vector rotation matrix (inverse of MatFromQuat).
+    void QuatFromMatRow(const float R[3][3], float q[4]) {
+        // MatFromQuat(q) stores R_c^T; recover the column-vector matrix first.
+        float c[3][3];
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j) c[i][j] = R[j][i];
+        const float tr = c[0][0] + c[1][1] + c[2][2];
+        float x, y, z, w;
+        if (tr > 0.0f) {
+            float s = sqrtf(tr + 1.0f) * 2.0f;
+            w = 0.25f * s; x = (c[2][1] - c[1][2]) / s; y = (c[0][2] - c[2][0]) / s; z = (c[1][0] - c[0][1]) / s;
+        } else if (c[0][0] > c[1][1] && c[0][0] > c[2][2]) {
+            float s = sqrtf(1.0f + c[0][0] - c[1][1] - c[2][2]) * 2.0f;
+            w = (c[2][1] - c[1][2]) / s; x = 0.25f * s; y = (c[0][1] + c[1][0]) / s; z = (c[0][2] + c[2][0]) / s;
+        } else if (c[1][1] > c[2][2]) {
+            float s = sqrtf(1.0f + c[1][1] - c[0][0] - c[2][2]) * 2.0f;
+            w = (c[0][2] - c[2][0]) / s; x = (c[0][1] + c[1][0]) / s; y = 0.25f * s; z = (c[1][2] + c[2][1]) / s;
+        } else {
+            float s = sqrtf(1.0f + c[2][2] - c[0][0] - c[1][1]) * 2.0f;
+            w = (c[1][0] - c[0][1]) / s; x = (c[0][2] + c[2][0]) / s; y = (c[1][2] + c[2][1]) / s; z = 0.25f * s;
+        }
+        q[0] = x; q[1] = y; q[2] = z; q[3] = w;
+    }
+    // General 4x4 inverse (Gauss-Jordan, double precision). Returns false if
+    // the matrix is singular (then `out` is left untouched).
+    bool MatInverse(const float* m, float* out) {
+        double a[4][8];
+        for (int r = 0; r < 4; ++r)
+            for (int c = 0; c < 4; ++c) {
+                a[r][c] = m[r * 4 + c];
+                a[r][4 + c] = (r == c) ? 1.0 : 0.0;
+            }
+        for (int i = 0; i < 4; ++i) {
+            int piv = i;
+            for (int r = i + 1; r < 4; ++r)
+                if (fabs(a[r][i]) > fabs(a[piv][i])) piv = r;
+            if (fabs(a[piv][i]) < 1e-12) return false;
+            if (piv != i)
+                for (int c = 0; c < 8; ++c) { const double t = a[i][c]; a[i][c] = a[piv][c]; a[piv][c] = t; }
+            const double d = a[i][i];
+            for (int c = 0; c < 8; ++c) a[i][c] /= d;
+            for (int r = 0; r < 4; ++r) {
+                if (r == i) continue;
+                const double f = a[r][i];
+                if (f == 0.0) continue;
+                for (int c = 0; c < 8; ++c) a[r][c] -= f * a[i][c];
+            }
+        }
+        for (int r = 0; r < 4; ++r)
+            for (int c = 0; c < 4; ++c)
+                out[r * 4 + c] = (float)a[r][4 + c];
+        return true;
+    }
 }
 
 void PreviewRenderer::BuildR6SkeletonFromParts()
@@ -429,12 +564,6 @@ bool PreviewRenderer::ApplyLoadedModel(LoadedModel& model)
     if (!model.wing_vertices.empty())
         combined.insert(combined.end(), model.wing_vertices.begin(), model.wing_vertices.end());
 
-    unsigned int total = 0;
-    if (!UploadVerts(m_Device, combined, &m_VB, total)) return false;
-    if (m_BodyVertCount == 0 && m_WingVertCount > 0) {
-        m_BodyVertCount = 0; // только крылья, ок
-    }
-
     m_ModelScale = model.scale;
     for (int i = 0; i < 3; ++i) {
         m_ModelCenter[i] = model.center[i];
@@ -466,6 +595,39 @@ bool PreviewRenderer::ApplyLoadedModel(LoadedModel& model)
     m_BodyParts = std::move(model.body_parts);
     m_BoxParts = std::move(model.box_parts);
 
+    // Skeleton / skin data (filled only for rigged glTF models).
+    m_Nodes = std::move(model.nodes);
+    m_SkinJoints = std::move(model.skinJoints);
+    m_InvBind = std::move(model.invBind);
+    m_HasSkin = model.hasSkin && !m_SkinJoints.empty();
+    m_JointQuat.assign(m_Nodes.size() * 4, 0.0f);
+    for (size_t i = 0; i < m_Nodes.size(); ++i) m_JointQuat[i * 4 + 3] = 1.0f;
+    m_AbsQuat.assign(m_Nodes.size() * 4, 0.0f);
+    m_AbsSet.assign(m_Nodes.size(), 0);
+    m_BoneMatrices.assign(m_SkinJoints.size() * 16, 0.0f);
+    m_PoseDirty = true;
+    ComputeBindWorlds();
+    // Derive inverse binds from the (correctly parsed) node hierarchy.
+    FinalizeSkin();
+
+    BuildR6SkeletonFromParts();
+
+    // Unskinned models (Mario, TungTung, OBJ fallback): synthesize a humanoid
+    // rig + per-vertex weights so the emotes drive them too.
+    if (!m_HasSkin)
+        SynthesizeSkin(combined);
+
+    // Derive the semantic axes the emote poses are expressed against (X=side,
+    // Y=up, Z=depth) from the bind pivots, so emotes behave the same on a Y-up
+    // humanoid and a Z-up plush.
+    UpdateEmoteAxes();
+
+    unsigned int total = 0;
+    if (!UploadVerts(m_Device, combined, &m_VB, total)) return false;
+    if (m_BodyVertCount == 0 && m_WingVertCount > 0) {
+        m_BodyVertCount = 0; // только крылья, ок
+    }
+
     // Rebuild per-submesh SRVs (multi-material GLB). Any previous submesh SRVs
     // are released; if the model has no submeshes the single m_TexSRV path is
     // used instead (OBJ / humanoid / low-poly single-texture case).
@@ -483,7 +645,6 @@ bool PreviewRenderer::ApplyLoadedModel(LoadedModel& model)
         m_SubMeshCount = n;
     }
 
-    BuildR6SkeletonFromParts();
     BuildAimPartBoxes();
 
     m_SceneDirty = true;
@@ -675,5 +836,459 @@ bool PreviewRenderer::SaveRT(const char* path)
     m_Ctx->Unmap(stage, 0);
     stage->Release();
     return true;
+}
+
+// ── Skeletal pose implementation ────────────────────────────────────────────
+
+void PreviewRenderer::ComputeBindWorlds()
+{
+    const int n = (int)m_Nodes.size();
+    m_NodeWorld.assign(n * 16, 0.0f);
+    m_NodeOrder.clear();
+    if (n == 0) return;
+
+    std::vector<int> depth(n, 0);
+    for (int i = 0; i < n; ++i) {
+        int d = 0, p = m_Nodes[i].parent;
+        while (p >= 0 && p < n) { d++; p = m_Nodes[p].parent; if (d > n) break; }
+        depth[i] = d;
+    }
+    m_NodeOrder.resize(n);
+    for (int i = 0; i < n; ++i) m_NodeOrder[i] = i;
+    std::sort(m_NodeOrder.begin(), m_NodeOrder.end(),
+              [&](int a, int b) { return depth[a] < depth[b]; });
+
+    for (int idx : m_NodeOrder) {
+        float* w = &m_NodeWorld[idx * 16];
+        int p = m_Nodes[idx].parent;
+        if (p >= 0 && p < n)
+            MatMul(m_Nodes[idx].local, &m_NodeWorld[p * 16], w);
+        else
+            memcpy(w, m_Nodes[idx].local, 64);
+    }
+}
+
+// Finalizes skin data after ComputeBindWorlds(): recomputes inverse bind
+// matrices from the node hierarchy. glTF guarantees inverseBindMatrices ==
+// inverse(joint rest world), so deriving them from the (now correctly parsed)
+// hierarchy keeps the bind pose undistorted and the pivots exactly on the
+// geometry, and works even when a file ships no inverseBindMatrices.
+void PreviewRenderer::FinalizeSkin()
+{
+    if (!m_HasSkin || m_SkinJoints.empty()) return;
+    const int n = (int)m_Nodes.size();
+    if (n == 0) return;
+
+    m_InvBind.assign(m_SkinJoints.size() * 16, 0.0f);
+    for (int s = 0; s < (int)m_SkinJoints.size(); ++s) {
+        float* dst = &m_InvBind[s * 16];
+        const int ni = m_SkinJoints[s];
+        if (ni >= 0 && ni < n && MatInverse(&m_NodeWorld[ni * 16], dst))
+            continue;
+        MatIdentity(dst); // degenerate joint: leave its verts untouched
+    }
+}
+
+// Procedural humanoid rig for models WITHOUT a glTF skin (Mario, TungTung,
+// OBJ fallbacks). Classifies every vertex into head / torso / arms / legs
+// using the same signed up axis and side conventions as the aim skeleton, and
+// synthesizes joints named exactly like the emote system's targets, so the
+// emotes drive unskinned models too. Weights blend toward the torso near the
+// region borders so joints don't tear holes when they rotate.
+void PreviewRenderer::SynthesizeSkin(std::vector<ModelVertex>& verts)
+{
+    if (verts.empty()) return;
+
+    float ext[3];
+    for (int k = 0; k < 3; ++k) ext[k] = m_BodyMax[k] - m_BodyMin[k];
+
+    // Signed up axis: negative m_SkelUpAxis = head at the MINIMUM end.
+    int up;
+    bool flip = false;
+    if (m_SkelUpAxis == -1) {
+        up = 0;
+        for (int k = 1; k < 3; ++k) if (ext[k] > ext[up]) up = k;
+    } else {
+        up = m_SkelUpAxis >= 0 ? m_SkelUpAxis : -m_SkelUpAxis;
+        flip = m_SkelUpAxis < 0;
+        if (up < 0 || up > 2) { up = 0; flip = false; }
+    }
+    const int a = (up + 1) % 3;
+    const int b = (up + 2) % 3;
+    int side = (ext[a] >= ext[b]) ? a : b;
+    int dep  = 3 - up - side;
+    // TungTung's true left-right axis is the NARROWEST horizontal one (the
+    // generic widest pick lands along its facing) - mirror the skeleton.
+    if (up == 2 && m_SkelUpAxis == -2) { std::swap(side, dep); }
+
+    const float H  = (std::max)(0.01f, ext[up]);
+    const float Ws = (std::max)(0.01f, ext[side]);
+    const float upBase = flip ? m_BodyMax[up] : m_BodyMin[up];
+    const float upStep = flip ? -H : H;   // + goes toward the head
+    const float halfW  = Ws * 0.5f;
+    auto centerAxis = [&](int k) { return (m_BodyMin[k] + m_BodyMax[k]) * 0.5f; };
+    const float sideC  = centerAxis(side);
+    const float depthC = centerAxis(dep);
+
+    // Joint pivot at height u (0=feet,1=head), lateral offset in half-widths.
+    auto P = [&](float u, float lat) -> std::array<float, 3> {
+        std::array<float, 3> p{};
+        p[up]  = upBase + upStep * u;
+        p[side] = sideC + halfW * lat;
+        p[dep]  = depthC;
+        return p;
+    };
+    const auto torsoP = P(0.55f, 0.0f);
+    const auto headP  = P(0.86f, 0.0f);
+    const auto lArmP  = P(0.64f, -0.50f);
+    const auto rArmP  = P(0.64f,  0.50f);
+    const auto lLegP  = P(0.46f, -0.16f);
+    const auto rLegP  = P(0.46f,  0.16f);
+
+    m_Nodes.clear();
+    m_SkinJoints.clear();
+    auto addJoint = [&](const char* name, int parent,
+                        const std::array<float, 3>& pivot,
+                        const std::array<float, 3>& parentPivot) {
+        ModelNode mn;
+        mn.name = name;
+        mn.parent = parent;
+        for (int k = 0; k < 3; ++k) mn.local[12 + k] = pivot[k] - parentPivot[k];
+        mn.jointSlot = (int)m_SkinJoints.size();
+        m_Nodes.push_back(mn);
+        m_SkinJoints.push_back((int)m_Nodes.size() - 1);
+    };
+    const std::array<float, 3> origin{};
+    addJoint("Torso",     -1, torsoP, origin);
+    addJoint("Head",       0, headP,  torsoP);
+    addJoint("Left Arm",   0, lArmP,  torsoP);
+    addJoint("Right Arm",  0, rArmP,  torsoP);
+    addJoint("Left Leg",   0, lLegP,  torsoP);
+    addJoint("Right Leg",  0, rLegP,  torsoP);
+
+    // ── per-vertex classification (mirrors the skeleton proportions) ──
+    const int kTorso = 0, kHead = 1, kLArm = 2, kRArm = 3, kLLeg = 4, kRLeg = 5;
+    const float kHeadEdge = 0.86f, kHeadBlend = 0.05f; // head above 0.86
+    const float kLegEdge  = 0.46f, kLegBlend  = 0.06f; // legs below 0.46
+    const float kArmEdge  = 0.50f, kArmBlend  = 0.10f; // arms outside 0.50 halfW
+    const float kArmTop   = 0.72f;                     // and not above 0.72
+    for (auto& v : verts) {
+        const float p[3] = { v.x, v.y, v.z };
+        const float u = (p[up] - upBase) / upStep;  // 0=feet end, 1=head end
+        const float latN = (p[side] - sideC) / halfW;
+
+        int   primary = kTorso;
+        float w = 1.0f;
+        if (u > kHeadEdge) {
+            primary = kHead;
+            w = (u - kHeadEdge) / kHeadBlend;
+        } else if (u < kLegEdge) {
+            primary = (latN < 0.0f) ? kLLeg : kRLeg;
+            w = (kLegEdge - u) / kLegBlend;
+        } else if (u < kArmTop && (latN < 0.0f ? -latN : latN) > kArmEdge) {
+            primary = (latN < 0.0f) ? kLArm : kRArm;
+            w = ((latN < 0.0f ? -latN : latN) - kArmEdge) / kArmBlend;
+        }
+        if (w < 0.0f) w = 0.0f;
+        if (w > 1.0f) w = 1.0f;
+
+        v.boneIndices[0] = (unsigned char)primary;
+        v.boneWeights[0] = w;
+        v.boneIndices[1] = (unsigned char)kTorso;
+        v.boneWeights[1] = (primary == kTorso) ? 0.0f : (1.0f - w);
+        v.boneIndices[2] = v.boneIndices[3] = 0;
+        v.boneWeights[2] = v.boneWeights[3] = 0.0f;
+    }
+
+    m_HasSkin = true;
+    m_JointQuat.assign(m_Nodes.size() * 4, 0.0f);
+    for (size_t i = 0; i < m_Nodes.size(); ++i) m_JointQuat[i * 4 + 3] = 1.0f;
+    m_AbsQuat.assign(m_Nodes.size() * 4, 0.0f);
+    m_AbsSet.assign(m_Nodes.size(), 0);
+    m_BoneMatrices.assign(m_SkinJoints.size() * 16, 0.0f);
+    m_PoseDirty = true;
+    ComputeBindWorlds();
+    FinalizeSkin();    // vertices are already in model space: no frame shift
+}
+
+int PreviewRenderer::FindJointSlot(const char* jointName) const
+{
+    if (!jointName || !*jointName) return -1;
+    const size_t want = strlen(jointName);
+    for (int s = 0; s < (int)m_SkinJoints.size(); ++s) {
+        int ni = m_SkinJoints[s];
+        if (ni < 0 || ni >= (int)m_Nodes.size()) continue;
+        const std::string& nm = m_Nodes[ni].name;
+        if (nm.size() < want) continue;
+        bool match = true;
+        for (size_t i = 0; i < want; ++i) {
+            char a = (char)tolower((unsigned char)nm[i]);
+            char b = (char)tolower((unsigned char)jointName[i]);
+            if (a != b) { match = false; break; }
+        }
+        if (match) return s;
+    }
+    return -1;
+}
+
+const char* PreviewRenderer::JointName(int slot) const
+{
+    if (slot < 0 || slot >= (int)m_SkinJoints.size()) return "";
+    int ni = m_SkinJoints[slot];
+    if (ni < 0 || ni >= (int)m_Nodes.size()) return "";
+    return m_Nodes[ni].name.c_str();
+}
+
+void PreviewRenderer::ClearPose()
+{
+    for (size_t i = 0; i < m_Nodes.size(); ++i) {
+        m_JointQuat[i * 4 + 0] = 0.0f;
+        m_JointQuat[i * 4 + 1] = 0.0f;
+        m_JointQuat[i * 4 + 2] = 0.0f;
+        m_JointQuat[i * 4 + 3] = 1.0f;
+    }
+    ClearWorldDeltas();
+    m_PoseDirty = true;
+}
+
+bool PreviewRenderer::SetJointRotationAxis(const char* jointName, float ax, float ay, float az, float angleRad)
+{
+    const int slot = FindJointSlot(jointName);
+    if (slot < 0) return false;
+    const int ni = m_SkinJoints[slot];
+    if (ni < 0 || ni >= (int)m_Nodes.size()) return false;
+    float axis[3];
+    MapEmoteAxis(ax, ay, az, axis);
+    QuatFromAxisAngle(axis, angleRad, &m_JointQuat[ni * 4]);
+    m_PoseDirty = true;
+    return true;
+}
+
+bool PreviewRenderer::AddJointRotationAxis(const char* jointName, float ax, float ay, float az, float angleRad)
+{
+    const int slot = FindJointSlot(jointName);
+    if (slot < 0) return false;
+    const int ni = m_SkinJoints[slot];
+    if (ni < 0 || ni >= (int)m_Nodes.size()) return false;
+    float axis[3];
+    MapEmoteAxis(ax, ay, az, axis);
+    float nq[4];
+    QuatFromAxisAngle(axis, angleRad, nq);
+    float rq[4];
+    // Compose so the new rotation is applied after the existing one.
+    QuatMul(&m_JointQuat[ni * 4], nq, rq);
+    memcpy(&m_JointQuat[ni * 4], rq, 16);
+    m_PoseDirty = true;
+    return true;
+}
+
+// Absolute joint orientation for the player mirror. `q` is the joint's new
+// orientation expressed in the same semantic frame the emotes use (X = side,
+// Y = up, Z = depth); the renderer re-expresses it against the model's axes.
+// Stored separately from m_JointQuat so it composes down the hierarchy as an
+// ABSOLUTE world delta instead of a per-joint delta.
+bool PreviewRenderer::SetJointDeltaSemantic(const char* jointName,
+                                            float qx, float qy, float qz, float qw)
+{
+    const int slot = FindJointSlot(jointName);
+    if (slot < 0) return false;
+    const int ni = m_SkinJoints[slot];
+    if (ni < 0 || ni >= (int)m_Nodes.size()) return false;
+    if (m_AbsSet.size() != m_Nodes.size())
+        m_AbsSet.assign(m_Nodes.size(), 0);
+    if (m_AbsQuat.size() != m_Nodes.size() * 4)
+        m_AbsQuat.assign(m_Nodes.size() * 4, 0.0f);
+
+    float nrm = sqrtf(qx * qx + qy * qy + qz * qz + qw * qw);
+    if (nrm < 1e-8f) { m_AbsSet[ni] = 0; m_PoseDirty = true; return true; }
+    qx /= nrm; qy /= nrm; qz /= nrm; qw /= nrm;
+
+    float qsem[4] = { qx, qy, qz, qw };
+    float q2[4]; SemanticToModelQuat(qsem, q2);
+    memcpy(&m_AbsQuat[ni * 4], q2, 16);
+    m_AbsSet[ni] = 1;
+    m_PoseDirty = true;
+    return true;
+}
+
+// Re-express a semantic-frame quaternion (X = side, Y = up, Z = depth) as a
+// model-space quaternion: R_model = B * R_sem * B^T, where the columns of B are
+// the semantic axes in the model's own space.
+void PreviewRenderer::SemanticToModelQuat(const float qsem[4], float out[4])
+{
+    float Rs[16]; MatFromQuat(qsem, Rs);
+    float B[3][3] = {
+        { m_EmoteAxisSide[0],  m_EmoteAxisUp[0],  m_EmoteAxisDepth[0] },
+        { m_EmoteAxisSide[1],  m_EmoteAxisUp[1],  m_EmoteAxisDepth[1] },
+        { m_EmoteAxisSide[2],  m_EmoteAxisUp[2],  m_EmoteAxisDepth[2] }
+    };
+    float tmp[3][3], Rm[3][3];
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) {
+            float s = 0.0f;
+            for (int k = 0; k < 3; ++k) s += B[i][k] * Rs[k * 4 + j];
+            tmp[i][j] = s;
+        }
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) {
+            float s = 0.0f;
+            for (int k = 0; k < 3; ++k) s += tmp[i][k] * B[j][k]; // B^T[k][j] = B[j][k]
+            Rm[i][j] = s;
+        }
+    QuatFromMatRow(Rm, out);
+}
+
+// Local (parent-relative) joint rotation for keyframe animation. Same axis
+// mapping as the emote helpers, but stored in m_JointQuat so it composes down
+// the hierarchy (a limb stays attached to its rotated parent).
+bool PreviewRenderer::SetJointLocalQuat(const char* jointName,
+                                        float qx, float qy, float qz, float qw)
+{
+    const int slot = FindJointSlot(jointName);
+    if (slot < 0) return false;
+    const int ni = m_SkinJoints[slot];
+    if (ni < 0 || ni >= (int)m_Nodes.size()) return false;
+
+    float nrm = sqrtf(qx * qx + qy * qy + qz * qz + qw * qw);
+    if (nrm < 1e-8f) {
+        m_JointQuat[ni * 4 + 0] = 0.0f;
+        m_JointQuat[ni * 4 + 1] = 0.0f;
+        m_JointQuat[ni * 4 + 2] = 0.0f;
+        m_JointQuat[ni * 4 + 3] = 1.0f;
+        m_PoseDirty = true;
+        return true;
+    }
+    float qsem[4] = { qx / nrm, qy / nrm, qz / nrm, qw / nrm };
+    float qm[4]; SemanticToModelQuat(qsem, qm);
+    memcpy(&m_JointQuat[ni * 4], qm, 16);
+    m_PoseDirty = true;
+    return true;
+}
+
+void PreviewRenderer::ClearWorldDeltas()
+{
+    if (!m_AbsSet.empty()) memset(m_AbsSet.data(), 0, m_AbsSet.size());
+    m_PoseDirty = true;
+}
+
+// The emote poses are authored against a frame where X = side, Y = up, Z =
+// depth. Re-express such an axis in the loaded model's actual orientation.
+void PreviewRenderer::MapEmoteAxis(float ax, float ay, float az, float out[3]) const
+{
+    for (int k = 0; k < 3; ++k)
+        out[k] = ax * m_EmoteAxisSide[k] + ay * m_EmoteAxisUp[k] + az * m_EmoteAxisDepth[k];
+    const float len = sqrtf(out[0] * out[0] + out[1] * out[1] + out[2] * out[2]);
+    if (len > 1e-6f) { out[0] /= len; out[1] /= len; out[2] /= len; }
+}
+
+// Build the semantic axes from the bind joint pivots:
+//   up    = from torso toward head,
+//   side  = from the right limb toward the left limb (i.e. points to the left),
+//   depth = up x side (right-handed).
+// Falls back to the skeleton up axis / model bounds when a joint is missing.
+void PreviewRenderer::UpdateEmoteAxes()
+{
+    m_EmoteAxisUp[0] = 0.0f; m_EmoteAxisUp[1] = 1.0f; m_EmoteAxisUp[2] = 0.0f;
+    m_EmoteAxisSide[0] = 1.0f; m_EmoteAxisSide[1] = 0.0f; m_EmoteAxisSide[2] = 0.0f;
+    m_EmoteAxisDepth[0] = 0.0f; m_EmoteAxisDepth[1] = 0.0f; m_EmoteAxisDepth[2] = 1.0f;
+    if (m_SkinJoints.empty() || m_Nodes.empty()) return;
+
+    auto pivotOf = [&](const char* nm, float out[3]) -> bool {
+        const int slot = FindJointSlot(nm);
+        if (slot < 0) return false;
+        const int ni = m_SkinJoints[slot];
+        if (ni < 0 || ni >= (int)m_Nodes.size()) return false;
+        const float* w = &m_NodeWorld[ni * 16];
+        out[0] = w[12]; out[1] = w[13]; out[2] = w[14];
+        return true;
+    };
+
+    float head[3], torso[3], larm[3], rarm[3];
+    const bool haveUp = pivotOf("Head", head) && pivotOf("Torso", torso);
+    const bool haveSide = pivotOf("Left Arm", larm) && pivotOf("Right Arm", rarm);
+
+    if (haveUp) {
+        float u[3] = { head[0] - torso[0], head[1] - torso[1], head[2] - torso[2] };
+        const float len = sqrtf(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+        if (len > 1e-6f) { m_EmoteAxisUp[0] = u[0] / len; m_EmoteAxisUp[1] = u[1] / len; m_EmoteAxisUp[2] = u[2] / len; }
+    }
+    if (haveSide) {
+        float s[3] = { larm[0] - rarm[0], larm[1] - rarm[1], larm[2] - rarm[2] };
+        // Remove any up component so the two axes are orthogonal.
+        const float d = s[0] * m_EmoteAxisUp[0] + s[1] * m_EmoteAxisUp[1] + s[2] * m_EmoteAxisUp[2];
+        s[0] -= d * m_EmoteAxisUp[0]; s[1] -= d * m_EmoteAxisUp[1]; s[2] -= d * m_EmoteAxisUp[2];
+        const float len = sqrtf(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]);
+        if (len > 1e-6f) { m_EmoteAxisSide[0] = s[0] / len; m_EmoteAxisSide[1] = s[1] / len; m_EmoteAxisSide[2] = s[2] / len; }
+    }
+    // depth = up x side
+    m_EmoteAxisDepth[0] = m_EmoteAxisUp[1] * m_EmoteAxisSide[2] - m_EmoteAxisUp[2] * m_EmoteAxisSide[1];
+    m_EmoteAxisDepth[1] = m_EmoteAxisUp[2] * m_EmoteAxisSide[0] - m_EmoteAxisUp[0] * m_EmoteAxisSide[2];
+    m_EmoteAxisDepth[2] = m_EmoteAxisUp[0] * m_EmoteAxisSide[1] - m_EmoteAxisUp[1] * m_EmoteAxisSide[0];
+}
+
+bool PreviewRenderer::RotateJointX(const char* n, float a) { return SetJointRotationAxis(n, 1, 0, 0, a); }
+bool PreviewRenderer::RotateJointY(const char* n, float a) { return SetJointRotationAxis(n, 0, 1, 0, a); }
+bool PreviewRenderer::RotateJointZ(const char* n, float a) { return SetJointRotationAxis(n, 0, 0, 1, a); }
+
+void PreviewRenderer::RecomputeBoneMatrices()
+{
+    const int n = (int)m_Nodes.size();
+    if (n == 0 || m_SkinJoints.empty()) return;
+
+    // Animated world matrix per node, in the mesh node's frame (see
+    // FinalizeSkin). Parents are visited before children (m_NodeOrder).
+    // `habs` tracks each node's ABSOLUTE model-space rotation delta (identity
+    // unless driven by the player mirror) so an absolute child can subtract its
+    // parent's delta and stay attached while following it.
+    std::vector<float> ja(n * 16, 0.0f);
+    std::vector<float> habs(n * 16, 0.0f);
+    const bool haveAbsBuf = (int)m_AbsSet.size() == n && (int)m_AbsQuat.size() == n * 4;
+    for (int idx : m_NodeOrder) {
+        const float* loc = m_Nodes[idx].local;
+        int p = m_Nodes[idx].parent;
+        if (p >= 0 && p < n)
+            MatMul(loc, &ja[p * 16], &ja[idx * 16]);
+        else
+            memcpy(&ja[idx * 16], loc, 64);
+
+        float parentH[16];
+        if (p >= 0 && p < n) memcpy(parentH, &habs[p * 16], 64);
+        else                 MatIdentity(parentH);
+
+        const bool haveAbs = haveAbsBuf && m_AbsSet[idx] != 0;
+        if (haveAbs) {
+            // Absolute model-space orientation: H = desired delta, and the
+            // per-joint delta we must apply is P = H_parent^-1 * H.
+            float H[16]; MatFromQuat(&m_AbsQuat[idx * 4], H);
+            float pH[16]; MatRotTranspose(parentH, pH);
+            float P[16];  MatMul(pH, H, P);
+            const float pivot[3] = {
+                ja[idx * 16 + 12], ja[idx * 16 + 13], ja[idx * 16 + 14]
+            };
+            float Pm[16]; MatPivotFromRot(pivot, P, Pm);
+            MatMul(&ja[idx * 16], Pm, &ja[idx * 16]);
+            memcpy(&habs[idx * 16], H, 64);
+        } else {
+            memcpy(&habs[idx * 16], parentH, 64);
+            const float* q = &m_JointQuat[idx * 4];
+            if (!(q[0] == 0.0f && q[1] == 0.0f && q[2] == 0.0f && q[3] == 1.0f)) {
+                // Rotate this node's subtree about its CURRENT origin: the pivot
+                // is taken after the parent chain was applied, so a limb stays
+                // attached when its parent (torso, etc.) is animated.
+                const float pivot[3] = {
+                    ja[idx * 16 + 12], ja[idx * 16 + 13], ja[idx * 16 + 14]
+                };
+                float P[16];
+                MatPivotQuat(pivot, q, P);
+                MatMul(&ja[idx * 16], P, &ja[idx * 16]);
+            }
+        }
+    }
+
+    for (int s = 0; s < (int)m_SkinJoints.size(); ++s) {
+        int ni = m_SkinJoints[s];
+        if (ni < 0 || ni >= n) { MatIdentity(&m_BoneMatrices[s * 16]); continue; }
+        MatMul(&ja[ni * 16], &m_InvBind[s * 16], &m_BoneMatrices[s * 16]);
+    }
 }
 

@@ -12,7 +12,7 @@ inline void TPHandler()
 		uintptr_t base = Memory->getBaseAddress();
 		auto fakeDataModel = Memory->read<uintptr_t>(base + Offsets::FakeDataModel::Pointer);
 		auto dataModel = RobloxInstance(Memory->read<uintptr_t>(fakeDataModel + Offsets::FakeDataModel::RealDataModel));
-		auto placeId = Memory->read<int>(dataModel.address + Offsets::DataModel::PlaceId);
+		auto placeId = Memory->read<__int64>(dataModel.address + Offsets::DataModel::PlaceId);
 		uintptr_t visualEngine;
 
 		if (!dataModel || dataModel.address == 0 || dataModel.Name() == "LuaApp" || dataModel.address != Globals::Roblox::DataModel.address || placeId != Globals::Roblox::lastPlaceID) // player left the game or changed servers
@@ -57,9 +57,9 @@ Globals::Roblox::DataModel = dataModel;
 			Globals::Roblox::LocalPlayer = RobloxInstance(Memory->read<uintptr_t>(Globals::Roblox::Players.address + Offsets::Player::LocalPlayer));
 
 			// Re-read actual Place ID from the newly loaded DataModel to avoid double-triggering
-			Globals::Roblox::lastPlaceID = Memory->read<int>(Globals::Roblox::DataModel.address + Offsets::DataModel::PlaceId);
+			Globals::Roblox::lastPlaceID = Memory->read<__int64>(Globals::Roblox::DataModel.address + Offsets::DataModel::PlaceId);
 			Globals::Roblox::isPhantomForces = (Globals::Roblox::lastPlaceID == Globals::Roblox::PHANTOM_FORCES_ID);
-			Globals::Roblox::isRivals = (Globals::Roblox::lastPlaceID == Globals::Roblox::RIVALS_ID);
+			Globals::Roblox::isRivals = Globals::Roblox::IsRivalsPlace(Globals::Roblox::lastPlaceID);
 			Globals::Roblox::isOverkill = (Globals::Roblox::lastPlaceID == Globals::Roblox::OVERKILL_ID);
 			Globals::Roblox::isMM2 = (Globals::Roblox::lastPlaceID == Globals::Roblox::MM2_ID);
 			Globals::Roblox::isBladeBall = (Globals::Roblox::lastPlaceID == Globals::Roblox::BLADEBALL_ID);
@@ -71,8 +71,18 @@ Globals::Roblox::DataModel = dataModel;
 			Globals::Caches::forceRefresh = true;
 		}
 
-		// Continuous self-healing checks for cached pointers
-		if (Globals::Roblox::DataModel.address != 0)
+		// Continuous self-healing checks for cached pointers.
+		// Each FindFirstChildWhichIsA below walks every DataModel/Workspace child
+		// reading a class per child, so running them on the 100ms tick was ~5k
+		// driver reads/sec in the background in every game. Nothing these catch
+		// (a pointer going stale inside a live DataModel) resolves faster than
+		// a second, so they run 1-in-10 ticks; the cheap DataModel/place-id
+		// check above keeps its 100ms cadence for fast join/leave detection.
+		static int s_healTick = 0;
+		const bool doHeal = (++s_healTick >= 10);
+		if (doHeal) s_healTick = 0;
+
+		if (doHeal && Globals::Roblox::DataModel.address != 0)
 		{
 			auto currentWorkspace = Globals::Roblox::DataModel.FindFirstChildWhichIsA("Workspace");
 			if (currentWorkspace.address != Globals::Roblox::Workspace.address)

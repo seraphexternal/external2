@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <urlmon.h>
 #include <wininet.h>
@@ -295,20 +295,56 @@ inline void RenderESP(ImDrawList* drawList)
     if (!drawList || !Globals::Viewport::Valid || !EspAnyEnabled())
         return;
 
-    if (Globals::Caches::CachedPlayerObjects.empty())
+
+    // Snapshot the player list once per frame (shared with arrows/radar/
+    // aimbot/triggerbot via FramePlayers).  CachePlayerObjects() replaces the
+    // live vector (`CachedPlayerObjects = std::move(tempList)`) on its own
+    // thread, so iterating it directly could walk the freed heap and crash.
+    const std::vector<RobloxPlayer>& players = Globals::Caches::FramePlayers();
+    if (players.empty())
         return;
 
     const auto localCharacter = Globals::Roblox::LocalPlayer.Character();
-    auto localHRP = localCharacter.FindFirstChild("HumanoidRootPart");
-    if (!localHRP.address) localHRP = localCharacter.FindFirstChild("Torso");
-    if (!localHRP.address) localHRP = localCharacter.FindFirstChild("UpperTorso");
 
-    auto localHead = localCharacter.FindFirstChild("Head");
-    if (!localHead.address) localHead = localHRP;
+    // Resolving the local rig costs up to4 FindFirstChild scans (a child-list
+    // walk reading a name per child) — doing that every frame was ~100 driver
+    // reads/frame for a value that only changes on respawn. Re-resolve when
+    // the character address changes, with a 5s safety rescan.
+    static uintptr_t s_localCharAddr = 0;
+    static double s_localRigRescanAt = -10.0;
+    static RobloxInstance s_localHRP;
+    static RobloxInstance s_localHead;
+    const double rigNow = ImGui::GetTime();
+    if (localCharacter.address != s_localCharAddr || rigNow - s_localRigRescanAt > 5.0)
+    {
+        s_localCharAddr = localCharacter.address;
+        s_localRigRescanAt = rigNow;
+
+        s_localHRP = localCharacter.FindFirstChild("HumanoidRootPart");
+        if (!s_localHRP.address) s_localHRP = localCharacter.FindFirstChild("Torso");
+        if (!s_localHRP.address) s_localHRP = localCharacter.FindFirstChild("UpperTorso");
+
+        s_localHead = localCharacter.FindFirstChild("Head");
+        if (!s_localHead.address) s_localHead = s_localHRP;
+    }
+
+    auto localHRP = s_localHRP;
+    auto localHead = s_localHead;
 
     Vectors::Vector3 localPos = {0,0,0};
     if (localHRP.address) localPos = localHRP.Position();
     else if (localHead.address) localPos = localHead.Position();
+
+    // Phantom Forces / Chickynoid: LocalPlayer.Character() is unlinked, so the
+    // local rig above resolves to nothing and distance/scale/tracer math would
+    // collapse (distance 0 -> MaxRenderDistance bypassed, box scale pinned to
+    // max, distance text measured from the world origin). The camera sits at the
+    // local player's eye, so use it as the local origin instead.
+    if (localPos.x == 0.f && localPos.y == 0.f && localPos.z == 0.f &&
+        Globals::Roblox::Camera.address)
+    {
+        localPos = Globals::Roblox::Camera.CFrame().Position();
+    }
 
     Visibility::BeginFrame();
 
@@ -325,7 +361,7 @@ inline void RenderESP(ImDrawList* drawList)
             for (auto it = s_TrailHistory.begin(); it != s_TrailHistory.end(); )
             {
                 bool alive = false;
-                for (const auto& p : Globals::Caches::CachedPlayerObjects)
+                for (const auto& p : players)
                     if (p.address == it->first) { alive = true; break; }
                 if (!alive) it = s_TrailHistory.erase(it); else ++it;
             }
@@ -404,7 +440,7 @@ inline void RenderESP(ImDrawList* drawList)
         return true;
     };
 
-    for (const auto& player : Globals::Caches::CachedPlayerObjects)
+    for (const auto& player : Globals::Caches::FramePlayers())
     {
         if (!player.address || player.address == Globals::Roblox::LocalPlayer.address)
             continue;
@@ -495,6 +531,28 @@ inline void RenderESP(ImDrawList* drawList)
         top -= height * 0.08f;
         bottom += height * 0.05f;
 
+        // The bounds above are built from just two projected points (Head and
+        // HumanoidRootPart), which are near-vertically coplanar in world space.
+        // They can therefore land on the same screen pixel (or the same screen
+        // column/row), leaving width and/or height at ~0. This used to `continue`
+        // and discard the player entirely, which silently killed ESP for every
+        // target whose two sample points collapsed. Degenerate bounds mean "we
+        // have a point, not a rectangle", so give the box a minimum extent
+        // instead of dropping it.
+        constexpr float kMinEspExtent = 2.0f;
+        if (right - left < kMinEspExtent)
+        {
+            const float cx = (left + right) * 0.5f;
+            left = cx - kMinEspExtent * 0.5f;
+            right = cx + kMinEspExtent * 0.5f;
+        }
+        if (bottom - top < kMinEspExtent)
+        {
+            const float cy = (top + bottom) * 0.5f;
+            top = cy - kMinEspExtent * 0.5f;
+            bottom = cy + kMinEspExtent * 0.5f;
+        }
+
         const bool validBounds = left < right && top < bottom;
         if (!validBounds)
             continue;
@@ -504,8 +562,8 @@ inline void RenderESP(ImDrawList* drawList)
         GetPlayerHealth(player, liveHealth, liveMaxHealth);
 
         const float distance3D = localPos.x != 0 ? targetHRP.Position().Distance(localPos) : 0.f;
-        if (distance3D > Options::ESP::MaxRenderDistance) continue;
-        if (distance3D > 2000.f) continue;
+        if (distance3D > Options::ESP::MaxRenderDistance)
+            continue;
         const float scale = EspClamp(450.f / EspClamp(distance3D, 1.f, 4500.f), 0.65f, 2.5f);
 
         const bool playerVisible = Visibility::IsPlayerVisible(player);
@@ -773,8 +831,14 @@ inline void RenderESP(ImDrawList* drawList)
                 }
             }
 
-            if (hist.size() < 2)
-                continue;
+            // A trail needs at least two recorded points. This used to be a
+            // bare `continue`, which sits directly in the player loop body and
+            // therefore skipped the box / skeleton / name / health / corner
+            // drawing for every player that had not built up trail history yet
+            // (i.e. essentially every player, most of the time). Only the trail
+            // itself may be skipped here.
+            if (hist.size() >= 2)
+            {
 
             // Base color by mode: 0 = custom, 1 = team, 2 = health, 3 = rainbow.
             ImU32 baseColor;
@@ -893,6 +957,7 @@ inline void RenderESP(ImDrawList* drawList)
                 // Main line.
                 drawList->AddLine(p1, p2, IM_COL32(baseR, baseG, baseB, segAlpha), scaledThickness);
             }
+            } // hist.size() >= 2
         }
 
         if (Options::ESP::Box && Options::ESP::BoxType == 2)
@@ -992,7 +1057,7 @@ inline void RenderESP(ImDrawList* drawList)
                 255);
             const ImU32 outlineCol = IM_COL32(0, 0, 0, 255);
             const float thickness = Options::ESP::SkeletonThickness;
-            const bool perBone = true;
+            const bool perBone = Options::ESP::SkeletonVisibilityColor;
             const uintptr_t skelIgnore = player.Character.address;
 
             auto W2S = [&](const Vectors::Vector3& worldPos, ImVec2& out) -> bool
@@ -1481,7 +1546,6 @@ inline void RenderESP(ImDrawList* drawList)
         }
     }
 
-    // Local-only effects: when enabled, draw a ring / glow around the local player.
     if (Options::ESP::LocalOnly && localHRP.address)
     {
         const auto localScreen = WorldToScreen(localHRP.Position());
@@ -1545,8 +1609,60 @@ inline void RenderESPPreview(ImDrawList* drawList, ImVec2 origin, ImVec2 size, b
     const ImVec2 rectMax(origin.x + size.x, origin.y + size.y);
 
     drawList->PushClipRect(rectMin, rectMax, true);
-    drawList->AddRectFilled(rectMin, rectMax, IM_COL32(8, 8, 8, 255), 4.0f);
-    drawList->AddRect(rectMin, rectMax, IM_COL32(27, 27, 27, 255), 4.0f);
+    
+    // Dynamic gradient background with animated accent colors
+    {
+        const float time = static_cast<float>(ImGui::GetTime());
+        float accentR = Options::Misc::MenuAccentColor[0];
+        float accentG = Options::Misc::MenuAccentColor[1];
+        float accentB = Options::Misc::MenuAccentColor[2];
+        
+        // Multi-layer gradient background
+        for (int layer = 0; layer < 3; ++layer)
+        {
+            float layerTime = time * (0.3f + layer * 0.15f);
+            float wave1 = sinf(layerTime * 0.7f) * 0.5f + 0.5f;
+            float wave2 = cosf(layerTime * 0.5f + 1.2f) * 0.5f + 0.5f;
+            
+            ImU32 topCol = IM_COL32(
+                static_cast<int>((10 + layer * 5 + wave1 * 20) * (1.0f - accentR * 0.3f)),
+                static_cast<int>((8 + layer * 4 + wave2 * 15) * (1.0f - accentG * 0.3f)),
+                static_cast<int>((18 + layer * 6 + wave1 * 25) * (1.0f - accentB * 0.3f)),
+                255);
+            ImU32 bottomCol = IM_COL32(
+                static_cast<int>((20 + layer * 8 + wave2 * 30) * (1.0f + accentR * 0.2f)),
+                static_cast<int>((15 + layer * 6 + wave1 * 25) * (1.0f + accentG * 0.2f)),
+                static_cast<int>((35 + layer * 10 + wave2 * 35) * (1.0f + accentB * 0.2f)),
+                255);
+            
+            float layerTop = rectMin.y + (rectMax.y - rectMin.y) * (layer * 0.33f);
+            float layerBottom = rectMin.y + (rectMax.y - rectMin.y) * ((layer + 1) * 0.33f + 0.05f);
+            drawList->AddRectFilledMultiColor(
+                ImVec2(rectMin.x, layerTop), ImVec2(rectMax.x, layerBottom),
+                topCol, topCol, bottomCol, bottomCol);
+        }
+        
+        // Subtle animated accent lines
+        for (int i = 0; i < 3; ++i)
+        {
+            float lineY = rectMin.y + (rectMax.y - rectMin.y) * (0.25f + i * 0.25f + sinf(time * 0.8f + i * 2.1f) * 0.03f);
+            ImU32 lineCol = IM_COL32(
+                static_cast<int>(accentR * 255 * (0.3f + 0.2f * sinf(time * 1.2f + i))),
+                static_cast<int>(accentG * 255 * (0.3f + 0.2f * sinf(time * 1.5f + i))),
+                static_cast<int>(accentB * 255 * (0.3f + 0.2f * sinf(time * 0.9f + i))),
+                static_cast<int>(40 + 20 * sinf(time * 1.1f + i)));
+            drawList->AddLine(ImVec2(rectMin.x, lineY), ImVec2(rectMax.x, lineY), lineCol, 1.0f);
+        }
+    }
+    
+    // Subtle vignette overlay
+    drawList->AddRectFilledMultiColor(
+        rectMin, rectMax,
+        IM_COL32(0, 0, 0, 60), IM_COL32(0, 0, 0, 60),
+        IM_COL32(0, 0, 0, 120), IM_COL32(0, 0, 0, 120));
+    
+    // Border
+    drawList->AddRect(rectMin, rectMax, IM_COL32(40, 30, 55, 255), 4.0f);
 
     // Perspective grid floor (3D-like depth)
     {
@@ -2751,12 +2867,6 @@ inline void RenderArrows(ImDrawList* drawList)
             return;
     }
 
-    const auto localCharacter = Globals::Roblox::LocalPlayer.Character();
-    auto localHRP = localCharacter.FindFirstChild("HumanoidRootPart");
-    if (!localHRP.address)
-        return;
-
-    const auto localPos = localHRP.Position();
     const ImVec2 screenCenter(
         Globals::Viewport::Dimensions.x * 0.5f + Globals::Viewport::ScreenPos.x,
         Globals::Viewport::Dimensions.y * 0.5f + Globals::Viewport::ScreenPos.y
@@ -2777,7 +2887,7 @@ inline void RenderArrows(ImDrawList* drawList)
     auto camRight = camCFrame.GetRightVector();
     auto camPos = camCFrame.Position();
 
-    for (const auto& player : Globals::Caches::CachedPlayerObjects)
+    for (const auto& player : Globals::Caches::FramePlayers())
     {
         if (!player.address || player.address == Globals::Roblox::LocalPlayer.address)
             continue;
@@ -2859,12 +2969,6 @@ inline void RenderRadar(ImDrawList* drawList)
             return;
     }
 
-    const auto localCharacter = Globals::Roblox::LocalPlayer.Character();
-    auto localHRP = localCharacter.FindFirstChild("HumanoidRootPart");
-    if (!localHRP.address)
-        return;
-
-    const auto localPos = localHRP.Position();
     const float radarSize = Options::ESP::RadarSize;
     const float radarRange = Options::ESP::RadarRange;
     const float dotRadius = 3.0f;
@@ -2956,7 +3060,7 @@ inline void RenderRadar(ImDrawList* drawList)
     auto camRight = camCFrame.GetRightVector();
     auto camPos = camCFrame.Position();
 
-    for (const auto& player : Globals::Caches::CachedPlayerObjects)
+    for (const auto& player : Globals::Caches::FramePlayers())
     {
         if (!player.address || player.address == Globals::Roblox::LocalPlayer.address)
             continue;

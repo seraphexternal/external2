@@ -56,11 +56,18 @@ namespace Rewind
                         // Second press: teleport back to the marker.
                         Vectors::Vector3 target = State::markerPos;
                         target.y += Options::Rewind::YOffset;
-                        for (int i = 0; i < 10000; ++i)
+                        // Hammer the teleport for ~40ms at 1ms spacing instead
+                        // of 10000 back-to-back writes (20k IOCTLs in one
+                        // clump, which stalled every other thread on the shared
+                        // IO mutex right as you teleported). One write per ms
+                        // still beats each of the game's physics steps.
+                        const auto tpEnd = std::chrono::steady_clock::now() + std::chrono::milliseconds(40);
+                        do
                         {
                             Memory->write<Vectors::Vector3>(prim + Offsets::Primitive::Position, target);
                             Memory->write<Vectors::Vector3>(prim + Offsets::Primitive::AssemblyLinearVelocity, { 0.f, 0.f, 0.f });
-                        }
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        } while (Globals::running && std::chrono::steady_clock::now() < tpEnd);
                         if (Options::Rewind::AutoClearOnTP)
                             State::markerSet = false;
                     }

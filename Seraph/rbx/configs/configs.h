@@ -129,16 +129,72 @@ inline std::vector<std::string> ListConfigFiles()
     if (findHandle == INVALID_HANDLE_VALUE)
         return files;
 
+    // Order by creation time, oldest first (ascending), so the list reads in the
+    // order the configs were made. FindFirstFile does not guarantee a stable
+    // order, so read the real timestamps instead of trusting enumeration order.
+    //
+    // Last-write time is kept as well and used as the primary key when creation
+    // times are identical: configs written in the same second (or copied in a
+    // batch) share a creation time, and falling back to the write time keeps
+    // the order meaningful instead of jumping around alphabetically.
+    struct Entry { std::string name; ULARGE_INTEGER created; ULARGE_INTEGER written; bool hasTime; };
+    std::vector<Entry> entries;
+
     do
     {
         if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
             continue;
 
-        files.emplace_back(findData.cFileName);
+        Entry e;
+        e.name = findData.cFileName;
+
+        FILETIME ftCreated = findData.ftCreationTime;
+        FILETIME ftWritten = findData.ftLastWriteTime;
+        HANDLE hFile = CreateFileA(
+            (Globals::configsPath + "\\" + e.name).c_str(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hFile != INVALID_HANDLE_VALUE)
+        {
+            FILETIME actualCreated = {};
+            FILETIME actualWritten = {};
+            if (GetFileTime(hFile, &actualCreated, nullptr, &actualWritten))
+            {
+                ftCreated = actualCreated;
+                ftWritten = actualWritten;
+            }
+            CloseHandle(hFile);
+        }
+
+        e.created.LowPart = ftCreated.dwLowDateTime;
+        e.created.HighPart = ftCreated.dwHighDateTime;
+        e.written.LowPart = ftWritten.dwLowDateTime;
+        e.written.HighPart = ftWritten.dwHighDateTime;
+        e.hasTime = (e.created.QuadPart != 0);
+        entries.push_back(std::move(e));
     } while (FindNextFileA(findHandle, &findData));
 
     FindClose(findHandle);
-    std::sort(files.begin(), files.end());
+
+    std::sort(entries.begin(), entries.end(),
+        [](const Entry& a, const Entry& b)
+        {
+            if (a.hasTime != b.hasTime)
+                return a.hasTime;           // timed entries first
+            // Ascending: oldest creation first. Ties fall back to write time,
+            // then to name, so the order never flickers between frames.
+            if (a.created.QuadPart != b.created.QuadPart)
+                return a.created.QuadPart < b.created.QuadPart;
+            if (a.written.QuadPart != b.written.QuadPart)
+                return a.written.QuadPart < b.written.QuadPart;
+            return a.name < b.name;
+        });
+
+    files.reserve(entries.size());
+    for (auto& e : entries)
+        files.push_back(std::move(e.name));
+
     return files;
 }
 
@@ -296,9 +352,19 @@ inline json BuildConfigJson()
         { "Team Check", Options::ESP::TeamCheck },
         { "Box", Options::ESP::Box },
         { "Box Type", Options::ESP::BoxType },
+        { "Box Fill", Options::ESP::BoxFill },
+        { "Box Fill Gradient", Options::ESP::BoxFillGradient },
+        { "Box Fill Type", Options::ESP::BoxFillType },
+        { "Box Fill Gradient Rotate", Options::ESP::BoxFillGradientRotate },
+        { "Box Fill Speed", Options::ESP::BoxFillSpeed },
+        { "Box Fill Color", ToJsonColor(Options::ESP::BoxFillColor, 4) },
+        { "Box Fill Top Color", ToJsonColor(Options::ESP::BoxFillTopColor, 4) },
+        { "Box Fill Bottom Color", ToJsonColor(Options::ESP::BoxFillBottomColor, 4) },
+        { "Box Fill Opacity", Options::ESP::BoxFillOpacity },
         { "Tracers", Options::ESP::Tracers },
         { "TracersStart", Options::ESP::TracersStart },
         { "Skeleton", Options::ESP::Skeleton },
+        { "Skeleton Visibility Color", Options::ESP::SkeletonVisibilityColor },
         { "Name", Options::ESP::Name },
         { "Distance", Options::ESP::Distance },
         { "Health", Options::ESP::Health },
@@ -453,6 +519,7 @@ inline json BuildConfigJson()
         { "Flickbot Team Check", Options::Aimbot::FlickbotTeamCheck },
         { "FOV Color", ToJsonColor(Options::Aimbot::FOVColor, 3) },
         { "FOV Fill Color", ToJsonColor(Options::Aimbot::FOVFillColor, 4) },
+        { "Fill Opacity", Options::Aimbot::FOVFillOpacity },
         { "FOV Thickness", Options::Aimbot::FOVThickness },
         { "FOV Color Mode", Options::Aimbot::FOVColorMode },
         { "FOV Gradient Speed", Options::Aimbot::FOVGradientSpeed },
@@ -523,6 +590,9 @@ inline json BuildConfigJson()
         { "Radius", Options::Triggerbot::Radius },
         { "Range", Options::Triggerbot::Range },
         { "Delay", Options::Triggerbot::Delay },
+        { "Method", Options::Triggerbot::Method },
+        { "Target Part", Options::Triggerbot::TargetPart },
+        { "Hitbox Margin", Options::Triggerbot::PartMargin },
         { "Advanced FOV", Options::Triggerbot::AdvancedFOV },
         { "Show Advanced FOV", Options::Triggerbot::ShowAdvancedFOV },
         { "Dynamic FOV", Options::Triggerbot::DynamicFOV },
@@ -614,6 +684,13 @@ inline json BuildConfigJson()
         { "V Length", Options::Crosshair::VLength }
     };
 
+    j["Music"] = {
+        { "Miniplayer", Options::Music::Miniplayer },
+        { "Miniplayer X", Options::Music::MiniplayerX },
+        { "Miniplayer Y", Options::Music::MiniplayerY },
+        { "Miniplayer Size", Options::Music::MiniplayerSize }
+    };
+
     j["Misc"] = {
         { "FOV Enabled", Options::Misc::FOVEnabled },
         { "FOV", Options::Misc::FOV },
@@ -625,6 +702,13 @@ inline json BuildConfigJson()
         { "ESP Preview Offset X", Options::Misc::ESPPreviewOffsetX },
         { "ESP Preview Offset Y", Options::Misc::ESPPreviewOffsetY },
         { "Stream Proof", Options::Misc::StreamProof },
+        { "Menu Click Sound", Options::Misc::MenuClickSound },
+        { "Menu Click Volume", Options::Misc::MenuClickVolume },
+        { "Menu Click Effect", Options::Misc::MenuClickEffect },
+        { "Menu Click Effect Color", ToJsonColor(Options::Misc::MenuClickEffectColor, 3) },
+        { "Auto Update Offsets", Options::Misc::AutoUpdateOffsets },
+        { "Auto Update Roblox", Options::Misc::AutoUpdateRoblox },
+        { "Auto Launch Roblox", Options::Misc::AutoLaunchRoblox },
         { "Third Person", Options::Misc::ThirdPerson },
         { "Anim Changer", Options::AnimationChanger::Enabled },
         { "Anim Idle", Options::AnimationChanger::Idle },
@@ -643,13 +727,27 @@ inline json BuildConfigJson()
         { "Rainbow Speed", Options::Misc::RainbowSpeed },
         { "Target Player", std::string(Options::Misc::TargetPlayer) },
         { "Explorer Enabled", Options::Misc::ExplorerEnabled },
+        { "Server Browser", Options::Misc::ServerBrowserEnabled },
         { "Menu Scale", Options::Misc::MenuScale },
+        { "Shader Background", Options::Misc::ShaderBackground },
+        { "Shader Background Opacity", Options::Misc::ShaderBackgroundOpacity },
         { "Debug Log", Options::Misc::DebugLog },
         { "Hide From Tabs", Options::Misc::HideFromTabs },
         { "Hide Process", Options::Misc::HideProcess },
         { "Process Name", std::string(Options::Misc::ProcessName) },
         { "Exclusion Path", std::string(Options::Misc::ExclusionPath) },
-        { "Show Certified", Options::Misc::ShowCertified }
+        { "Show Certified", Options::Misc::ShowCertified },
+        { "BG Enabled", Options::Misc::ExteriumBGEnabled },
+        { "BG Particle Count", Options::Misc::ExteriumBGParticleCount },
+        { "BG Particle Shape", Options::Misc::ExteriumBGParticleShape },
+        { "BG Min Size", Options::Misc::ExteriumBGParticleMinSize },
+        { "BG Max Size", Options::Misc::ExteriumBGParticleMaxSize },
+        { "BG Min Speed", Options::Misc::ExteriumBGParticleMinSpeed },
+        { "BG Max Speed", Options::Misc::ExteriumBGParticleMaxSpeed },
+        { "BG Opacity", Options::Misc::ExteriumBGParticleOpacity },
+        { "BG Glow", Options::Misc::ExteriumBGParticleGlow },
+        { "BG Use Accent", Options::Misc::ExteriumBGUseAccent },
+        { "BG Color", ToJsonColor(Options::Misc::ExteriumBGColor, 3) }
     };
 
     j[SX("HitboxExpander")] = {
@@ -777,6 +875,22 @@ inline json BuildConfigJson()
         { "ToggleType", Options::VoidHide::ToggleType }
     };
 
+    j["ModelChanger"] = {
+        { "Enabled", Options::ModelChanger::Enabled },
+        { "Model", Options::ModelChanger::Model },
+        { "Scale", Options::ModelChanger::Scale },
+        { "YawOffset", Options::ModelChanger::YawOffset },
+        { "PitchOffset", Options::ModelChanger::PitchOffset },
+        { "FollowFacing", Options::ModelChanger::FollowFacing },
+        { "HideCharacter", Options::ModelChanger::HideCharacter },
+        { "Animate", Options::ModelChanger::Animate },
+        { "UseGameProfile", Options::ModelChanger::UseGameProfile },
+        { "GameProfileAutoLoad", Options::ModelChanger::GameProfileAutoLoad },
+        { "GameProfileUseAssetIds", Options::ModelChanger::GameProfileUseAssetIds },
+        { "GameProfileAssetESP", Options::ModelChanger::GameProfileAssetESP },
+        { "GameProfileAssetAimbot", Options::ModelChanger::GameProfileAssetAimbot }
+    };
+
     j["Bhop"] = {
         { "Enabled", Options::Bhop::Enabled },
         { "BhopKey", Options::Bhop::BhopKey }
@@ -859,6 +973,16 @@ inline json BuildConfigJson()
         { "EditMode", Options::Preview3D::EditMode },
         { "Scale", Options::Preview3D::Scale },
         { "Skeleton", Options::Preview3D::Skeleton }
+    };
+
+    j["ModelChanger"] = {
+        { "Enabled", Options::ModelChanger::Enabled },
+        { "Model", Options::ModelChanger::Model },
+        { "Scale", Options::ModelChanger::Scale },
+        { "YawOffset", Options::ModelChanger::YawOffset },
+        { "PitchOffset", Options::ModelChanger::PitchOffset },
+        { "FollowFacing", Options::ModelChanger::FollowFacing },
+        { "HideCharacter", Options::ModelChanger::HideCharacter }
     };
 
     j["Desync"] = {
@@ -991,9 +1115,20 @@ inline void ApplyConfigJson(const json& data)
             Options::ESP::BoxType = oldBox ? 1 : 0;
         }
 
+        LoadVal(esp, "Box Fill", Options::ESP::BoxFill);
+        LoadVal(esp, "Box Fill Gradient", Options::ESP::BoxFillGradient);
+        LoadVal(esp, "Box Fill Type", Options::ESP::BoxFillType);
+        LoadVal(esp, "Box Fill Gradient Rotate", Options::ESP::BoxFillGradientRotate);
+        LoadVal(esp, "Box Fill Speed", Options::ESP::BoxFillSpeed);
+        LoadFloatArray(esp, "Box Fill Color", Options::ESP::BoxFillColor);
+        LoadFloatArray(esp, "Box Fill Top Color", Options::ESP::BoxFillTopColor);
+        LoadFloatArray(esp, "Box Fill Bottom Color", Options::ESP::BoxFillBottomColor);
+        LoadVal(esp, "Box Fill Opacity", Options::ESP::BoxFillOpacity);
+
         LoadVal(esp, "Tracers", Options::ESP::Tracers);
         LoadVal(esp, "TracersStart", Options::ESP::TracersStart);
         LoadVal(esp, "Skeleton", Options::ESP::Skeleton);
+        LoadVal(esp, "Skeleton Visibility Color", Options::ESP::SkeletonVisibilityColor);
         LoadVal(esp, "Name", Options::ESP::Name);
         LoadVal(esp, "Distance", Options::ESP::Distance);
         LoadVal(esp, "Health", Options::ESP::Health);
@@ -1203,6 +1338,7 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(aim, "Custom Curve Enabled", Options::Aimbot::CustomCurveEnabled);
         LoadFloatArray(aim, "FOV Color", Options::Aimbot::FOVColor);
         LoadFloatArray(aim, "FOV Fill Color", Options::Aimbot::FOVFillColor);
+        LoadVal(aim, "Fill Opacity", Options::Aimbot::FOVFillOpacity);
         LoadFloatArray(aim, "Custom Curve P1", Options::Aimbot::CustomCurveP1);
         LoadFloatArray(aim, "Custom Curve P2", Options::Aimbot::CustomCurveP2);
         LoadVal(aim, "Ignore Jump", Options::Aimbot::IgnoreJump);
@@ -1260,6 +1396,9 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(tb, "Radius", Options::Triggerbot::Radius);
         LoadVal(tb, "Range", Options::Triggerbot::Range);
         LoadVal(tb, "Delay", Options::Triggerbot::Delay);
+        LoadVal(tb, "Method", Options::Triggerbot::Method);
+        LoadVal(tb, "Target Part", Options::Triggerbot::TargetPart);
+        LoadVal(tb, "Hitbox Margin", Options::Triggerbot::PartMargin);
         LoadVal(tb, "Advanced FOV", Options::Triggerbot::AdvancedFOV);
         LoadVal(tb, "Show Advanced FOV", Options::Triggerbot::ShowAdvancedFOV);
         LoadVal(tb, "Dynamic FOV", Options::Triggerbot::DynamicFOV);
@@ -1334,6 +1473,15 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(ch, "V Length", Options::Crosshair::VLength);
     }
 
+    if (data.is_object() && data.contains("Music"))
+    {
+        const auto& mu = data["Music"];
+        LoadVal(mu, "Miniplayer", Options::Music::Miniplayer);
+        LoadVal(mu, "Miniplayer X", Options::Music::MiniplayerX);
+        LoadVal(mu, "Miniplayer Y", Options::Music::MiniplayerY);
+        LoadVal(mu, "Miniplayer Size", Options::Music::MiniplayerSize);
+    }
+
     if (data.is_object() && data.contains("Misc"))
     {
         const auto& ms = data["Misc"];
@@ -1347,6 +1495,13 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(ms, "ESP Preview Offset X", Options::Misc::ESPPreviewOffsetX);
         LoadVal(ms, "ESP Preview Offset Y", Options::Misc::ESPPreviewOffsetY);
         LoadVal(ms, "Stream Proof", Options::Misc::StreamProof);
+        LoadVal(ms, "Menu Click Sound", Options::Misc::MenuClickSound);
+        LoadVal(ms, "Menu Click Volume", Options::Misc::MenuClickVolume);
+        LoadVal(ms, "Menu Click Effect", Options::Misc::MenuClickEffect);
+        LoadFloatArray(ms, "Menu Click Effect Color", Options::Misc::MenuClickEffectColor);
+        LoadVal(ms, "Auto Update Offsets", Options::Misc::AutoUpdateOffsets);
+        LoadVal(ms, "Auto Update Roblox", Options::Misc::AutoUpdateRoblox);
+        LoadVal(ms, "Auto Launch Roblox", Options::Misc::AutoLaunchRoblox);
         LoadVal(ms, "Third Person", Options::Misc::ThirdPerson);
         LoadVal(ms, "Anim Changer", Options::AnimationChanger::Enabled);
         LoadVal(ms, "Anim Idle", Options::AnimationChanger::Idle);
@@ -1369,11 +1524,25 @@ inline void ApplyConfigJson(const json& data)
             strncpy_s(Options::Misc::TargetPlayer, tp.c_str(), sizeof(Options::Misc::TargetPlayer) - 1);
         }
         LoadVal(ms, "Explorer Enabled", Options::Misc::ExplorerEnabled);
+        LoadVal(ms, "Server Browser", Options::Misc::ServerBrowserEnabled);
         LoadVal(ms, "Menu Scale", Options::Misc::MenuScale);
+        LoadVal(ms, "Shader Background", Options::Misc::ShaderBackground);
+        LoadVal(ms, "Shader Background Opacity", Options::Misc::ShaderBackgroundOpacity);
         LoadVal(ms, "Hide From Tabs", Options::Misc::HideFromTabs);
         LoadVal(ms, "Hide Process", Options::Misc::HideProcess);
         LoadVal(ms, "Debug Log", Options::Misc::DebugLog);
         LoadVal(ms, "Show Certified", Options::Misc::ShowCertified);
+        LoadVal(ms, "BG Enabled", Options::Misc::ExteriumBGEnabled);
+        LoadVal(ms, "BG Particle Count", Options::Misc::ExteriumBGParticleCount);
+        LoadVal(ms, "BG Particle Shape", Options::Misc::ExteriumBGParticleShape);
+        LoadVal(ms, "BG Min Size", Options::Misc::ExteriumBGParticleMinSize);
+        LoadVal(ms, "BG Max Size", Options::Misc::ExteriumBGParticleMaxSize);
+        LoadVal(ms, "BG Min Speed", Options::Misc::ExteriumBGParticleMinSpeed);
+        LoadVal(ms, "BG Max Speed", Options::Misc::ExteriumBGParticleMaxSpeed);
+        LoadVal(ms, "BG Opacity", Options::Misc::ExteriumBGParticleOpacity);
+        LoadVal(ms, "BG Glow", Options::Misc::ExteriumBGParticleGlow);
+        LoadVal(ms, "BG Use Accent", Options::Misc::ExteriumBGUseAccent);
+        LoadFloatArray(ms, "BG Color", Options::Misc::ExteriumBGColor);
         if (ms.contains("Process Name"))
         {
             std::string pn = ms["Process Name"].get<std::string>();
@@ -1664,6 +1833,18 @@ inline void ApplyConfigJson(const json& data)
         LoadVal(p3, "EditMode", Options::Preview3D::EditMode);
         LoadVal(p3, "Scale", Options::Preview3D::Scale);
         LoadVal(p3, "Skeleton", Options::Preview3D::Skeleton);
+    }
+
+    if (data.is_object() && data.contains("ModelChanger"))
+    {
+        const auto& mc = data["ModelChanger"];
+        LoadVal(mc, "Enabled", Options::ModelChanger::Enabled);
+        LoadVal(mc, "Model", Options::ModelChanger::Model);
+        LoadVal(mc, "Scale", Options::ModelChanger::Scale);
+        LoadVal(mc, "YawOffset", Options::ModelChanger::YawOffset);
+        LoadVal(mc, "PitchOffset", Options::ModelChanger::PitchOffset);
+        LoadVal(mc, "FollowFacing", Options::ModelChanger::FollowFacing);
+        LoadVal(mc, "HideCharacter", Options::ModelChanger::HideCharacter);
     }
 
     if (data.is_object() && data.contains("Desync"))

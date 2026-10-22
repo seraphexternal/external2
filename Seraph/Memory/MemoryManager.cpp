@@ -140,16 +140,45 @@ HANDLE MemoryManager::openTransientHandle(bool forWrite) {
 	return OpenProcess(access, FALSE, processId);
 }
 
+void MemoryManager::closeReadHandle() {
+	if (cachedReadHandle && cachedReadHandle != INVALID_HANDLE_VALUE)
+		CloseHandle(cachedReadHandle);
+	cachedReadHandle = nullptr;
+	cachedReadHandlePid = 0;
+}
+
+HANDLE MemoryManager::readHandle() {
+	// Reuse the cached handle while it still belongs to the current target.
+	// Process ids are recycled, so the pid alone is not proof of validity, but
+	// a stale handle to a dead process fails the read harmlessly and the pid
+	// check catches re-attachment. Anything unexpected falls back to opening a
+	// fresh handle, so this can only ever be slower, never wrong.
+	if (cachedReadHandle && cachedReadHandlePid == processId)
+		return cachedReadHandle;
+
+	closeReadHandle();
+
+	if (processId <= 0)
+		return nullptr;
+
+	HANDLE h = OpenProcess(PROCESS_VM_READ, FALSE, processId);
+	if (!h || h == INVALID_HANDLE_VALUE)
+		return nullptr;
+
+	cachedReadHandle = h;
+	cachedReadHandlePid = processId;
+	return h;
+}
+
 
 void MemoryManager::readRaw(uintptr_t address, void* buffer, uintptr_t size) {
 	if (kernelReadRaw(address, buffer, size))
 		return;
 
-	HANDLE h = openTransientHandle(false);
+	HANDLE h = readHandle();
 	if (!h) return;
 
 	Luck_ReadVirtualMemory(h, reinterpret_cast<void*>(address), buffer, static_cast<ULONG>(size), nullptr);
-	CloseHandle(h);
 }
 
 bool MemoryManager::writeString(uintptr_t address, const std::string& value)
@@ -204,14 +233,17 @@ std::string MemoryManager::readString(uintptr_t address) {
 	char buffer[512];
 	ULONG bytesRead = 0;
 
-	// Prefer the kernel-driver path (ring 0); fall back to the direct syscall.
+	// Prefer the kernel-driver path (ring 0); fall back to the shared cached
+	// read handle. This used to call openTransientHandle, which created and
+	// destroyed a process handle around every single string read - names are
+	// read constantly (ESP labels, team and filter checks, every map scan
+	// node), so that was hundreds of OpenProcess/CloseHandle pairs per frame.
 	if (!kernelReadRaw(address, buffer, sizeof(buffer))) {
-		HANDLE h = openTransientHandle(false);
+		HANDLE h = readHandle();
 		if (!h)
 			return result;
 
 		Luck_ReadVirtualMemory(h, reinterpret_cast<void*>(address), buffer, sizeof(buffer), &bytesRead);
-		CloseHandle(h);
 	} else {
 		bytesRead = (ULONG)sizeof(buffer);
 	}
@@ -232,6 +264,9 @@ int32_t MemoryManager::getProcessId() {
 }
 
 void MemoryManager::setProcessId(int32_t newProcessId) {
+	// A different target invalidates the cached read handle.
+	if (newProcessId != processId)
+		closeReadHandle();
 	processId = newProcessId;
 }
 
@@ -244,6 +279,7 @@ void MemoryManager::setBaseAddress(uintptr_t newBaseAddress) {
 }
 
 void MemoryManager::closeProcess() {
+	closeReadHandle();
 	processId = 0;
 	baseAddress = 0;
 }

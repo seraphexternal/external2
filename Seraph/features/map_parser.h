@@ -36,6 +36,7 @@
 #include "../rbx/globals/options.h"
 #include "../rbx/offsets.h"
 #include "../rbx/math/math.h"
+#include "pf_diag.h"
 
 namespace MapParser
 {
@@ -196,17 +197,33 @@ namespace MapParser
                 continue;
             }
 
-            // Skip World / Terrain (Terrain uses a voxel grid, not part primitives)
-            if (cls == "Terrain" || cls == "WorldRoot") continue;
+            // Skip Terrain (it uses a voxel grid, not part primitives) and any
+            // *nested* WorldRoot container. Note this must not match the scan
+            // root: Workspace derives from WorldRoot, so a naive class test
+            // here would skip the entire map on the first iteration.
+            if (cls == "Terrain" || cls == "WorldRoot")
+                continue;
 
-            // Skip player Models entirely — their body parts are not static map
-            // geometry, and we don't want to ray-cast-against our own limbs.
+            // Skip player Models — their body parts are not static map geometry
+            // and must not be ray-cast against. The test must NOT be "contains a
+            // Humanoid": a map model legitimately contains dummy rigs, corpses or
+            // preview characters, and rejecting on a Humanoid threw the whole map
+            // away (KanjiMap / UndergrowthMap), leaving the scan with decoration
+            // only and wall check with nothing to hit. Only skip a Model that is
+            // a *character*: it has a Humanoid AND a HumanoidRootPart, which is
+            // the rig shape players and NPCs use, while map geometry does not.
             if (cls == "Model")
             {
                 try
                 {
-                    if (current.FindFirstChildWhichIsA("Humanoid").address != 0)
+                    const bool hasHumanoid =
+                        current.FindFirstChildWhichIsA("Humanoid").address != 0;
+                    const bool hasRoot =
+                        current.FindFirstChild("HumanoidRootPart").address != 0;
+                    if (hasHumanoid && hasRoot)
+                    {
                         continue;
+                    }
                 }
                 catch (...) { /* fall through if class-read fails */ }
             }
@@ -218,14 +235,40 @@ namespace MapParser
                 {
                     const uintptr_t primitive =
                         Memory->read<uintptr_t>(current.address + Offsets::BasePart::Primitive);
-                    if (!primitive) { /* descend anyway */ }
-                    else
+                    if (primitive)
                     {
                         const uint8_t flags =
                             Memory->read<uint8_t>(primitive + Offsets::Primitive::Flags);
-                        if ((flags & Offsets::PrimitiveFlags::CanCollide) != 0)
-                        {
-                            const Vectors::Vector3 pos =
+
+                        // Which flag bits actually distinguish solid world
+                        // geometry from decoration is not reliably "CanCollide".
+                        // Live evidence from a map that failed (Kanji/Undergrowth):
+                        // the world meshes report flags=0x82 / 0x02 -- Anchored set,
+                        // CanQuery and CanCollide clear -- while the parts that do
+                        // pass are stray props. Roblox's own raycasts test CanQuery,
+                        // but this game's map meshes have it clear, so keying the
+                        // occluder set on those bits rejects the entire map.
+                        //
+                        // The wall check only needs "is there geometry between me
+                        // and them", and the ray is tested against a bounding box
+                        // built from the part's own size/rotation, so including a
+                        // non-collidable prop costs at worst a false "blocked". The
+                        // flags are therefore used only to drop parts that are
+                        // explicitly non-solid AND non-queryable AND small, which
+                        // keeps decorations out while keeping world geometry in.
+                        // Walls on these maps report ONLY Anchored (live:
+                        // flags=0x82, both CanQuery and CanCollide clear), so
+                        // Anchored is required to keep world geometry. It is also
+                        // set on decorative seam strips, which cannot be told
+                        // apart by flags or by size — hence the name exclusion
+                        // applied further down.
+                        const bool isSolid =
+                            (flags & Offsets::PrimitiveFlags::CanQuery) != 0 ||
+                            (flags & Offsets::PrimitiveFlags::CanCollide) != 0 ||
+                            (flags & Offsets::PrimitiveFlags::Anchored) != 0;
+
+                        if (isSolid)
+                        {                            const Vectors::Vector3 pos =
                                 Memory->read<Vectors::Vector3>(primitive + Offsets::Primitive::Position);
                             const Vectors::Vector3 sz =
                                 Memory->read<Vectors::Vector3>(primitive + Offsets::Primitive::Size);
@@ -238,16 +281,65 @@ namespace MapParser
                             // Skip tiny ornaments (trims, studs) to keep the cache bounded.
                             const float maxSide =
                                 std::fmax(sz.x, std::fmax(sz.y, sz.z));
-                            if (maxSide >= 0.5f && transparency < 0.92f)
+
+                            // Reject backdrop-scale geometry. A skybox/skydome or
+                            // far backdrop is one enormous mesh (live: max=1708
+                            // and 1816) that encloses the whole map, so every ray
+                            // starts inside it and reports blocked in all
+                            // directions regardless of what is actually between
+                            // the camera and the target. Treating those as
+                            // occluders is worse than missing a wall: it denies
+                            // every target everywhere.
+                            const bool backdropscale = maxSide > 1024.0f;
+
+                            // Reject the whole-map enclosure case explicitly: a part
+                            // whose every side is map-sized is a container, not a
+                            // wall between two points.
+                            const float minSide = std::fmin(sz.x, std::fmin(sz.y, sz.z));
+                            const bool enclosure = minSide > 512.0f;
+
+                            // Seam/backer strips are authoring helpers: thin
+                            // geometry laid flush along wall joins and floor
+                            // edges to hide gaps between modular map pieces. They
+                            // are not obstacles, but they sit exactly where a
+                            // line of sight grazes a surface, so they blocked 82%
+                            // of all rays in the live log (seamfiller alone 312 of
+                            // 495). Excluded by name because no size test can
+                            // separate them from a thin real wall.
+                            std::string nameProbe;
+                            try { nameProbe = current.Name(); }
+                            catch (...) { nameProbe.clear(); }
+                            std::transform(nameProbe.begin(), nameProbe.end(), nameProbe.begin(),
+                                           [](unsigned char c) { return std::tolower(c); });
+                            const bool seamHelper =
+                                nameProbe.find("seamfiller") != std::string::npos ||
+                                nameProbe.find("seambacker") != std::string::npos ||
+                                nameProbe.find("seam_") != std::string::npos;
+
+                            // Ground/surface volumes and pure decoration are not
+                            // obstacles. A "grass"/"dirt" volume two studs under
+                            // the player is the surface being stood on, and a
+                            // "detail"/"trim" piece is a decorative copy flush
+                            // with a real block. Both sit exactly where a line of
+                            // sight starts, so they dominate false blocks.
+                            const bool groundOrDecor =
+                                nameProbe.find("grass") != std::string::npos ||
+                                nameProbe.find("dirt") != std::string::npos ||
+                                nameProbe.find("detail_") != std::string::npos;
+
+                            // A part thinner than this in its smallest dimension
+                            // is a plate: a floor, a stair tread, a trim strip.
+                            // A ray grazing one is not "passing through a wall".
+                            const bool plateThin = minSide < 0.75f;
+
+                            if (!backdropscale && !enclosure && !seamHelper &&
+                                !groundOrDecor && !plateThin &&
+                                maxSide >= 0.5f && transparency < 0.92f)
                             {
                                 const sCFrame rc =
                                     Memory->read<sCFrame>(primitive + Offsets::Primitive::Rotation);
 
-                                std::string lowerName;
-                                try { lowerName = current.Name(); }
-                                catch (...) { lowerName.clear(); }
-                                std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(),
-                                               [](unsigned char c) { return std::tolower(c); });
+                                std::string lowerName = nameProbe;
 
                                 ParsedPart pp{};
                                 pp.position = pos;
@@ -292,7 +384,14 @@ namespace MapParser
 
         {
             std::unique_lock<std::shared_mutex> lock(m_mutex);
-            m_cached_parts = std::move(temp);
+            // Never let a scan that found nothing wipe a cache that still has
+            // usable geometry. A transient read failure (or a map whose parts
+            // are all filtered by the collision test) would otherwise replace a
+            // working part list with an empty one, which makes the raycast
+            // report "nothing blocks anything" and silently disables wallcheck.
+            // An empty result is only published if we had nothing to begin with.
+            if (!temp.empty() || m_cached_parts.empty())
+                m_cached_parts = std::move(temp);
         }
         m_last_scan_ms.store(GetTickCount64());
     }
@@ -315,6 +414,13 @@ namespace MapParser
     {
         std::shared_lock<std::shared_mutex> lock(m_mutex);
         return !m_cached_parts.empty();
+    }
+
+    // Diagnostics only: how many collidable parts the last scan published.
+    inline size_t CachedPartCount()
+    {
+        std::shared_lock<std::shared_mutex> lock(m_mutex);
+        return m_cached_parts.size();
     }
 
     // Background worker. Detached once in main.cpp after VisualEngine resolves.
@@ -362,7 +468,10 @@ namespace MapParser
             toCenter.x * toCenter.x +
             toCenter.y * toCenter.y +
             toCenter.z * toCenter.z - projection * projection;
-        return dsq > part.radius_sq;
+        const float radius = part.radius * 1.05f;
+        const float distFromCenter = (toCenter.x * toCenter.x + toCenter.y * toCenter.y + toCenter.z * toCenter.z);
+        if (distFromCenter < radius * radius) return false; // inside, not blocked
+        return dsq > part.radius_sq * 1.05f * 1.05f;
     }
 
     inline bool RayVsOBB(
@@ -383,27 +492,101 @@ namespace MapParser
             part.size.x * 0.5f, part.size.y * 0.5f, part.size.z * 0.5f
         };
 
-        // Avoid div-by-zero by collapsing parallel axes to a "no hit" entry.
-        const float invX = (std::fabs(rd.x) > 1e-7f) ? (1.f / rd.x) : 1e30f;
-        const float invY = (std::fabs(rd.y) > 1e-7f) ? (1.f / rd.y) : 1e30f;
-        const float invZ = (std::fabs(rd.z) > 1e-7f) ? (1.f / rd.z) : 1e30f;
+        // Slab test. For an axis the ray is parallel to, the slab must be treated
+        // as EMPTY (no hit) when the origin lies outside it, and as always-hit
+        // only when the origin lies inside it. Scaling the bounds by 1e30 did the
+        // opposite: it widened tmin to -1e30 and tmax to +1e30, so a parallel axis
+        // made every box behave as if it were infinitely long, and a 5-stud cube
+        // would "intersect" a 275-stud ray far away from it. That is why the wall
+        // check only agreed with reality at point-blank range.
+        auto slab = [](float ro, float rd, float h, float& tmin, float& tmax) -> bool
+        {
+            if (std::fabs(rd) > 1e-7f)
+            {
+                const float inv = 1.f / rd;
+                float t1 = (-h - ro) * inv;
+                float t2 = (h - ro) * inv;
+                if (t1 > t2) std::swap(t1, t2);
+                tmin = std::fmax(tmin, t1);
+                tmax = std::fmin(tmax, t2);
+                return true;
+            }
+            // Parallel: only survives if the origin is within this slab.
+            return std::fabs(ro) <= h;
+        };
 
-        const float t1 = (-hs.x - ro.x) * invX;
-        const float t2 = ( hs.x - ro.x) * invX;
-        const float t3 = (-hs.y - ro.y) * invY;
-        const float t4 = ( hs.y - ro.y) * invY;
-        const float t5 = (-hs.z - ro.z) * invZ;
-        const float t6 = ( hs.z - ro.z) * invZ;
-
-        const float tmin = std::fmax(
-            std::fmin(t1, t2),
-            std::fmax(std::fmin(t3, t4), std::fmin(t5, t6)));
-        const float tmax = std::fmin(
-            std::fmax(t1, t2),
-            std::fmin(std::fmax(t3, t4), std::fmax(t5, t6)));
+        float tmin = -1e30f;
+        float tmax = 1e30f;
+        if (!slab(ro.x, rd.x, hs.x, tmin, tmax)) return false;
+        if (!slab(ro.y, rd.y, hs.y, tmin, tmax)) return false;
+        if (!slab(ro.z, rd.z, hs.z, tmin, tmax)) return false;
 
         if (tmax < 0.f || tmin > tmax) return false;
+
+        // Origin inside the box: the camera is standing in this part (the ground
+        // plane it is two studs above, a floor slab, a roof it is under). Such a
+        // part cannot occlude anything ahead, because "inside" is where the view
+        // already starts -- but the naive test returns tmin <= maxDist with tmin
+        // negative, which is always true, so the ground alone made every ray from
+        // every position report blocked. The live log showed this directly:
+        // approxEntry=-41 (centre behind the camera) and the remaining hits at
+        // frac=0.018-0.033 of the ray length, i.e. a couple of studs away.
+        // Treat origin-inside as NOT blocking.
+        if (tmin < 0.f)
+            return false;
+
         return tmin <= maxDist;
+    }
+
+    // Verbose copy of the OBB test that reports every intermediate value. Used
+    // only for the diagnostic below; the real test stays branch-light.
+    inline bool RayVsOBBDebug(
+        const Vectors::Vector3& origin,
+        const Vectors::Vector3& dir,
+        const ParsedPart& part,
+        float maxDist,
+        char* out,
+        size_t outSize)
+    {
+        const Vectors::Vector3 lo = {
+            origin.x - part.position.x,
+            origin.y - part.position.y,
+            origin.z - part.position.z
+        };
+        const Vectors::Vector3 ro = TransformLocal(lo, part);
+        const Vectors::Vector3 rd = TransformLocal(dir, part);
+        const Vectors::Vector3 hs = {
+            part.size.x * 0.5f, part.size.y * 0.5f, part.size.z * 0.5f
+        };
+        const float lenRd = std::sqrt(rd.x*rd.x + rd.y*rd.y + rd.z*rd.z);
+
+        float tmin = -1e30f, tmax = 1e30f;
+        auto slab = [](float ro_, float rd_, float h, float& tmn, float& tmx) -> bool
+        {
+            if (std::fabs(rd_) > 1e-7f)
+            {
+                const float inv = 1.f / rd_;
+                float t1 = (-h - ro_) * inv;
+                float t2 = ( h - ro_) * inv;
+                if (t1 > t2) std::swap(t1, t2);
+                tmn = std::fmax(tmn, t1);
+                tmx = std::fmin(tmx, t2);
+                return true;
+            }
+            return std::fabs(ro_) <= h;
+        };
+        const bool okx = slab(ro.x, rd.x, hs.x, tmin, tmax);
+        const bool oky = slab(ro.y, rd.y, hs.y, tmin, tmax);
+        const bool okz = slab(ro.z, rd.z, hs.z, tmin, tmax);
+
+        snprintf(out, outSize,
+            "ro=(%.2f,%.2f,%.2f) rd=(%.3f,%.3f,%.3f) |rd|=%.3f hs=(%.1f,%.1f,%.1f) "
+            "slabOk=(%d,%d,%d) tmin=%.2f tmax=%.2f maxDist=%.2f inside=%d verts=(%.1f,%.1f,%.1f)",
+            ro.x, ro.y, ro.z, rd.x, rd.y, rd.z, lenRd,
+            hs.x, hs.y, hs.z, (int)okx, (int)oky, (int)okz,
+            tmin, tmax, maxDist, (int)(tmin < 0.f),
+            lo.x, lo.y, lo.z);
+        return true;
     }
 
     inline bool RayVsSphere(
@@ -576,6 +759,13 @@ namespace MapParser
              rd.y * part.size.z + rd.z * (-part.size.y));
 
         if (tmax < 0.f || tmin > tmax) return false;
+
+        // Origin-inside handling: see RayVsOBB. Without this the wedge reports a
+        // hit for any ray starting within it, which happens constantly.
+        // Treat origin-inside as NOT blocking; see RayVsOBB.
+        if (tmin < 0.f)
+            return false;
+
         return tmin <= maxDist;
     }
 
@@ -638,6 +828,11 @@ namespace MapParser
         }
 
         if (tmax < 0.f || tmin > tmax) return false;
+
+        // Origin-inside handling: see RayVsOBB.
+        if (tmin < 0.f)
+            return false;
+
         return tmin <= maxDist;
     }
 
@@ -684,8 +879,10 @@ namespace MapParser
         std::shared_lock<std::shared_mutex> lock(m_mutex);
         if (m_cached_parts.empty()) return true; // Fail-safe: cheat isn't useless while scan warms up.
 
-        for (const auto& part : m_cached_parts)
+        const size_t partCount = m_cached_parts.size();
+        for (size_t pi = 0; pi < partCount; ++pi)
         {
+            const auto& part = m_cached_parts[pi];
             if (IntersectsPart(part, start, dir, maxDist))
                 return false;
         }

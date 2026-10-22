@@ -109,9 +109,11 @@ bool PreviewRenderer::CreateShaders()
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
         { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
         { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,    0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "BLENDINDICES", 0, DXGI_FORMAT_R8G8B8A8_UINT,      0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "BLENDWEIGHT",  0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 36, D3D11_INPUT_PER_VERTEX_DATA, 0 },
     };
     if (SUCCEEDED(hr))
-        hr = m_Device->CreateInputLayout(layout, 3, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &m_IL);
+        hr = m_Device->CreateInputLayout(layout, 5, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &m_IL);
 
     vsBlob->Release();
     psBlob->Release();
@@ -122,6 +124,14 @@ bool PreviewRenderer::CreateShaders()
     cbd.Usage = D3D11_USAGE_DYNAMIC;
     cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-    return SUCCEEDED(m_Device->CreateBuffer(&cbd, nullptr, &m_CB));
+    if (FAILED(m_Device->CreateBuffer(&cbd, nullptr, &m_CB))) return false;
+
+    // Skeleton bone matrices (b1): MaxBones float4x4 + a float "has skin" flag.
+    D3D11_BUFFER_DESC bbd{};
+    bbd.ByteWidth = (UINT)(MaxBones * 64 + 16);
+    bbd.Usage = D3D11_USAGE_DYNAMIC;
+    bbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    bbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    return SUCCEEDED(m_Device->CreateBuffer(&bbd, nullptr, &m_BoneCB));
 }
 

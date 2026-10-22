@@ -7,6 +7,7 @@ namespace Options
 	{
 		inline bool HUDEditMode = false;
 		inline int MenuFont = 0; // index into the pre-loaded font array in renderer.cpp
+		inline float MenuFontSize = 14.0f; // base font size
 		inline bool FOVEnabled = false;
 		inline float FOV = 70.f;
 		inline bool CacheNPCs = false;
@@ -14,6 +15,17 @@ namespace Options
 		inline float KeybindListX = 20.0f;
 		inline float KeybindListY = 80.0f;
 		inline bool StreamProof = true;
+		inline bool MenuClickSound = true; // short UI tick on menu widget clicks
+		inline int MenuClickVolume = 25; // percent, applied as playback gain to the click sound
+		inline bool MenuClickEffect = true; // sparkle burst drawn at the cursor on menu clicks
+		inline float MenuClickEffectColor[3] = { 0.94f, 0.94f, 0.94f }; // neutral soft white
+		// ── Roblox client / offsets upkeep ──
+		// Offsets are only valid for the build they were dumped from, so the
+		// cheat keeps itself in step with the live client instead of relying
+		// on a manual re-dump. All three are best-effort.
+		inline bool AutoUpdateOffsets = true;  // fetch the dump for the client that is running
+		inline bool AutoUpdateRoblox = true;   // run the Roblox installer when the client is behind
+		inline bool AutoLaunchRoblox = true;   // start Roblox if it is not already running
 		inline int MenuKey = VK_RSHIFT;
 		inline bool DebugLog = false;
 		inline float ESPPreviewOffsetX = 0.0f;
@@ -34,7 +46,7 @@ namespace Options
 		inline char TargetPlayer[32] = "";
 		inline bool ExplorerEnabled = false;
 		inline bool PlayerListEnabled = false;
-		inline float MenuScale = 1.0f;
+		inline float MenuScale = 0.9f;
 		inline bool ThirdPerson = false;
 
 		// ── Stealth ──
@@ -43,6 +55,30 @@ namespace Options
 		inline char ProcessName[64] = "fleasion"; // benign-looking spawned process name
 		inline char ExclusionPath[256] = ""; // folder the trace-wiper must never touch
 		inline bool ShowCertified = true;    // "certified yn" watermark in the menu footer
+
+		// ── Animated Background (Exterium) ──
+		inline bool ExteriumBGEnabled = true;
+		inline int ExteriumBGParticleCount = 26;
+		inline int ExteriumBGParticleShape = 0; // 0 = Square, 1 = Circle, 2 = Triangle, 3 = Diamond
+		inline float ExteriumBGParticleMinSize = 6.0f;
+		inline float ExteriumBGParticleMaxSize = 23.0f;
+		inline float ExteriumBGParticleMinSpeed = 35.0f;
+		inline float ExteriumBGParticleMaxSpeed = 90.0f;
+		inline float ExteriumBGParticleOpacity = 0.09f;
+		inline bool ExteriumBGParticleGlow = true;
+		inline bool ExteriumBGUseAccent = true;
+		inline float ExteriumBGColor[3] = { 0.340f, 0.560f, 1.000f };
+
+		// Panic button - deletes all Seraph/Fleasion files and registry entries
+		inline bool PanicButtonPressed = false;
+
+		// Shader background effect index (see shader::BackgroundId).
+		// Shared by the content panel and the sidebar.
+		// 7 = BG_LIQUID_ETHER. Mirrors the enum in
+		// overlay/shaders/ShaderBackgrounds.h, which is not included here to
+		// avoid pulling the shader classes into every options consumer.
+		inline int ShaderBackground = 7;
+		inline float ShaderBackgroundOpacity = 0.55f;
 	}
 	// Animation Changer (Misc tab). Drives the local character's "Animate"
 	// controller by rewriting each slot's Animation instances to a chosen
@@ -91,7 +127,7 @@ namespace Options
 		inline int ToggleType = 1;
 		inline bool Toggled = true;
 		
-		inline bool TeamCheck = false;
+		inline bool TeamCheck = true;
 		inline bool Box = true; // master enable for Box ESP
 		inline int BoxType = 1; // 1 = Normal Box, 2 = 3D Box
 		inline bool BoxFill = false;
@@ -180,6 +216,13 @@ namespace Options
 		inline float LodLineThickness = 2.0f;
 		inline float LodLineColor[3] = { 1.0f, 0.0f, 0.0f };
 
+		// Aimview: shows the LOD line only for a single selected player, and
+		// spectates them (camera follows their HumanoidRootPart). When enabled
+		// with a target, LodLineVisual::Render restricts itself to that player;
+		// when disabled, the LOD line is drawn for everyone (standalone visual).
+		inline bool AimView = false;
+		inline std::string AimViewTarget;
+
 		inline bool Arrows = false;
 		inline float ArrowSize = 12.0f;
 		inline float ArrowRadius = 200.0f;
@@ -248,7 +291,7 @@ namespace Options
 		inline bool TargetHudOutline = true;
 		inline int TargetHudBarStyle = 0;
 		inline int TargetHudBarDirection = 0;
-		inline bool TeamCheck = false;
+		inline bool TeamCheck = true;
 		inline bool DownedCheck = false;
 		inline bool WallCheck = true;
 		inline float Range = 150.f;
@@ -295,12 +338,57 @@ namespace Options
 		inline bool SilentAimCamera = true; // rotate camera
 		inline bool SilentAimMouse = false; // move mouse
 		inline bool SilentAimRealCursor2 = true; // use real cursor
-		inline int SilentAimTargetBone = 0; // 0=Head, 1=Torso, 2=UpperTorso, 3=LowerTorso
+		// Index into the raycast "Target Part" combo:
+		// { "Head", "UpperTorso", "LowerTorso", "HumanoidRootPart" }
+		inline int SilentAimTargetBone = 0;
 		inline bool SilentAimTeamCheck = true;
 		inline bool SilentAimPrediction = false;
 		inline float SilentAimPredictionX = 1.0f;
 		inline float SilentAimPredictionY = 1.0f;
 		inline int SilentAimMethod = 0; // 0=Camera, 1=Mouse, 2=Both
+
+		// How the shot is actually delivered.
+		// 0 = Viewport offset (what Rivals honours), 1 = camera rotation,
+		// 2 = both.
+		// The camera rotation field is recomputed by Roblox from the camera
+		// subject every frame, so a rotation write is only sampled reliably
+		// some frames - that is what made hits intermittent. The viewport
+		// offset survives, because the shot is cast through it.
+		inline int SilentAimDelivery = 0;
+
+		// Hit mode is deliberately separate from Aimbot::HitboxMode /
+		// Aimbot::ClosestPart. Those drive the main aimbot and are overwritten
+		// every frame by ApplyWeaponProfile(), so sharing them made silent aim
+		// ignore the selected part whenever a profile was set to Closest Part.
+		inline int SilentAimHitMode = 0; // 0=Fixed Part, 1=Closest Part, 2=Adaptive
+
+		// Require line of sight to the selected part before shooting at it.
+		// Off by default: IsMapBlocking is not tuned for Rivals geometry and
+		// when it reports everything as covered it rejects every candidate,
+		// which stops silent aim acquiring targets at all.
+		inline bool SilentAimRequireVisible = false;
+
+		// Sticky targeting: hold the current target instead of re-picking the
+		// nearest one every frame, which stops the lock flipping mid-burst.
+		inline bool SilentAimSticky = true;
+		inline float SilentAimSwitchDelay = 0.f;
+
+		// Prediction. Set ProjectileSpeed > 1 to use real time-of-flight
+		// (distance / speed); leave at 0 to fall back to the PredictionX/Y
+		// velocity multipliers above.
+		inline float SilentAimProjectileSpeed = 0.f;
+		inline bool SilentAimDropCompensation = false;
+
+		// Rivals spawns bullets at the weapon tip, not the camera. Blending the
+		// aim origin from the camera toward the muzzle (0 = camera only,
+		// 1 = full muzzle) removes the near-range parallax that otherwise
+		// sends shots past a correctly selected part.
+		inline float SilentAimMuzzleComp = 0.f;
+
+		// Only apply the aim while firing, holding it for HoldMs afterwards so
+		// the final shot of a burst still lands.
+		inline bool SilentAimFireOnly = false;
+		inline float SilentAimHoldMs = 60.f;
 
 		// Aim Info: draws a small HUD with the current target's name, distance,
 		// health and the body part that would be hit.
@@ -320,7 +408,12 @@ namespace Options
 		inline bool FlickbotTeamCheck = true;
 
 		inline float FOVColor[3] = {1.0f, 1.0f, 1.0f}; // White color
-		inline float FOVFillColor[4] = {1.0f, 1.0f, 1.0f, 0.1f}; // White with transparency
+		inline float FOVFillColor[4] = {1.0f, 1.0f, 1.0f, 0.1f}; // White with transparency (low alpha for transparency)
+		inline bool FOVFillGradient = false;
+		inline int FOVFillType = 0; // 0 = Vertical, 1 = Horizontal, 2 = Four-Corner
+		inline bool FOVFillGradientRotate = false;
+		inline float FOVFillTopColor[4] = {0.3f, 0.6f, 1.0f, 0.15f};
+		inline float FOVFillBottomColor[4] = {0.1f, 0.3f, 0.8f, 0.05f};
 		inline float FOVThickness = 1.0f;
 		
 		inline int TargetBone = 0;
@@ -376,8 +469,8 @@ namespace Options
 	}
 	namespace Triggerbot
 	{
-		inline int TriggerbotKey = 0x2D; // Insert key
-		inline int ToggleType = 2; // 0 = Hold, 1 = Toggle, 2 = Always On
+		inline int TriggerbotKey = 0x02; // Right Mouse Button (RMB)
+		inline int ToggleType = 0; // 0 = Hold, 1 = Toggle, 2 = Always On
 
 		inline bool Enabled = false;
 		inline bool TeamCheck = false;
@@ -389,6 +482,15 @@ namespace Options
 		inline bool Prediction = false;
 		inline float PredictionX = 1.0f;
 		inline float PredictionY = 1.0f;
+		
+		// 0 = FOV circle (legacy), 1 = Hitbox (part-based). Hitbox fires when
+		// the crosshair is over the target's real projected hitbox, no Range
+		// cap; FOV is the legacy radius check with its own settings.
+		inline int Method = 1;
+		// Hitbox method target: 0 = Head, 1 = Torso, 2 = HumanoidRootPart,
+		// 3 = Closest Part.
+		inline int TargetPart = 3;
+		inline float PartMargin = 2.f; // px of forgiveness around hitboxes
 		
 		inline bool AdvancedFOV = false;
 		inline bool ShowAdvancedFOV = false;
@@ -432,25 +534,33 @@ namespace Options
 		
 		inline bool Toggled = false;
 	}
-	namespace Ragebot
-	{
-		inline bool Enabled = false;
-		inline int RagebotKey = 0;
-		inline int ToggleType = 0;
-		inline bool TeamCheck = false;
-		inline bool DownedCheck = false;
-		inline bool WallCheck = true;
-		inline float Range = 150.f;
-		inline float FOV = 180.f;
-		inline float Smoothness = 0.5f;
-		inline int TargetBone = 0;
-		inline bool Prediction = false;
-		inline float PredictionX = 1.0f;
-		inline float PredictionY = 1.0f;
-		inline bool AutoFire = true;
-		inline int FireRate = 80;
-		inline bool Toggled = false;
-	}
+namespace Ragebot
+{
+    inline bool Enabled = false;
+    inline int RagebotKey = 0;
+    inline int ToggleType = 0;
+    inline bool TeamCheck = false;
+    inline bool DownedCheck = false;
+    inline bool WallCheck = true;
+    inline float Range = 150.f;
+    inline float FOV = 180.f;
+    inline float Smoothness = 0.5f;
+    inline int TargetBone = 0;
+    inline bool Prediction = false;
+    inline float PredictionX = 1.0f;
+    inline float PredictionY = 1.0f;
+    inline bool AutoFire = true;
+    inline int FireRate = 80;
+    inline int TargetPriority = 0;
+
+    inline bool HitChanceEnabled = true;
+    inline float MinHitChance = 75.0f;
+    inline bool DoubleTap = false;
+    inline int DoubleTapDelay = 50;
+    inline float MinDamage = 25.0f;
+
+    inline bool Toggled = false;
+}
 	namespace Macro
 	{
 		inline int MacroKey = 0;
@@ -652,28 +762,29 @@ inline bool Enabled = true;
 		inline int  BhopKey  = 0;
 	}
 
-	namespace Rage
-	{
-		// Behaviour shared by the Rage tab. The "real you" visually orbits the
-		// locked target while the actual character is free to walk around;
-		// meanwhile an auto-kill keeps damaging the target from the orbit point.
-		inline bool Enabled = false;          // master toggle for the rage kill/orbit loop
-		inline int  RageKey = 0;              // hold key to engage; 0 = always on when Enabled
-		inline int  ToggleType = 2;          // 0 = Hold, 1 = Toggle, 2 = Always On
-		inline bool Toggled = false;
+namespace Rage
+{
+    // Behaviour shared by the Rage tab. The "real you" visually orbits the
+    // locked target while the actual character is free to walk around;
+    // meanwhile an auto-kill keeps damaging the target from the orbit point.
+    inline bool Enabled = false;          // master toggle for the rage kill/orbit loop
+    inline int  RageKey = 0;              // hold key to engage; 0 = always on when Enabled
+    inline int  ToggleType = 2;          // 0 = Hold, 1 = Toggle, 2 = Always On
+    inline bool Toggled = false;
 
-		inline float OrbitRadius = 4.0f;     // how far the orbiting "you" sits from the target
-		inline float OrbitSpeed = 3.0f;      // orbit angular speed
-		inline bool  KillOnOrbit = true;      // auto-kill the target while orbiting
-		inline bool  AutoKillAim = true;      // snap camera/aim at the target while killing
-		inline int   TargetMode = 0;          // 0 = aimed-at/closest, 1 = by name
-		inline char  TargetPlayer[32] = "";
+    inline float OrbitRadius = 4.0f;     // how far the orbiting "you" sits from the target
+    inline float OrbitSpeed = 3.0f;      // orbit angular speed
+    inline float OrbitHeight = 0.0f;     // vertical offset of orbit ring
+    inline bool  KillOnOrbit = true;      // auto-kill the target while orbiting
+    inline bool  AutoKillAim = true;      // snap camera/aim at the target while killing
+    inline int   TargetMode = 0;          // 0 = aimed-at/closest, 1 = by name
+    inline char  TargetPlayer[32] = "";
 
-		inline bool  ShowGhost = true;        // draw the orbiting "you" as a ghost
-		inline float GhostColor[3] = { 1.0f, 0.2f, 0.2f };
-		inline float GhostAlpha = 0.55f;
-		inline bool  ShowGhostLine = true;    // line from real you to ghost
-	}
+    inline bool  ShowGhost = true;        // draw the orbiting "you" as a ghost
+    inline float GhostColor[3] = { 1.0f, 0.2f, 0.2f };
+    inline float GhostAlpha = 0.55f;
+    inline bool  ShowGhostLine = true;    // line from real you to ghost
+}
 
 	namespace VoidHide
 	{
@@ -727,6 +838,7 @@ inline bool Enabled = true;
 		inline bool IgnoreSmoke = false;
 		inline bool IgnoreFlash = false;
 		inline bool AntiKatana = false;
+		inline bool KatanaAlert = false;
 	}
 
 	namespace RivalsSkinChanger
@@ -936,10 +1048,17 @@ inline bool Enabled = true;
 		bool StickyAim = false;
 		bool SilentAim = false;
 		int SilentAimMode = 0;           // 0=camera, 1=mouse spoof
-		int TargetBone = 0;              // 0=Head, 1=Torso, 2=UpperTorso, 3=LowerTorso
+		// Index into the profile "Target Bone" combo:
+		// { "Head", "Torso", "Upper Torso", "Lower Torso" }
+		// ApplyWeaponProfile() translates this onto the aimbot's 8-entry enum.
+		int TargetBone = 0;
+		// 0=Fixed Part, 1=Closest Part, 2=Adaptive. Kept apart from ClosestPart
+		// (which drives the main aimbot) so a profile cannot silently discard
+		// the selected part for silent aim.
+		int SilentAimHitMode = 0;
 		bool IgnoreJump = false;
 		float JumpThreshold = 20.0f;
-		int ClosestPart = 0;             // 0=Fixed Bone, 1=Closest Part
+		int ClosestPart = 0;             // 0=Fixed Bone, 1=Closest Part (main aimbot)
 	};
 
 	namespace WeaponProfiles
@@ -950,4 +1069,138 @@ inline bool Enabled = true;
 		inline int MaxProfiles = 10;
 		inline std::string CurrentWeapon;    // manually selected current weapon (Rivals doesn't expose it as a Tool)
 	}
+}
+
+// ── Anti-katana firing suppressor ────────────────────────────────────
+// Rivals katana deflects bullets back at the shooter. Besides simply skipping
+// katana-wielding targets during target selection, this helper also stops a
+// burst that is ALREADY in progress: the moment an enemy pulls a katana it
+// releases a held fire button (MOUSEEVENTF_LEFTUP) so hold-to-fire / silent
+// hold / kill-orbit auto-fire really halt instead of just no *new* clicks
+// being injected. Returns true while firing should be suppressed.
+inline bool AntiKatanaFiringBlocked()
+{
+    static bool wasKatana = false;
+    const bool katana = Options::Rivals::AntiKatana && AnyRivalsKatanaUser();
+
+    if (katana && !wasKatana)
+    {
+        if (GetAsyncKeyState(VK_LBUTTON) & 0x8000)
+        {
+            INPUT up = {};
+            up.type = INPUT_MOUSE;
+            up.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+            SendInput(1, &up, sizeof(INPUT));
+        }
+    }
+    wasKatana = katana;
+    return katana;
+}
+
+namespace Options
+{
+    namespace ModelChanger
+    {
+        inline bool Enabled = false;
+        // Index into the model list discovered from the Models folder (the built-in
+        // Roblox / TungTung / Mario models plus any .glb/.obj you drop in yourself).
+        // See ModelChanger::GetModelList().
+        inline int Model = 0;
+        inline float Scale = 3.0f;       // size multiplier over the character's screen box
+        inline float YawOffset = 0.0f;   // degrees; corrects a model whose default facing is wrong
+        inline float PitchOffset = 0.0f; // degrees; corrects a model that lies down (wrong up axis)
+        inline bool FollowFacing = true; // turn the model with the player's look direction
+        inline bool HideCharacter = true; // hide the local character's parts so only the model shows
+        inline bool Animate = true;       // mirror the player: pose the model from the character's real parts (features/player_mirror.h)
+        inline bool UseOrthographic = true; // Use orthographic projection for consistent model size
+
+        // Emotes (skeletal animation for rigged models). -1 = none playing; the
+        // index maps to EmoteSystem::EmoteManager. See its built-in emote list.
+        inline bool  EmoteEnabled = true;
+        inline int   Emote = -1;
+        inline float EmoteSpeed = 1.0f;
+
+        // Game profile integration (per-PlaceId configs / dumped asset ids).
+        inline bool UseGameProfile = false;
+        inline bool GameProfileAutoLoad = true;
+        inline bool GameProfileUseAssetIds = false;
+        inline bool GameProfileAssetESP = true;
+        inline bool GameProfileAssetAimbot = true;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Reconstructed option declarations
+// --------------------------------------------------------------------
+// options.h was overwritten (restored to the last commit) on 2026-10-16 and
+// lost a batch of declarations that several in-progress features still read.
+// These are re-added here with types inferred from their call sites so the
+// project compiles again. Defaults are best-effort; tweak as needed.
+// ─────────────────────────────────────────────────────────────────────────
+namespace Options
+{
+    namespace Music
+    {
+        inline bool  Miniplayer     = false;
+        inline float MiniplayerX    = 20.0f;
+        inline float MiniplayerY    = 20.0f;
+        inline float MiniplayerSize = 1.0f;   // clamped to 0.7 .. 1.6 at draw time
+    }
+
+    namespace Misc
+    {
+        inline bool ServerBrowserEnabled = false;
+
+        // Media / playback hotkeys (VK codes; 0 = unbound).
+        inline int  MediaPlayPauseKey = 0;
+        inline int  MediaNextKey      = 0;
+        inline int  MediaPrevKey      = 0;
+        inline int  MediaStopKey      = 0;
+        inline int  MediaToggleType   = 2;   // 0 = Hold, 1 = Toggle, 2 = Always On
+        inline bool MediaToggled      = false;
+    }
+
+    namespace ESP
+    {
+        inline bool  Rank                   = false;
+        inline bool  Level                  = false;
+        inline float RankIconSize           = 16.0f;
+        inline bool  RankIconBackground     = true;
+        inline bool  TabList                = false;
+        inline int   TabListKey             = 0;
+        inline int   TabListToggle          = 2;   // 0 = Hold, 1 = Toggle, 2 = Always On
+        inline float BoxFillOpacity         = 0.5f;
+        inline bool  SkeletonVisibilityColor = false;
+    }
+
+    namespace Aimbot
+    {
+        inline float FOVFillOpacity    = 0.5f;
+        inline bool  SilentAimFastHold = false;
+        inline bool  SilentAimHoldLMB  = false;
+        inline float TargetHudScale    = 1.0f;
+        inline float ProjectileSpeed   = 0.0f;  // studs/sec; 0 disables leading
+    }
+
+    namespace World
+    {
+        // In-game world weather (features/worldweather.h + World tab UI).
+        // Distinct from the flat Options::Weather menu-background effect.
+        namespace Weather
+        {
+            inline bool  Enabled       = false;
+            inline int   Type          = 0;        // 0 = snow, 1 = rain
+            inline float Intensity     = 150.0f;   // particle count
+            inline float Speed         = 1.0f;     // vertical fall speed multiplier
+            inline float Wind          = 0.0f;     // horizontal drift, negative = left
+            inline bool  Haze          = false;    // distance fog / haze
+            inline float HazeColor[3]  = { 0.78f, 0.82f, 0.88f };
+            inline float SnowSize      = 1.8f;
+            inline float SnowColor[3]  = { 1.0f, 1.0f, 1.0f };
+            inline float RainThickness = 1.4f;
+            inline float RainStreak    = 0.03f;
+            inline float RainColor[3]  = { 0.65f, 0.75f, 0.95f };
+            inline float SplashColor[3] = { 0.80f, 0.86f, 0.95f };
+        }
+    }
 }

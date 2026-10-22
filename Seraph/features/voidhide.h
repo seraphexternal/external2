@@ -138,11 +138,17 @@ inline void VoidHideLoop()
             Vectors::Vector3 currentPos = Memory->read<Vectors::Vector3>(primitive + Offsets::Primitive::Position);
             Vectors::Vector3 voidPos(currentPos.x + 1e9f, currentPos.y + 1e9f, currentPos.z + 1e9f);
 
-            for (int i = 0; i < 5000; i++)
+            // Hold the void position with a write per ms for ~40ms rather than
+            // 5000 back-to-back driver writes — the game only recomputes
+            // position on its ~16ms physics step, so the burst just saturated
+            // the shared IO mutex while barely improving hold strength.
+            const auto holdEnd = std::chrono::steady_clock::now() + std::chrono::milliseconds(40);
+            do
             {
                 if (!active) break;
                 Memory->write<Vectors::Vector3>(primitive + Offsets::Primitive::Position, voidPos);
-            }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } while (Globals::running && std::chrono::steady_clock::now() < holdEnd);
 
             g_VoidHideWasActive = true;
         }
@@ -168,11 +174,17 @@ inline void VoidHideLoop()
                         uintptr_t primitive = Memory->read<uintptr_t>(hrp.address + Offsets::BasePart::Primitive);
                         if (primitive)
                         {
-                            for (int i = 0; i < 10000; i++)
+                            // Restore with 1ms-spaced writes over ~40ms instead
+                            // of 10000 back-to-back (20k IOCTLs) — enough to
+                            // win the physics steps without stalling every
+                            // other thread on the shared IO mutex.
+                            const auto restoreEnd = std::chrono::steady_clock::now() + std::chrono::milliseconds(40);
+                            do
                             {
                                 Memory->write<Vectors::Vector3>(primitive + Offsets::Primitive::Position, g_VoidHideLastPos);
                                 Memory->write<Vectors::Vector3>(primitive + Offsets::Primitive::AssemblyLinearVelocity, Vectors::Vector3(0, 0, 0));
-                            }
+                                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                            } while (Globals::running && std::chrono::steady_clock::now() < restoreEnd);
                         }
                     }
                 }

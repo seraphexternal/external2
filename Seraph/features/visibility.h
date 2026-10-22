@@ -16,6 +16,7 @@
 #include "../overlay/utils/W2S.h"
 #include "../overlay/imgui/imgui.h"
 #include "map_parser.h"
+#include "pf_diag.h"
 
 namespace Visibility
 {
@@ -90,8 +91,30 @@ namespace Visibility
             return false;
 
         const uint8_t flags = Memory->read<uint8_t>(primitive + Offsets::Primitive::Flags);
-        if ((flags & Offsets::PrimitiveFlags::CanCollide) == 0)
+        // Walls on these maps report ONLY Anchored (live: flags=0x82), so
+        // Anchored is required. Decorative seam strips carry the same flags and
+        // are excluded by name below.
+        const bool solid =
+            (flags & Offsets::PrimitiveFlags::CanQuery) != 0 ||
+            (flags & Offsets::PrimitiveFlags::CanCollide) != 0 ||
+            (flags & Offsets::PrimitiveFlags::Anchored) != 0;
+        if (!solid)
             return false;
+
+        // Seam/backer authoring helpers lie flush along wall joins and are not
+        // obstacles. Excluded by name because they are indistinguishable from a
+        // thin real wall by size alone.
+        {
+            std::string nm;
+            try { nm = part.Name(); }
+            catch (...) { nm.clear(); }
+            std::transform(nm.begin(), nm.end(), nm.begin(),
+                           [](unsigned char c) { return std::tolower(c); });
+            if (nm.find("seamfiller") != std::string::npos ||
+                nm.find("seambacker") != std::string::npos ||
+                nm.find("seam_") != std::string::npos)
+                return false;
+        }
 
         const Vectors::Vector3 position = Memory->read<Vectors::Vector3>(primitive + Offsets::Primitive::Position);
         if (position.Distance(cameraPos) > maxDistance)
@@ -100,7 +123,8 @@ namespace Visibility
         return true;
     }
 
-    inline void TryAddOccluder(const RobloxInstance& part, const Vectors::Vector3& cameraPos, float maxDistance)
+    inline void TryAddOccluder(const RobloxInstance& part, const Vectors::Vector3& cameraPos,
+                               float maxDistance, std::vector<Occluder>& out)
     {
         if (!CanPartOcclude(part, cameraPos, maxDistance))
             return;
@@ -109,6 +133,28 @@ namespace Visibility
         const Vectors::Vector3 position = Memory->read<Vectors::Vector3>(primitive + Offsets::Primitive::Position);
         const Vectors::Vector3 size = Memory->read<Vectors::Vector3>(primitive + Offsets::Primitive::Size);
 
+        // Backdrop/enclosure geometry must never become an occluder: a skydome
+        // encloses the camera, so every ray starts inside it and every target
+        // reads as blocked everywhere.
+        const float maxSide = std::fmax(size.x, std::fmax(size.y, size.z));
+        const float minSide = std::fmin(size.x, std::fmin(size.y, size.z));
+        if (maxSide > 1024.0f || minSide > 512.0f)
+            return;
+        // Thin plates (floors, treads, trim strips) and ground/surface volumes
+        // are not obstacles. See the map parser's scan filter for the evidence.
+        if (minSide < 0.75f)
+            return;
+        {
+            std::string nm;
+            try { nm = part.Name(); }
+            catch (...) { nm.clear(); }
+            std::transform(nm.begin(), nm.end(), nm.begin(),
+                           [](unsigned char c) { return std::tolower(c); });
+            if (nm.find("grass") != std::string::npos ||
+                nm.find("dirt") != std::string::npos ||
+                nm.find("detail_") != std::string::npos)
+                return;
+        }
         const float radius = (size.x + size.y + size.z) / 6.f;
         if (radius < 0.5f)
             return;
@@ -118,9 +164,10 @@ namespace Visibility
         entry.radius = radius;
         entry.modelAddress = GetModelAncestor(part.address);
 
-        std::lock_guard<std::mutex> lock(occluderMutex);
-        if (occluders.size() < 450)
-            occluders.push_back(entry);
+        // Each scan owns its own `out` vector, so no lock is needed here; the
+        // finished list is swapped in atomically under occluderMutex.
+        if (out.size() < 450)
+            out.push_back(entry);
     }
 
     inline void ScanTree(
@@ -128,26 +175,31 @@ namespace Visibility
         int depth,
         const Vectors::Vector3& cameraPos,
         float maxDistance,
-        uintptr_t skipCharacterModel)
+        uintptr_t skipCharacterModel,
+        std::vector<Occluder>& out)
     {
         if (!node.address || depth > 4)
             return;
 
         if (depth == 0 && node.Class() == "Model")
         {
-            if (node.address == skipCharacterModel || ModelContainsHumanoid(node))
+            // Skip only actual character rigs, not any model containing a
+            // Humanoid: a map model legitimately holds dummy rigs, and rejecting
+            // on a Humanoid drops the whole map from the occluder set.
+            const bool hasHumanoid = ModelContainsHumanoid(node);
+            const bool hasRoot = node.FindFirstChild("HumanoidRootPart").address != 0;            if (node.address == skipCharacterModel || (hasHumanoid && hasRoot))
                 return;
         }
 
         const std::string className = node.Class();
         if (IsPartClass(className))
-            TryAddOccluder(node, cameraPos, maxDistance);
+            TryAddOccluder(node, cameraPos, maxDistance, out);
 
         if (depth >= 4)
             return;
 
         for (const auto& child : node.GetChildren())
-            ScanTree(child, depth + 1, cameraPos, maxDistance, skipCharacterModel);
+            ScanTree(child, depth + 1, cameraPos, maxDistance, skipCharacterModel, out);
     }
 
     inline void RunOccluderScan()
@@ -160,6 +212,11 @@ namespace Visibility
         const float maxDistance = Options::ESP::VisibilityMaxDistance;
         const uintptr_t localCharacter = Globals::Roblox::LocalPlayer.Character().address;
 
+        // NOTE: the scan used to fill the *global* occluders vector and then
+        // overwrite it with this never-filled `collected`, so every finished
+        // scan threw its results away and the visibility test always ran
+        // against an empty list. ScanTree now collects into this vector, which
+        // is swapped in whole below.
         std::vector<Occluder> collected;
         collected.reserve(450);
 
@@ -167,7 +224,7 @@ namespace Visibility
         {
             const std::string cls = child.Class();
             if (cls == "Folder" || cls == "Model" || cls == "Terrain" || IsPartClass(cls))
-                ScanTree(child, 0, cameraPos, maxDistance, localCharacter);
+                ScanTree(child, 0, cameraPos, maxDistance, localCharacter, collected);
         }
 
         std::lock_guard<std::mutex> lock(occluderMutex);
@@ -249,7 +306,7 @@ namespace Visibility
         float distance,
         uintptr_t ignoreModelAddress)
     {
-        const float maxDistance = distance - 0.75f;
+        const float maxDistance = distance - 0.25f;
 
         if (MapParser::IsCacheReady())
         {
@@ -258,7 +315,8 @@ namespace Visibility
                 origin.y + delta.y * maxDistance,
                 origin.z + delta.z * maxDistance
             };
-            return !MapParser::IsVisible(origin, end, ignoreModelAddress);
+            const bool visible = MapParser::IsVisible(origin, end, ignoreModelAddress);
+            return !visible;
         }
 
         const float cullDistance = distance + 12.f;
@@ -272,46 +330,43 @@ namespace Visibility
             if (wallDist > cullDistance)
                 continue;
 
-            if (RayIntersectsSphere(origin, delta, wall.position, wall.radius + 0.35f, maxDistance))
+            if (RayIntersectsSphere(origin, delta, wall.position, wall.radius + 0.25f, maxDistance))
                 return true;
         }
 
         return false;
     }
 
-    inline bool IsPointVisible(const Vectors::Vector3& target, uintptr_t ignoreModelAddress)
-    {
-        if ((!Options::ESP::VisibilityCheck && !Options::ESP::VisibilityChams && !Options::Chams::Enabled) || !Globals::Roblox::Camera.address)
-            return true;
+inline bool IsPointVisible(const Vectors::Vector3& target, uintptr_t ignoreModelAddress)
+{
+    if ((!Options::ESP::VisibilityCheck && !Options::ESP::VisibilityChams && !Options::Chams::Enabled) || !Globals::Roblox::Camera.address)
+        return true;
 
-        Vectors::Vector3 origin;
-        try
-        {
-            origin = Memory->read<Vectors::Vector3>(
-                Globals::Roblox::Camera.address + Offsets::Camera::Position);
-        }
-        catch (...) { return true; }
+    // Use global frame cache for camera position
+    Vectors::Vector3 origin = Globals::FrameCache::CameraValid ? Globals::FrameCache::CameraPos :
+        Memory->read<Vectors::Vector3>(
+            Globals::Roblox::Camera.address + Offsets::Camera::Position);
 
-        Vectors::Vector3 delta = {
-            target.x - origin.x,
-            target.y - origin.y,
-            target.z - origin.z
-        };
+    Vectors::Vector3 delta = {
+        target.x - origin.x,
+        target.y - origin.y,
+        target.z - origin.z
+    };
 
-        const float distance = delta.Magnitude();
-        if (distance < 1.5f)
-            return true;
+    const float distance = delta.Magnitude();
+    if (distance < 1.5f)
+        return true;
 
-        delta.x /= distance;
-        delta.y /= distance;
-        delta.z /= distance;
+    delta.x /= distance;
+    delta.y /= distance;
+    delta.z /= distance;
 
-        const float maxDistance = distance - 0.75f;
-        if (maxDistance <= 0.5f)
-            return true;
+    const float maxDistance = distance - 0.25f;
+    if (maxDistance <= 0.5f)
+        return true;
 
-        return !IsMapBlocking(origin, delta, distance, ignoreModelAddress);
-    }
+    return !IsMapBlocking(origin, delta, distance, ignoreModelAddress);
+}
 
     inline bool IsPointVisibleCached(uintptr_t cacheKey, const Vectors::Vector3& target, uintptr_t ignoreModelAddress)
     {
@@ -332,91 +387,90 @@ namespace Visibility
         return visible;
     }
 
-    // Forced line-of-sight test that ignores the ESP visibility toggles, so
-    // bullet tracers and hitsounds can respect walls even when ESP is off.
-    inline bool IsPointVisibleForced(const Vectors::Vector3& target, uintptr_t ignoreModelAddress)
+// Forced line-of-sight test that ignores the ESP visibility toggles, so
+// bullet tracers and hitsounds can respect walls even when ESP is off.
+inline bool IsPointVisibleForced(const Vectors::Vector3& target, uintptr_t ignoreModelAddress)
+{
+    if (!Globals::Roblox::Camera.address)
+        return true;
+
+    // Use global frame cache for camera position
+    Vectors::Vector3 origin = Globals::FrameCache::CameraValid ? Globals::FrameCache::CameraPos :
+        Memory->read<Vectors::Vector3>(
+            Globals::Roblox::Camera.address + Offsets::Camera::Position);
+
+    Vectors::Vector3 delta = {
+        target.x - origin.x,
+        target.y - origin.y,
+        target.z - origin.z
+    };
+
+    const float distance = delta.Magnitude();
+    if (distance < 1.5f)
+        return true;
+
+    delta.x /= distance;
+    delta.y /= distance;
+    delta.z /= distance;
+
+    const float maxDistance = distance - 0.25f;
+    if (maxDistance <= 0.5f)
+        return true;
+
+    return !IsMapBlocking(origin, delta, distance, ignoreModelAddress);
+}
+
+inline bool IsPlayerVisibleImpl(const RobloxPlayer& player)
+{
+    const uintptr_t ignoreModel = player.Character.address;
+
+    // Early exit: check head first (most likely to be visible)
+    if (player.Head.address && IsPointVisible(player.Head.Position(), ignoreModel))
+        return true;
+    // Check torso parts (most central mass)
+    if (player.HumanoidRootPart.address && IsPointVisible(player.HumanoidRootPart.Position(), ignoreModel))
+        return true;
+    if (player.Upper_Torso.address && IsPointVisible(player.Upper_Torso.Position(), ignoreModel))
+        return true;
+    if (player.Lower_Torso.address && IsPointVisible(player.Lower_Torso.Position(), ignoreModel))
+        return true;
+    if (player.Torso.address && IsPointVisible(player.Torso.Position(), ignoreModel))
+        return true;
+    // Limbs - check arms first (more likely visible in combat)
+    if (player.Upper_Torso.address)
     {
-        if (!Globals::Roblox::Camera.address)
-            return true;
-
-        Vectors::Vector3 origin;
-        try
-        {
-            origin = Memory->read<Vectors::Vector3>(
-                Globals::Roblox::Camera.address + Offsets::Camera::Position);
-        }
-        catch (...) { return true; }
-
-        Vectors::Vector3 delta = {
-            target.x - origin.x,
-            target.y - origin.y,
-            target.z - origin.z
-        };
-
-        const float distance = delta.Magnitude();
-        if (distance < 1.5f)
-            return true;
-
-        delta.x /= distance;
-        delta.y /= distance;
-        delta.z /= distance;
-
-        const float maxDistance = distance - 0.75f;
-        if (maxDistance <= 0.5f)
-            return true;
-
-        return !IsMapBlocking(origin, delta, distance, ignoreModelAddress);
-    }
-
-    inline bool IsPlayerVisibleImpl(const RobloxPlayer& player)
-    {
-        const uintptr_t ignoreModel = player.Character.address;
-
-        if (player.Head.address && IsPointVisible(player.Head.Position(), ignoreModel))
-            return true;
-        if (player.HumanoidRootPart.address && IsPointVisible(player.HumanoidRootPart.Position(), ignoreModel))
-            return true;
-        if (player.Upper_Torso.address && IsPointVisible(player.Upper_Torso.Position(), ignoreModel))
-            return true;
-        if (player.Lower_Torso.address && IsPointVisible(player.Lower_Torso.Position(), ignoreModel))
-            return true;
-        if (player.Torso.address && IsPointVisible(player.Torso.Position(), ignoreModel))
-            return true;
         if (player.Left_Upper_Arm.address && IsPointVisible(player.Left_Upper_Arm.Position(), ignoreModel))
-            return true;
-        if (player.Left_Lower_Arm.address && IsPointVisible(player.Left_Lower_Arm.Position(), ignoreModel))
-            return true;
-        if (player.Left_Hand.address && IsPointVisible(player.Left_Hand.Position(), ignoreModel))
-            return true;
-        if (player.Left_Arm.address && IsPointVisible(player.Left_Arm.Position(), ignoreModel))
             return true;
         if (player.Right_Upper_Arm.address && IsPointVisible(player.Right_Upper_Arm.Position(), ignoreModel))
             return true;
-        if (player.Right_Lower_Arm.address && IsPointVisible(player.Right_Lower_Arm.Position(), ignoreModel))
-            return true;
-        if (player.Right_Hand.address && IsPointVisible(player.Right_Hand.Position(), ignoreModel))
-            return true;
-        if (player.Right_Arm.address && IsPointVisible(player.Right_Arm.Position(), ignoreModel))
-            return true;
+    }
+    if (player.Left_Lower_Arm.address && IsPointVisible(player.Left_Lower_Arm.Position(), ignoreModel))
+        return true;
+    if (player.Right_Lower_Arm.address && IsPointVisible(player.Right_Lower_Arm.Position(), ignoreModel))
+        return true;
+    if (player.Left_Hand.address && IsPointVisible(player.Left_Hand.Position(), ignoreModel))
+        return true;
+    if (player.Right_Hand.address && IsPointVisible(player.Right_Hand.Position(), ignoreModel))
+        return true;
+    // Legs (less critical for visibility)
+    if (player.Lower_Torso.address)
+    {
         if (player.Left_Upper_Leg.address && IsPointVisible(player.Left_Upper_Leg.Position(), ignoreModel))
-            return true;
-        if (player.Left_Lower_Leg.address && IsPointVisible(player.Left_Lower_Leg.Position(), ignoreModel))
-            return true;
-        if (player.Left_Foot.address && IsPointVisible(player.Left_Foot.Position(), ignoreModel))
-            return true;
-        if (player.Left_Leg.address && IsPointVisible(player.Left_Leg.Position(), ignoreModel))
             return true;
         if (player.Right_Upper_Leg.address && IsPointVisible(player.Right_Upper_Leg.Position(), ignoreModel))
             return true;
-        if (player.Right_Lower_Leg.address && IsPointVisible(player.Right_Lower_Leg.Position(), ignoreModel))
-            return true;
-        if (player.Right_Foot.address && IsPointVisible(player.Right_Foot.Position(), ignoreModel))
-            return true;
-        if (player.Right_Leg.address && IsPointVisible(player.Right_Leg.Position(), ignoreModel))
-            return true;
-
-        return false;
     }
+    if (player.Left_Lower_Leg.address && IsPointVisible(player.Left_Lower_Leg.Position(), ignoreModel))
+        return true;
+    if (player.Right_Lower_Leg.address && IsPointVisible(player.Right_Lower_Leg.Position(), ignoreModel))
+        return true;
+    if (player.Left_Foot.address && IsPointVisible(player.Left_Foot.Position(), ignoreModel))
+        return true;
+    if (player.Right_Foot.address && IsPointVisible(player.Right_Foot.Position(), ignoreModel))
+        return true;
+
+    return false;
+}
 
     inline bool IsPlayerVisible(const RobloxPlayer& player)
     {
@@ -482,7 +536,7 @@ namespace Visibility
                 delta.y /= distance;
                 delta.z /= distance;
 
-                const float maxDistance = distance - 0.75f;
+                const float maxDistance = distance - 0.25f;
                 if (maxDistance <= 0.5f)
                     return false;
 

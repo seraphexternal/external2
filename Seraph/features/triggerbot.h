@@ -5,6 +5,7 @@
 #include "../rbx/globals/globals.h"
 #include <windows.h>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include "obfuscate.h"
@@ -51,21 +52,190 @@ inline float DynamicFOVScaleFor(float distance3D)
     return scale;
 }
 
+// ── Part-based hit testing ─────────────────────────────────────────────────
+// The legacy FOV circle measures the distance from the crosshair to the part's
+// projected CENTER point. That breaks up close: the center projects off toward
+// the edge of a huge on-screen body while the crosshair is still plainly on
+// the part, so it stops firing exactly when it should fire. Part modes instead
+// build the screen-space box of the part itself (real Size, depth-correct
+// pixel scale) and test the crosshair against that, so aiming at the part
+// fires at any distance.
+
+// Projection result: absolute screen position plus pixels-per-stud scale at
+// that depth. Pairs with GetCursorPos because WorldToScreen output space is
+// the same (window position is added back in).
+struct TBProjection { float x, y, sx, sy; };
+
+inline bool TBProjectPart(const Vectors::Vector3& world, TBProjection& out)
+{
+    if (!Globals::Viewport::Valid)
+        return false;
+
+    const auto& vm = Globals::Viewport::ViewMatrix;
+
+    const float cx = world.x * vm.data[0] + world.y * vm.data[1] + world.z * vm.data[2] + vm.data[3];
+    const float cy = world.x * vm.data[4] + world.y * vm.data[5] + world.z * vm.data[6] + vm.data[7];
+    const float cw = world.x * vm.data[12] + world.y * vm.data[13] + world.z * vm.data[14] + vm.data[15];
+
+    if (cw < 0.1f)
+        return false;
+
+    const float invW = 1.0f / cw;
+    const auto& dims = Globals::Viewport::Dimensions;
+    const auto& origin = Globals::Viewport::ScreenPos;
+
+    out.x = ((dims.x / 2.0f) * (cx * invW) + (dims.x / 2.0f)) + origin.x;
+    out.y = (-(dims.y / 2.0f) * (cy * invW) + (dims.y / 2.0f)) + origin.y;
+
+    // Pixels one stud covers at this depth, measured along the view plane (the
+    // projected length of the matrix rows) so it stays correct for any camera
+    // pitch/roll, not just axis-aligned views.
+    const float rowX = vm.data[0] * vm.data[0] + vm.data[1] * vm.data[1] + vm.data[2] * vm.data[2];
+    const float rowY = vm.data[4] * vm.data[4] + vm.data[5] * vm.data[5] + vm.data[6] * vm.data[6];
+    out.sx = (dims.x / 2.0f) * sqrtf(rowX) * invW;
+    out.sy = (dims.y / 2.0f) * sqrtf(rowY) * invW;
+    return true;
+}
+
+// Screen-space hitbox rect for a part at a (possibly predicted) position.
+inline bool TBPartHitbox(const RobloxInstance& part, const Vectors::Vector3& pos,
+                         float& minX, float& minY, float& maxX, float& maxY)
+{
+    if (part.address == 0)
+        return false;
+
+    TBProjection pr;
+    if (!TBProjectPart(pos, pr))
+        return false;
+
+    // Real part size, so hitbox expanders and custom rigs are respected.
+    const Vectors::Vector3 size = part.Size();
+
+    float hx = size.x * 0.5f * pr.sx + Options::Triggerbot::PartMargin;
+    float hy = size.y * 0.5f * pr.sy + Options::Triggerbot::PartMargin;
+    if (hx < 1.0f) hx = 1.0f; // sub-pixel distant parts still get a 2px box
+    if (hy < 1.0f) hy = 1.0f;
+
+    minX = pr.x - hx; maxX = pr.x + hx;
+    minY = pr.y - hy; maxY = pr.y + hy;
+    return true;
+}
+
+// Candidate parts for the current Target Part mode.
+inline void TriggerbotGatherParts(const RobloxPlayer& player, std::vector<RobloxInstance>& out)
+{
+    out.clear();
+
+    switch (Options::Triggerbot::TargetPart)
+    {
+    case 0: // Head
+        out.push_back(player.Head);
+        break;
+    case 1: // Torso
+        if (player.RigType == 0)
+        {
+            out.push_back(player.Torso);
+        }
+        else
+        {
+            out.push_back(player.Upper_Torso);
+            out.push_back(player.Lower_Torso);
+        }
+        break;
+    case 2: // HumanoidRootPart
+        out.push_back(player.HumanoidRootPart);
+        break;
+    default: // 3 = Closest Part: whatever body part the crosshair rests on
+        out.push_back(player.Head);
+        if (player.RigType == 0)
+        {
+            out.push_back(player.Torso);
+            out.push_back(player.Left_Arm);
+            out.push_back(player.Right_Arm);
+            out.push_back(player.Left_Leg);
+            out.push_back(player.Right_Leg);
+        }
+        else
+        {
+            out.push_back(player.Upper_Torso);
+            out.push_back(player.Lower_Torso);
+            out.push_back(player.Left_Upper_Arm);
+            out.push_back(player.Left_Lower_Arm);
+            out.push_back(player.Left_Hand);
+            out.push_back(player.Right_Upper_Arm);
+            out.push_back(player.Right_Lower_Arm);
+            out.push_back(player.Right_Hand);
+            out.push_back(player.Left_Upper_Leg);
+            out.push_back(player.Left_Lower_Leg);
+            out.push_back(player.Left_Foot);
+            out.push_back(player.Right_Upper_Leg);
+            out.push_back(player.Right_Lower_Leg);
+            out.push_back(player.Right_Foot);
+        }
+        // Included last as a fallback for rigs whose torso parts are missing.
+        out.push_back(player.HumanoidRootPart);
+        break;
+    }
+}
+
 inline void RenderAdvancedFOV(ImDrawList* drawList)
 {
+    const std::vector<RobloxPlayer>& cachedPlayers = Globals::Caches::FramePlayers();
+
+    // Hitbox method: draw the exact screen-space hitboxes the triggerbot
+    // tests, so "Show Hitboxes" shows precisely what will fire it.
+    if (Options::Triggerbot::Method == 1)
+    {
+        if (!Options::Triggerbot::ShowAdvancedFOV)
+            return;
+
+        std::vector<RobloxInstance> tbParts;
+        for (const auto& player : cachedPlayers)
+        {
+            if (player.address == Globals::Roblox::LocalPlayer.address)
+                continue;
+            if (player.Health <= 0)
+                continue;
+            if (Options::Triggerbot::TeamCheck && IsTeammate(player))
+                continue;
+
+            TriggerbotGatherParts(player, tbParts);
+            for (const auto& part : tbParts)
+            {
+                if (part.address == 0)
+                    continue;
+
+                Vectors::Vector3 partPos = part.Position();
+                if (Options::Triggerbot::Prediction)
+                {
+                    partPos.x += player.Velocity.x * Options::Triggerbot::PredictionX;
+                    partPos.y += player.Velocity.y * Options::Triggerbot::PredictionY;
+                    partPos.z += player.Velocity.z * Options::Triggerbot::PredictionX;
+                }
+
+                float minX, minY, maxX, maxY;
+                if (!TBPartHitbox(part, partPos, minX, minY, maxX, maxY))
+                    continue;
+
+                drawList->AddRect(
+                    ImVec2(minX, minY), ImVec2(maxX, maxY),
+                    IM_COL32(
+                        static_cast<int>(Options::ESP::VisibleColor[0] * 255.f),
+                        static_cast<int>(Options::ESP::VisibleColor[1] * 255.f),
+                        static_cast<int>(Options::ESP::VisibleColor[2] * 255.f), 180),
+                    0.f, 0, 1.5f);
+            }
+        }
+        return;
+    }
+
     if (!Options::Triggerbot::AdvancedFOV || !Options::Triggerbot::ShowAdvancedFOV)
         return;
 
     auto localTeam = Globals::Roblox::LocalPlayer.Team();
     auto localHRP = Globals::Roblox::LocalPlayer.Character().FindFirstChild("HumanoidRootPart");
 
-    std::vector<RobloxPlayer> cachedPlayers;
-    {
-        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
-        cachedPlayers = Globals::Caches::CachedPlayerObjects;
-    }
-
-    for (auto& player : cachedPlayers)
+    for (const auto& player : cachedPlayers)
     {
         if (player.address == Globals::Roblox::LocalPlayer.address)
             continue;
@@ -251,6 +421,12 @@ inline void RunTriggerbot()
     if (!Options::Triggerbot::Enabled)
         return;
 
+    // Anti-katana: completely stop firing while any enemy holds a katana
+    // (Rivals katana deflects bullets back onto the shooter). Also releases
+    // a fire button that is already held so an in-progress shot halts too.
+    if (AntiKatanaFiringBlocked())
+        return;
+
     // per-second diagnostic counters
     static long long tbCalls = 0, tbCacheEmpty = 0, tbNoHRP = 0, tbPlayers = 0,
                      tbRangeSkip = 0, tbW2sFail = 0, tbNotFound = 0, tbFound = 0,
@@ -291,35 +467,31 @@ inline void RunTriggerbot()
         TBDebug(buf);
     }
 
-    // Check keybind
+    // Check keybind based on ToggleType
     static bool wasKeyPressed = false;
     bool isKeyPressed = KeyBind::IsPressed(Options::Triggerbot::TriggerbotKey);
     
-    if (Options::Triggerbot::ToggleType == 2)
+    switch (Options::Triggerbot::ToggleType)
     {
-        // Always On
-        Options::Triggerbot::Toggled = true;
-    }
-    else if (Options::Triggerbot::ToggleType == 1)
-    {
-        // Toggle mode
-        if (isKeyPressed && !wasKeyPressed)
-        {
-            Options::Triggerbot::Toggled = !Options::Triggerbot::Toggled;
-        }
-        wasKeyPressed = isKeyPressed;
-        
-        if (!Options::Triggerbot::Toggled)
-            return;
-    }
-    else
-    {
-        // Hold mode
-        if (!isKeyPressed)
-        {
-            Options::Triggerbot::Toggled = false;
-            return;
-        }
+        case 2: // Always On
+            Options::Triggerbot::Toggled = true;
+            break;
+            
+        case 1: // Toggle mode
+            if (isKeyPressed && !wasKeyPressed)
+                Options::Triggerbot::Toggled = !Options::Triggerbot::Toggled;
+            wasKeyPressed = isKeyPressed;
+            if (!Options::Triggerbot::Toggled)
+                return;
+            break;
+            
+        case 0: // Hold mode (default)
+        default:
+            Options::Triggerbot::Toggled = isKeyPressed;
+            if (!isKeyPressed)
+                return;
+            wasKeyPressed = isKeyPressed;
+            break;
     }
 
     auto localTeam = Globals::Roblox::LocalPlayer.Team();
@@ -328,11 +500,7 @@ auto localCharacter = Globals::Roblox::LocalPlayer.Character();
     if (!localHRP.address)
         tbNoHRP++;
 
-    std::vector<RobloxPlayer> cachedPlayers;
-    {
-        std::lock_guard<std::mutex> lock(Globals::Caches::CachedPlayerObjectsMutex);
-        cachedPlayers = Globals::Caches::CachedPlayerObjects;
-    }
+    const std::vector<RobloxPlayer>& cachedPlayers = Globals::Caches::FramePlayers();
 
     if (cachedPlayers.empty())
     {
@@ -345,6 +513,49 @@ auto localCharacter = Globals::Roblox::LocalPlayer.Character();
 	GetCursorPos(&p);
 	
 	Vectors::Vector2 cursorPos = { static_cast<float>(p.x), static_cast<float>(p.y) };
+
+    std::vector<RobloxInstance> tbParts;
+
+    // Shared fire path for both aim modes. The game must observe a full
+    // press->release cycle between clicks: Roblox polls input once per frame
+    // (~16ms), so a minimum period is enforced even when Delay is 0. Without
+    // it, UP and the next DOWN merge into one long hold and click-driven
+    // weapons stop firing.
+    auto fireAt = [&](const RobloxPlayer& firePlayer) {
+        static auto lastFireTime = std::chrono::steady_clock::now();
+        auto currentTime = std::chrono::steady_clock::now();
+        auto timeSinceLastFire = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - lastFireTime).count();
+
+        if (tbDebugFrame) { char buf[256]; sprintf_s(buf, sizeof(buf), "  FIRE ATTEMPT: %s delay=%d lastFireAgo=%lld", firePlayer.Name.c_str(), Options::Triggerbot::Delay, timeSinceLastFire); TBDebug(buf); }
+
+        int effectiveDelay = Options::Triggerbot::Delay;
+        if (effectiveDelay < 80)
+            effectiveDelay = 80;
+
+        if (timeSinceLastFire >= effectiveDelay)
+        {
+            if (tbDebugFrame) { TBDebug("  FIRING!"); }
+            // Simulate mouse click
+            INPUT input = { 0 };
+            input.type = INPUT_MOUSE;
+            input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+            SendInput(1, &input, sizeof(INPUT));
+
+            Sleep(20);
+
+            input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+            SendInput(1, &input, sizeof(INPUT));
+
+            // Stamp after the UP so the next shot keeps a full release gap
+            lastFireTime = std::chrono::steady_clock::now();
+            tbFired++;
+        }
+        else
+        {
+            tbDelaySkip++;
+            if (tbDebugFrame) { char buf[256]; sprintf_s(buf, sizeof(buf), "  DELAY SKIP: %lldms < %dms", timeSinceLastFire, effectiveDelay); TBDebug(buf); }
+        }
+    };
 
     // Check each player
     for (auto& player : cachedPlayers)
@@ -382,6 +593,66 @@ auto localCharacter = Globals::Roblox::LocalPlayer.Character();
 
         tbPlayers++;
 
+        // ── Hitbox method (Target Part = Head/Torso/HRP/Closest Part) ────────
+        // The crosshair just has to sit inside the part's real projected
+        // hitbox — no Range cap, that's the point of this method.
+        if (Options::Triggerbot::Method == 1)
+        {
+            bool partHit = false;
+            TriggerbotGatherParts(player, tbParts);
+            for (const auto& part : tbParts)
+            {
+                if (part.address == 0)
+                    continue;
+
+                Vectors::Vector3 partPos = part.Position();
+
+                if (Options::Triggerbot::Prediction)
+                {
+                    partPos.x += player.Velocity.x * Options::Triggerbot::PredictionX;
+                    partPos.y += player.Velocity.y * Options::Triggerbot::PredictionY;
+                    partPos.z += player.Velocity.z * Options::Triggerbot::PredictionX;
+                }
+
+                float minX, minY, maxX, maxY;
+                if (!TBPartHitbox(part, partPos, minX, minY, maxX, maxY))
+                {
+                    tbW2sFail++;
+                    continue;
+                }
+
+                if (cursorPos.x >= minX && cursorPos.x <= maxX &&
+                    cursorPos.y >= minY && cursorPos.y <= maxY)
+                {
+                    partHit = true;
+                    break;
+                }
+            }
+
+            if (tbDebugFrame)
+            {
+                float dbgDist = 0.f;
+                if (localHRP.address)
+                {
+                    Vectors::Vector3 dbgDiff = player.HumanoidRootPart.Position() - localHRP.Position();
+                    dbgDist = dbgDiff.Magnitude();
+                }
+                char buf[256];
+                sprintf_s(buf, sizeof(buf), "  %s(PART): %s dist3D=%.1f", partHit ? "HIT" : "MISS", player.Name.c_str(), dbgDist);
+                TBDebug(buf);
+            }
+
+            if (partHit)
+            {
+                tbFound++;
+                fireAt(player);
+                return; // Only shoot at one target at a time
+            }
+            tbNotFound++;
+            continue;
+        }
+
+        // ── FOV method (legacy circle / Advanced FOV) ───────────────────────
         // Check 3D distance range
         Vectors::Vector3 targetPos = player.HumanoidRootPart.Position();
         if (!localHRP.address)
@@ -578,45 +849,7 @@ auto localCharacter = Globals::Roblox::LocalPlayer.Character();
 
         if (foundTarget)
         {
-            // Delay before shooting
-            static auto lastFireTime = std::chrono::steady_clock::now();
-            auto currentTime = std::chrono::steady_clock::now();
-            auto timeSinceLastFire = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - lastFireTime).count();
-
-            if (tbDebugFrame) { char buf[256]; sprintf_s(buf, sizeof(buf), "  FIRE ATTEMPT: %s delay=%d lastFireAgo=%lld", player.Name.c_str(), Options::Triggerbot::Delay, timeSinceLastFire); TBDebug(buf); }
-
-            // The game must observe a full press->release cycle between clicks:
-            // Roblox polls input once per frame (~16ms), so a minimum period is
-            // enforced even when Delay is 0. Without it, UP and the next DOWN
-            // merge into one long hold and click-driven weapons stop firing.
-            int effectiveDelay = Options::Triggerbot::Delay;
-            if (effectiveDelay < 80)
-                effectiveDelay = 80;
-
-            if (timeSinceLastFire >= effectiveDelay)
-            {
-                if (tbDebugFrame) { TBDebug("  FIRING!"); }
-                // Simulate mouse click
-                INPUT input = { 0 };
-                input.type = INPUT_MOUSE;
-                input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-                SendInput(1, &input, sizeof(INPUT));
-
-                Sleep(20);
-
-                input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
-                SendInput(1, &input, sizeof(INPUT));
-
-                // Stamp after the UP so the next shot keeps a full release gap
-                lastFireTime = std::chrono::steady_clock::now();
-                tbFired++;
-            }
-            else
-            {
-                tbDelaySkip++;
-                if (tbDebugFrame) { char buf[256]; sprintf_s(buf, sizeof(buf), "  DELAY SKIP: %lldms < %dms", timeSinceLastFire, effectiveDelay); TBDebug(buf); }
-            }
-
+            fireAt(player);
             return; // Only shoot at one target at a time
         }
     }
